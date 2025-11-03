@@ -1,11 +1,11 @@
 import abc
+import math
 from pathlib import Path
 from typing import List, Union, TypeAlias
 
 import onnxruntime as ort
 import torch
 import torch.nn.functional as F
-import torchaudio
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
 WavInput: TypeAlias = Union[torch.Tensor, List[torch.Tensor]]
@@ -72,13 +72,14 @@ class BaseExtractor(torch.nn.Module):
         import onnx
         dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
         dynamic_axes = {"input_values": {0: "batch_size", 1: "time"}, "features": {0: "batch_size", 1: "time"}
-            # optional, if output has same batch/time dims
-        }
+                        # optional, if output has same batch/time dims
+                        }
 
         torch.onnx.export(self, dummy_wav, out, input_names=["input_values"], output_names=["features"],
-            dynamic_axes=dynamic_axes, opset_version=18, do_constant_folding=True, dynamo=dynamo, verbose=False,
+                          dynamic_axes=dynamic_axes, opset_version=18, do_constant_folding=True, dynamo=dynamo,
+                          verbose=False,
 
-            training=torch.onnx.TrainingMode.EVAL)
+                          training=torch.onnx.TrainingMode.EVAL)
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
         print(f"✅ Exported ONNX model to {out}")
@@ -90,6 +91,91 @@ class BaseExtractor(torch.nn.Module):
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int8"))
             quantize_dynamic(out, out_int8, op_types_to_quantize=["MatMul", "Gemm"], weight_type=QuantType.QInt8)
             print(f"✅ Quantized ONNX model saved to {out_int8}")
+
+
+class MfccExtractor(BaseExtractor):  # onnx exportable
+    def __init__(self, sample_rate=16000, n_mfcc=13, n_mels=40, n_fft=400, hop_length=160, f_min=0.0, f_max=None):
+        super().__init__()
+        self.sample_rate = sample_rate
+        self.n_mfcc = n_mfcc
+        self.n_mels = n_mels
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.f_min = f_min
+        self.f_max = f_max or sample_rate / 2
+
+        mel_fb = self._mel_filterbank()
+        self.register_buffer("mel_fb", mel_fb)
+        dct_mat = self._dct_matrix(n_mfcc, n_mels)
+        self.register_buffer("dct_mat", dct_mat)
+
+    def _mel_filterbank(self):
+        def hz_to_mel(f):
+            return 2595.0 * torch.log10(1.0 + f / 700.0)
+
+        def mel_to_hz(m):
+            return 700.0 * (10 ** (m / 2595.0) - 1.0)
+
+        m_min = hz_to_mel(torch.tensor(self.f_min))
+        m_max = hz_to_mel(torch.tensor(self.f_max))
+        m_points = torch.linspace(m_min, m_max, self.n_mels + 2)
+        f_points = mel_to_hz(m_points)
+        bins = torch.floor((self.n_fft + 1) * f_points / self.sample_rate).long()
+
+        fb = torch.zeros(self.n_mels, self.n_fft // 2 + 1)
+        for m in range(1, self.n_mels + 1):
+            f_m_minus, f_m, f_m_plus = bins[m - 1], bins[m], bins[m + 1]
+            for k in range(f_m_minus, f_m):
+                fb[m - 1, k] = (k - f_m_minus) / (f_m - f_m_minus)
+            for k in range(f_m, f_m_plus):
+                fb[m - 1, k] = (f_m_plus - k) / (f_m_plus - f_m)
+        return fb
+
+    def _dct_matrix(self, n_mfcc, n_mels):
+        n = torch.arange(n_mels).float()
+        k = torch.arange(n_mfcc).float().unsqueeze(1)
+        dct = torch.cos(math.pi / n_mels * (n + 0.5) * k)
+        dct[0] *= 1 / math.sqrt(2.0)
+        return dct * math.sqrt(2.0 / n_mels)
+
+    def _dct_matrix_ortho(self, n_mfcc, n_mels):
+        # exact match to torchaudio/librosa "ortho" DCT-II
+        n = torch.arange(n_mels).float()
+        k = torch.arange(n_mfcc).float().unsqueeze(1)
+        dct = torch.cos(math.pi / n_mels * (n + 0.5) * k)
+        dct *= math.sqrt(2.0 / n_mels)
+        dct[0] /= math.sqrt(2.0)
+        return dct
+
+    def forward(self, wavs):
+        # If input is a list, pad and batch them
+        if isinstance(wavs, list):
+            wavs = [w.to(torch.float32) for w in wavs]
+            max_len = max(w.shape[-1] for w in wavs)
+            batch = torch.stack([F.pad(w, (0, max_len - w.shape[-1])) for w in wavs])
+        else:
+            batch = wavs.unsqueeze(0) if wavs.ndim == 1 else wavs
+
+        device = batch.device
+        window = torch.hann_window(self.n_fft, device=device)
+
+        # Compute STFT manually (return_complex=False for ONNX)
+        stft = torch.stft(
+            batch,
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            window=window,
+            return_complex=False
+        )
+        real = stft[..., 0]
+        imag = stft[..., 1]
+        power = (real.pow(2) + imag.pow(2))
+
+        mel_spec = torch.matmul(self.mel_fb.to(device), power)
+        log_mel = torch.log(mel_spec + 1e-10)
+        mfcc = torch.matmul(self.dct_mat.to(device), log_mel)
+
+        return mfcc
 
 
 class OnnxFeatureExtractor(BaseExtractor):
@@ -130,46 +216,6 @@ class OnnxFeatureExtractor(BaseExtractor):
                         feats_list]
 
         return torch.stack(padded_feats, dim=0)  # returns [B, T_feats, 768]
-
-
-class MfccExtractor(BaseExtractor):
-    def __init__(self, feature_type: str = "mfcc", n_mels: int = 64, n_mfcc: int = 40, n_fft: int = 400,
-                 hop_length: int = 160, sample_rate: int = 16000, device: str = "auto"):
-        super().__init__(sample_rate, device)
-        self.feature_type = feature_type.lower()
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-
-        if self.feature_type == "mel":
-            self.mel = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate, n_fft=n_fft, hop_length=hop_length,
-                                                            n_mels=n_mels).to(self.device)
-            self.db = torchaudio.transforms.AmplitudeToDB(stype="power").to(self.device)
-        elif self.feature_type == "mfcc":
-            self.mfcc = torchaudio.transforms.MFCC(sample_rate=sample_rate, n_mfcc=n_mfcc,
-                                                   melkwargs={"n_fft": n_fft, "hop_length": hop_length,
-                                                              "n_mels": n_mels}).to(self.device)
-        else:
-            raise ValueError("feature_type must be 'mel' or 'mfcc'")
-
-    def forward(self, wavs: torch.Tensor) -> torch.Tensor:
-        # wavs: [B, T]
-        # wavs = wavs.to(self.device)
-        specs = []
-        for w in wavs:
-            if self.feature_type == "mel":
-                m_db = self.db(self.mel(w))
-                specs.append(m_db.unsqueeze(0))  # [1, F, T]
-            else:
-                mf = self.mfcc(w)
-                specs.append(mf.unsqueeze(0))  # [1, F, T]
-        return torch.stack(specs).unsqueeze(1)  # [B, 1, F, T]
-
-    @staticmethod
-    def spec_to_time_first(specs: torch.Tensor) -> torch.Tensor:
-        """Convert [B, 1, F, T] -> [B, T, F] used by RNNs (squeeze channel)."""
-        return specs.squeeze(1).transpose(1, 2)  # [B, T, F]
 
 
 class CnnBlock(torch.nn.Module):
@@ -217,7 +263,7 @@ class EndToEndCnnGruExtractor(BaseExtractor):
         self.gru_hidden_dim = gru_hidden_dim
 
         # --- 1. CNN Downsampling Stack (Total Stride = 160 for 10ms frame rate) ---
-        self.cnn_stack = torch.nn.Sequential(# Layer 1: Aggressive initial downsampling (16kHz -> 1.6kHz, Stride 10)
+        self.cnn_stack = torch.nn.Sequential(  # Layer 1: Aggressive initial downsampling (16kHz -> 1.6kHz, Stride 10)
             CnnBlock(1, cnn_base_dim, kernel_size=10, stride=10, padding=0),
             # Layer 2: Downsampling (1.6kHz -> 400Hz, Stride 4)
             CnnBlock(cnn_base_dim, cnn_base_dim * 2, kernel_size=4, stride=4, padding=0),
@@ -230,8 +276,8 @@ class EndToEndCnnGruExtractor(BaseExtractor):
 
         # --- 2. Temporal Modeling (GRU) ---
         self.gru = torch.nn.GRU(input_size=cnn_out_channels, hidden_size=gru_hidden_dim, num_layers=gru_num_layers,
-            bidirectional=True,  # Bidirectional GRU captures context from both directions
-            batch_first=True)
+                                bidirectional=True,  # Bidirectional GRU captures context from both directions
+                                batch_first=True)
 
         # Output of Bidirectional GRU is hidden_dim * 2
         gru_out_channels = gru_hidden_dim * 2
@@ -260,3 +306,95 @@ class EndToEndCnnGruExtractor(BaseExtractor):
         final_feats = self.projection(gru_output)
 
         return final_feats
+
+
+if __name__ == "__main__":
+    import torch
+    import torchaudio
+    import librosa
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    # ---- import your ONNX-safe MFCC ----
+
+    SAMPLE_RATE = 16000
+    N_MFCC = 13
+    N_MELS = 40
+    N_FFT = 400
+    HOP_LENGTH = 160
+
+    torch.manual_seed(0)
+    waveform = torch.randn(1, SAMPLE_RATE)
+
+    # --- 1️⃣ torchaudio reference ---
+    mfcc_ta = torchaudio.transforms.MFCC(
+        sample_rate=SAMPLE_RATE,
+        n_mfcc=N_MFCC,
+        melkwargs={
+            "n_fft": N_FFT,
+            "n_mels": N_MELS,
+            "hop_length": HOP_LENGTH,
+            "mel_scale": "htk",
+        },
+    )(waveform)
+    mfcc_ta = mfcc_ta.squeeze().numpy()
+
+    # --- 2️⃣ your ONNX-friendly version ---
+    model = MfccExtractor(
+        sample_rate=SAMPLE_RATE,
+        n_mfcc=N_MFCC,
+        n_mels=N_MELS,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
+    )
+    model.eval()
+    with torch.no_grad():
+        mfcc_onnx = model(waveform).squeeze().numpy()
+
+    # --- 3️⃣ librosa reference ---
+    y = waveform.squeeze().numpy()
+    mfcc_librosa = librosa.feature.mfcc(
+        y=y,
+        sr=SAMPLE_RATE,
+        n_mfcc=N_MFCC,
+        n_mels=N_MELS,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
+        htk=True,
+    )
+
+
+    # librosa returns (n_mfcc, frames) like torchaudio
+
+    # --- numeric comparisons ---
+    def compare(name, a, b):
+        diff = np.abs(a - b)
+        mean_diff = diff.mean()
+        max_diff = diff.max()
+        corr = np.corrcoef(a.flatten(), b.flatten())[0, 1]
+        print(f"{name} → mean={mean_diff:.6f}, max={max_diff:.6f}, corr={corr:.6f}")
+
+
+    print("🔍 Numeric comparisons")
+    compare("ONNX vs torchaudio", mfcc_onnx, mfcc_ta)
+    compare("ONNX vs librosa", mfcc_onnx, mfcc_librosa)
+    compare("torchaudio vs librosa", mfcc_ta, mfcc_librosa)
+
+    # --- visualization ---
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
+    plt.imshow(mfcc_ta, origin="lower", aspect="auto")
+    plt.title("torchaudio MFCC")
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(mfcc_onnx, origin="lower", aspect="auto")
+    plt.title("ONNX-safe MFCC")
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(mfcc_librosa, origin="lower", aspect="auto")
+    plt.title("librosa MFCC")
+
+    plt.tight_layout()
+    plt.show()
+
+    plt.show()

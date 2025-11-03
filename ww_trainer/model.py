@@ -1,5 +1,4 @@
 import abc
-import os.path
 from pathlib import Path
 
 import numpy as np
@@ -12,14 +11,13 @@ from ww_trainer.feats import EndToEndCnnGruExtractor, WavInput, MfccExtractor, O
 
 
 class ClassifierHead(torch.nn.Module):
-
-    def __init__(self, sample_rate: int = 16000, device="auto", shape = (1, 200, 768)) -> None:
+    def __init__(self, input_size: int, sample_rate: int = 16000, device="auto") -> None:
         super().__init__()
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sample_rate = sample_rate
         self.device = torch.device(device)
-        self.shape = shape
+        self.input_size = input_size
 
     @abc.abstractmethod
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
@@ -32,7 +30,7 @@ class ClassifierHead(torch.nn.Module):
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo=False):
         import onnx
 
-        dummy_features = torch.zeros(*self.shape, device=self.device)
+        dummy_features = torch.zeros(1, 200, self.input_size, device=self.device)
 
         dynamic_axes = {
             "input_features": {1: "T_features"} # Time dimension (T) is dynamic
@@ -82,6 +80,7 @@ class BaseWakeModel(nn.Module):
         self.sample_rate = sample_rate
         self.feature_extractor = feature_extractor
         self.classifier = classifier
+        self.to(self.device)
 
     # --- abstract methods ---
     def forward(self, wavs: WavInput) -> torch.Tensor:
@@ -134,13 +133,12 @@ class FfnClassifierHead(ClassifierHead):
                  hidden_dim: int = 128,
                  dropout=0.2,
                  device: str = "auto",
-                 shape = (1, 200, 768)) -> None:
-        super().__init__(sample_rate=sample_rate, device=device, shape=shape)
-        self.sequential = nn.Sequential(nn.Linear(768, hidden_dim),
+                 input_size=None) -> None:
+        super().__init__(sample_rate=sample_rate, device=device,  input_size=input_size)
+        self.sequential = nn.Sequential(nn.Linear(self.input_size, hidden_dim),
                                         nn.ReLU(),
                                         nn.Dropout(dropout),
                                         nn.Linear(hidden_dim, 1))
-        self.to(self.device)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
         pooled = feats.mean(dim=1)
@@ -159,10 +157,10 @@ class CnnClassifierHead(ClassifierHead):
                  kernel_size: int = 3,
                  stride: int = 1,
                  device: str = "auto",
-                 shape = (1, 200, 768)) -> None:
-        super().__init__(sample_rate=sample_rate, device=device, shape=shape)
+                 input_size=None) -> None:
+        super().__init__(sample_rate=sample_rate, device=device, input_size=input_size)
         self.conv = nn.Sequential(
-            nn.Conv1d(768, conv_dim, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2),
+            nn.Conv1d(self.input_size, conv_dim, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2),
             nn.ReLU(),
             nn.Conv1d(conv_dim, conv_dim, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2),
             nn.ReLU(),
@@ -170,7 +168,6 @@ class CnnClassifierHead(ClassifierHead):
         )
         self.fc1 = nn.Linear(conv_dim, linear_dim)
         self.fc2 = nn.Linear(linear_dim, 1)
-        self.to(self.device)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
         conv_out = self.conv(feats.transpose(1, 2)).squeeze(-1)
@@ -192,25 +189,40 @@ class GruClassifierHead(ClassifierHead):
                  gru_n_layers=1,
                  sample_rate: int = 16000,
                  device: str = "auto",
-                 shape = (1, 200, 768)) -> None:
-        super().__init__(sample_rate=sample_rate, device=device, shape=shape)
-        self.gru = nn.GRU(input_size=768,
+                 input_size=None) -> None:
+        super().__init__(sample_rate=sample_rate, device=device, input_size=input_size)
+        self.gru = nn.GRU(input_size=self.input_size,
                           hidden_size=hidden_dim,
                           num_layers=gru_n_layers,
-                          dropout=dropout,
+                          dropout=dropout if gru_n_layers > 1 else 0.0,
                           bidirectional=bidirectional,
                           batch_first=True)
-        self.fc1 = nn.Linear(hidden_dim, linear_dim)
+        self.fc1 = nn.Linear(hidden_dim * (2 if bidirectional else 1), linear_dim)
         self.fc2 = nn.Linear(linear_dim, 1)
-        self.to(self.device)
+
+    def _ensure_correct_shape(self, feats: torch.Tensor) -> torch.Tensor:
+        """
+        Auto-detect if input is [B, F, T] instead of [B, T, F]
+        and transpose if necessary. Handles edge cases safely.
+        """
+        if feats.ndim != 3:
+            raise ValueError(f"Expected 3D tensor [B, T, F], got shape {feats.shape}")
+
+        B, D1, D2 = feats.shape
+        # Heuristic: whichever matches input_size is feature dim
+        if D1 == self.input_size and D2 != self.input_size:
+            return feats.transpose(1, 2)
+        return feats  # already correct
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        feats = self._ensure_correct_shape(feats)
         out, _ = self.gru(feats)
         pooled = out.mean(dim=1)
         h = F.relu(self.fc1(pooled))
         return self.fc2(h).squeeze(-1)
 
-    def embed(self, feats: WavInput) -> torch.Tensor:
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        feats = self._ensure_correct_shape(feats)
         out, _ = self.gru(feats)
         pooled = out.mean(dim=1)
         return F.relu(self.fc1(pooled))
@@ -228,37 +240,28 @@ class MfccCnnWakeModel(BaseWakeModel):
             kernel_size: int = 3,
             stride: int = 1,
             n_mels: int = 64,
-            feature_type: str = "mel",
             n_mfcc: int = 40,
             n_fft: int = 400,
             hop_length: int = 160,
             sample_rate: int = 16000,
-            device: str = "auto",
-            shape = (1, 200, 768)  # TODO - corrct default value?
+            device: str = "auto"
     ) -> None:
-
-
         self.n_mels = n_mels
         self.n_mfcc = n_mfcc
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        clf = CnnClassifierHead(sample_rate=sample_rate, device=device, shape=shape,
+        clf = CnnClassifierHead(sample_rate=sample_rate, device=device,
+                                input_size=self.n_mfcc,
                                 conv_dim=conv_dim, linear_dim=linear_dim,
                                 kernel_size=kernel_size, stride=stride)
         super().__init__(sample_rate=sample_rate, device=device,
                          classifier=clf,
                          feature_extractor=MfccExtractor(
-                             feature_type=feature_type,
                              n_mels=n_mels,
                              n_mfcc=n_mfcc,
                              n_fft=n_fft,
                              hop_length=hop_length,
-                             sample_rate=sample_rate,
-                             device=device))
+                             sample_rate=sample_rate))
 
 
 class MfccGruWakeModel(BaseWakeModel):
@@ -272,45 +275,34 @@ class MfccGruWakeModel(BaseWakeModel):
             bidirectional=False,
             gru_n_layers=1,
             n_mels: int = 64,
-            feature_type: str = "mel",
             n_mfcc: int = 40,
             n_fft: int = 400,
             hop_length: int = 160,
             sample_rate: int = 16000,
             device: str = "auto",
-            shape = (1, 200, 768)  # TODO - corrct default value?
     ) -> None:
-
-
-        self.feature_type = feature_type.lower()
         self.n_mels = n_mels
         self.n_mfcc = n_mfcc
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        # Determine input feature dim for GRU
-        self.feature_dim_in = self.n_mfcc if feature_type == "mfcc" else self.n_mels
+
         self.hidden_dim = hidden_dim
         self.num_layers = gru_n_layers
         self.bidirectional = bidirectional
         self.gru_dropout = dropout if gru_n_layers > 1 else 0.0
 
         clf = GruClassifierHead(hidden_dim=hidden_dim, linear_dim=linear_dim, dropout=dropout,
+                                input_size=self.n_mfcc,
                                 bidirectional=bidirectional, gru_n_layers=gru_n_layers,
-                                sample_rate=sample_rate, device=device, shape=shape)
+                                sample_rate=sample_rate, device=device)
         super().__init__(sample_rate=sample_rate, device=device,
                          classifier=clf,
                          feature_extractor=MfccExtractor(
-                             feature_type=feature_type,
                              n_mels=n_mels,
                              n_mfcc=n_mfcc,
                              n_fft=n_fft,
                              hop_length=hop_length,
-                             sample_rate=sample_rate,
-                             device=device))
+                             sample_rate=sample_rate))
 
 # ---------------------- from scratch models ----------------------
 
@@ -335,7 +327,7 @@ class RawCnnGruWakeModel(BaseWakeModel):
         clf = FfnClassifierHead(
             sample_rate=sample_rate,
             device=device,
-            feature_dim_in=feature_dim,  # Must match extractor's output_feature_dim
+            input_size=feature_dim,  # Must match extractor's output_feature_dim
             hidden_dim=hidden_dim,
             dropout=dropout
         )

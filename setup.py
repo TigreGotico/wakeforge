@@ -51,13 +51,7 @@ setup(
     version=get_version(),
     packages=['ww_trainer'],
     include_package_data=True,
-    install_requires=required('requirements/requirements.txt'),
-    extras_require={
-        x.split(".")[0]: required(f'requirements/{x}')
-        for x in os.listdir(f"{BASEDIR}/requirements")
-        if x.endswith(".txt") and x != "requirements.txt"
-
-    },
+    install_requires=required('requirements.txt'),
     url='https://github.com/TigreGotico/ww_trainer',
     license='',
     author='JarbasAi',

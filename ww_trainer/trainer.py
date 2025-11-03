@@ -700,7 +700,6 @@ class WakeWordTrainer:
                 "n_mfcc": self.model.n_mfcc,
                 "n_fft": self.model.n_fft,
                 "hop_length": self.model.hop_length,
-                "feature_type": self.model.feature_type,
                 "hidden_dim": self.model.hidden_dim,
             }
         elif self.arch == "MfccGruWakeModel":
@@ -710,11 +709,9 @@ class WakeWordTrainer:
                 "n_mfcc": self.model.n_mfcc,
                 "n_fft": self.model.n_fft,
                 "hop_length": self.model.hop_length,
-                "feature_type": self.model.feature_type,
                 "hidden_dim": self.model.hidden_dim,
                 "num_layers": self.model.num_layers,
                 "gru_dropout": self.model.gru_dropout,
-#                "batch_first": self.model.batch_first,
                 "bidirectional": self.model.bidirectional,
             }
         else:
@@ -1076,8 +1073,6 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 # -------------------------- Architecture --------------------------
 @click.option("--arch", default="MfccGruWakeModel",
               help="Model architecture (e.g., MfccGruWakeModel, MfccCnnWakeModel).")
-@click.option("--feature-type", "feature_type", type=click.Choice(['mel', 'mfcc']), default="mfcc",
-              help="Depends on arch. Only for Mfcc/Mel feature extractors.")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
               help="'cuda', 'cpu', or 'auto' (auto-selects CUDA if available).")
 @click.option("--sample-rate", type=int, default=16000, help="Audio sample rate used for training.")
