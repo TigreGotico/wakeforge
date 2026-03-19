@@ -112,7 +112,7 @@ class WakeWordTrainer:
             logger.info("[MLflow] Enabled at %s", mlflow_uri)
 
     # --------------------- Checkpoint I/O ---------------------
-    def save_checkpoint(self, epoch: int, metrics: dict, optimizer: torch.optim.Optimizer, out_path: "Path | str"):
+    def save_checkpoint(self, epoch: int, metrics: dict, optimizer: torch.optim.Optimizer, out_path: "Path | str") -> None:
         """Save full model + optimizer + trainer metadata."""
         save_checkpoint(self.model, epoch, metrics, optimizer, out_path)
 
@@ -124,7 +124,7 @@ class WakeWordTrainer:
     def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
                      featurizer_type: str = "onnx", sample_rate: int = 16000,
                      device: str = "auto",
-                     shared_extractor=None, **kwargs):
+                     shared_extractor=None, **kwargs) -> "BaseWakeModel":
         """Delegate to ``ww_trainer.factory.create_model``."""
         return create_model(arch_name, featurizer, feature_dim,
                             featurizer_type=featurizer_type,
@@ -144,7 +144,7 @@ class WakeWordTrainer:
         return readiness
 
     @timed
-    def _evaluate(self, dataset, batch_size=128, threshold=0.5, epoch: int = 0, output_dir: Optional[Path] = None, aug_prob=0):
+    def _evaluate(self, dataset, batch_size=128, threshold=0.5, epoch: int = 0, output_dir: Optional[Path] = None, aug_prob=0) -> tuple:
         """Delegate to ``ww_trainer.evaluation.evaluate_model``."""
         return evaluate_model(
             model=self.model,
@@ -165,7 +165,7 @@ class WakeWordTrainer:
         log_metrics_csv(path, epoch, loss, acc, prec, rec, f1, auc)
 
     @timed
-    def _log_embeddings_stats(self, dataset, epoch: int, batch_size: int = 128):
+    def _log_embeddings_stats(self, dataset, epoch: int, batch_size: int = 128) -> dict:
         return log_embeddings_stats(self.model, dataset, epoch, self.device, batch_size, self.mlflow)
 
     @timed
@@ -240,7 +240,7 @@ class WakeWordTrainer:
               use_amp: bool = False,
               accumulate_grad_batches: int = 1,
               resume: Optional[str] = None,
-              ) -> None:
+              ) -> float:
         """High-level training loop. Supports loss types: 'bce', 'triplet', 'pair'."""
         if isinstance(output_dir, str):
             output_dir = Path(output_dir)
@@ -541,7 +541,7 @@ class WakeWordTrainer:
     def save_intermediate_ckpt(self, model_file: Path,
                                optimizer: torch.optim.Optimizer = None,
                                metrics: dict = None,
-                               epoch: int = -1):
+                               epoch: int = -1) -> None:
         """Save checkpoint and optionally export to ONNX + log to MLflow."""
         onnx_path = model_file.with_suffix(".onnx")
 
