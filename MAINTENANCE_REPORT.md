@@ -1,0 +1,344 @@
+# ww-trainer — Maintenance Report
+
+## Change Log
+
+---
+
+### 2026-03-10 — ONNX vs PyTorch Benchmark Comparison
+
+**Type:** Feature
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** User-directed specification; all source files read before editing
+**Files created:** `docs/benchmarking.md`
+**Files modified:** `ww_trainer/benchmark.py`, `test/test_benchmark.py`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Extended `ww_trainer/benchmark.py` with an ONNX Runtime vs PyTorch latency and numerical accuracy comparison. Results are saved to CSV and rendered as three new plots.
+
+**Changes:**
+
+1. `ww_trainer/benchmark.py`:
+   - Added `OnnxVsPytorchResult` dataclass (fields: name, pytorch/onnx latency mean/std, speedup, max/mean abs diff, numerically_equivalent, onnx_path).
+   - Added `onnx_vs_pytorch: list[OnnxVsPytorchResult]` field to `BenchmarkReport`.
+   - Added `bench_onnx_vs_pytorch()` function: exports extractor to temp ONNX file, warms up both backends, times both, computes numerical diff with `np.abs(pt_ref - ort_ref)`.
+   - Wired ONNX comparison into `run_benchmark()` after extractor benchmarks; each extractor is exported to a temp file, compared, and the temp file deleted.
+   - Added ONNX vs PyTorch CSV saving in `save_results()` → `onnx_vs_pytorch.csv`.
+   - Added three new plot functions: `_plot_onnx_vs_pytorch_latency`, `_plot_speedup_bars`, `_plot_numerical_accuracy`; all wired into `plot_results()`.
+
+2. `test/test_benchmark.py`:
+   - Added three new tests: `test_bench_onnx_vs_pytorch`, `test_run_benchmark_includes_onnx_comparison`, `test_onnx_vs_pytorch_plots`.
+   - Updated imports to include `bench_onnx_vs_pytorch` and `OnnxVsPytorchResult`.
+
+3. `docs/benchmarking.md` (new):
+   - Documents all benchmark dataclasses with `benchmark.py:LINE` citations.
+   - Explains speedup interpretation, expected ranges per extractor type, and numerical equivalence threshold.
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read benchmark.py, feats.py, test/test_benchmark.py, MAINTENANCE_REPORT.md in full before editing; implemented all changes per specification; created benchmarking.md
+- Human oversight level: User-directed; executing approved specification
+
+---
+
+### 2026-03-10 — TODO.md Cleanup and Data Contract Documentation
+
+**Type:** Documentation
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** User-directed specification; all source files read before writing; all file:line citations verified against actual source
+**Files created:** `docs/data_contract.md`
+**Files modified:** `TODO.md`, `FAQ.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Completed two tasks: (1) rewrote `TODO.md` so it reflects v1.0 done state — all P0/P1/P2/P3 items moved to Completed, active sections removed; (2) created `docs/data_contract.md` documenting the full notebook → ww-trainer data pipeline.
+
+**Task 1 — TODO.md:**
+- Removed empty P0/P1/P2/P3 sections that still had open `[ ]` checkboxes despite being done.
+- Added a brief v1.0 statement above the Tracking section.
+- Moved all previously unchecked items to the Completed list, preserving all existing completed entries.
+
+**Task 2 — `docs/data_contract.md`:**
+- Read `ww_trainer/dataset.py` in full; cited every relevant line number.
+- Read both notebooks (`tts2ww.ipynb`, `ww_dataset_generator_ovos_vc.ipynb`) fully.
+- Documented: `AudioDataset.__init__` full signature with defaults and descriptions; CSV format with exact parser logic from `trainer.py:830-832`; audio format support from torchaudio; sample rate behaviour; label convention (`"1"` / `"0"`, citing `dataset.py:273` and `dataset.py:298`); both notebook pipelines with output layouts; manual dataset preparation; all augmentation folders with probabilities sourced from `dataset.py:186-235`; download sources for MUSAN/ESC-50/RIRs/LibriSpeech; complete end-to-end bash + Python example.
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read dataset.py, trainer.py (CLI section), both notebooks, existing FAQ.md and MAINTENANCE_REPORT.md before writing; created data_contract.md; rewrote TODO.md; updated FAQ.md and MAINTENANCE_REPORT.md
+- Human oversight level: User-directed; executing approved specification
+
+---
+
+### 2026-03-10 — Comprehensive Documentation Sprint
+
+**Type:** Documentation
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** User-directed specification; all source files read before writing; all file:line citations verified against actual source
+**Files created:** `docs/index.md` (replacement), `docs/architecture.md`, `docs/api.md`, `docs/training.md`, `docs/export.md`, `docs/inference.md`, `docs/sweep.md`
+**Files modified:** `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Wrote comprehensive documentation for all public modules in `ww_trainer/`. Every statement about runtime behaviour cites the actual source file and line number. All code examples are runnable.
+
+**Documents written:**
+
+- `docs/index.md` — Landing page: project description, architecture diagram, table of contents, quick start, key links.
+- `docs/architecture.md` — System design deep-dive: three-layer abstraction (BaseExtractor, ClassifierHead, BaseWakeModel), full data flow diagrams (training and inference paths), ONNX pipeline, extractor taxonomy table, hardware tier table, shared extractor pattern, sliding feature cache mechanics, key design decisions with rationale.
+- `docs/api.md` — Full API reference for every public class and method across all 10 modules: `feats`, `model`, `inference`, `trainer`, `tiers`, `dataset`, `loss`, `utils`, `visualization`, `mining`, `checkpoint`, `sweep`, `version`. Every entry includes signature, parameter table, return value, and file:line citation.
+- `docs/training.md` — Step-by-step training guide: dataset format, tier selection trade-offs, CLI quickstart for all four tiers, full CLI option table (all 40+ options), loss function guide, hard-negative mining explanation, augmentation reference table, AMP and gradient accumulation guidance, MLflow integration, checkpointing and resuming.
+- `docs/export.md` — ONNX export guide: rationale, MfccExtractor export, HuBERT/Wav2Vec2 export workflow, classifier head export, full model export, quantization (INT8/INT16), numerical verification, loading back in OnnxFeatureExtractor, pre-exported model links.
+- `docs/inference.md` — Inference guide: ONNX-only inference, single/batch/streaming inference with complete working examples, PyTorch inference paths, device selection, latency comparison table.
+- `docs/sweep.md` — Hyperparameter sweep guide: Optuna overview, installation, quick start, search space table, persistent SQLite storage, results analysis, custom objective patterns.
+
+**Source coverage:** Read all 18 source files before writing. No statements about code behaviour were written without reading the corresponding source.
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read all source files listed in the task spec; created 6 new docs files; replaced docs/index.md; appended MAINTENANCE_REPORT.md entry
+- Human oversight level: User-directed; executing approved documentation specification
+
+---
+
+### 2026-03-10 — P2 Docs and P3 Nice-to-Have Sprint (this session)
+
+**Type:** Documentation / Enhancement / CI
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** Specification provided; all source reads verified before edits
+**Files created:** `docs/index.md`, `.github/workflows/ci.yml`
+**Files modified:** `README.md`, `ww_trainer/visualization.py`, `ww_trainer/dataset.py`, `SUGGESTIONS.md`, `TODO.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Completed the P2 documentation block and P3 nice-to-have items from TODO.md.
+
+**Task 1 — README rewrite:**
+- Replaced the credits-only README with project description, hardware tier table, quickstart (tier-based and ONNX-featurizer-based), extractor matrix, ONNX-only inference snippet, dataset format, architecture ASCII diagram, and original NGI credits.
+
+**Task 2 — `docs/index.md`:**
+- Full architecture narrative: extractor+head pipeline, data flow diagram, training/export/inference workflows, and API reference with `file:line` citations for every public class and method in `feats.py`, `model.py`, `inference.py`, `tiers.py`, and `trainer.py`.
+
+**Task 3 — UMAP optional import with t-SNE fallback:**
+- `ww_trainer/visualization.py`: top-level `try/except ImportError` for `umap`; `_HAS_UMAP` flag; `log_umap()` falls back to `sklearn.manifold.TSNE` with `logging.warning` instead of silently returning `None`.
+
+**Task 4 — GitHub Actions CI:**
+- `.github/workflows/ci.yml`: matrix Python 3.10/3.11/3.12, uv install, pytest with coverage, CLI smoke test.
+
+**Task 5 — AudioDataset sample-rate logging:**
+- `ww_trainer/dataset.py`: added `logger.warning` with expected/actual Hz and file path before the existing resample call; changed positional args to `orig_freq`/`new_freq` keyword args.
+
+**Task 6 — SUGGESTIONS.md extended:**
+- Added S-009 (Optuna sweep with code sketch), S-010 (DDP multi-GPU), S-011 (Platt scaling), S-012 (QAT for MCU).
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read all relevant source files before editing; created and modified files as described above
+- Human oversight level: User-directed; executing approved specification
+
+---
+
+### 2026-03-10 — P3 Sweep, UMAP Fallback, CI, README, Docs
+
+**Type:** Feature / Tooling / Documentation
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** Specification provided; implementation reviewed
+**Files created:** `ww_trainer/sweep.py`
+**Files modified:** `pyproject.toml`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Implemented P3 items: Optuna hyperparameter sweep module, pyproject.toml `sweep` extras group.
+
+**Task — `ww_trainer/sweep.py`:**
+- New module exposing `run_sweep()` and a `__main__` CLI entry point.
+- Optuna is an optional dependency; import is guarded with a clear `ImportError` message.
+- Sweeps `arch` (ffn/gru/cnn), `hidden_dim`, `lr`, `batch_size`, and `dropout` via `optuna.Trial`.
+- Loads the dataset CSV once; splits 80/20 train/val; shares data across all trials.
+- Each trial writes checkpoints to `output_dir/trial_N/`; failed trials return F1=0.0 rather than crashing the study.
+- Best params saved as JSON to `output_dir/best_params.json` after the study completes.
+- Uses absolute imports only (`ww_trainer.trainer`, `ww_trainer.dataset`).
+
+**Task — `pyproject.toml`:**
+- Added `sweep = ["optuna"]` under `[project.optional-dependencies]`.
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read pyproject.toml, MAINTENANCE_REPORT.md, and ww_trainer/__init__.py before editing; created sweep.py; edited pyproject.toml; appended this entry
+- Human oversight level: User-directed; executing approved specification
+
+---
+
+### 2026-03-10 — P2 Performance and Architecture Features
+
+**Type:** Feature / Enhancement
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** Specification provided; implementation verified via automated tests (64 tests pass)
+**Files created:** `ww_trainer/tiers.py`
+**Files modified:** `ww_trainer/trainer.py`, `ww_trainer/mining.py`, `ww_trainer/dataset.py`
+
+**Summary:**
+Implemented all P2 performance and architecture features.
+
+**Task 1 — Hardware Tier Presets (`ww_trainer/tiers.py`):**
+- New module with `TierConfig` dataclass, `HARDWARE_TIERS` dict (micro/small/medium/large), `list_tiers()` table formatter, and `get_tier(name)` lookup.
+
+**Task 2 — Wire `--tier` into CLI:**
+- Added `from ww_trainer.tiers import HARDWARE_TIERS, get_tier, list_tiers` to `trainer.py`.
+- Added `--tier` (Choice: micro/small/medium/large) and `--list-tiers` CLI options.
+- Tier preset overrides `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and `n_mfcc` as appropriate.
+
+**Task 3 — Mixed-Precision Training:**
+- `WakeWordTrainer.__init__` accepts `use_amp: bool = False`; creates `torch.amp.GradScaler` when enabled.
+- Training step wrapped in `torch.amp.autocast`; `scaler.scale/step/update` used when AMP is active.
+- Added `--amp` CLI flag.
+
+**Task 4 — Gradient Accumulation:**
+- `WakeWordTrainer.train()` accepts `accumulate_grad_batches: int = 1`.
+- Batch loop accumulates gradients and calls `optimizer.step()` every N batches or at epoch end.
+- Added `--accumulate-grad-batches` CLI option.
+
+**Task 5 — Persist Hard-Negative Mining Cache:**
+- Added `save_mining_cache(cache, path)` and `load_mining_cache(path)` to `ww_trainer/mining.py`.
+- `WakeWordTrainer.train()` saves cache to `hardneg_cache.pt` after final save; loads it when `resume` path is provided.
+
+**Task 6 — Dataset Validation:**
+- `AudioDataset.__init__` now checks for missing files, logs up to 5 with `logger.warning`, and logs label distribution via `logger.info`.
+
+---
+
+### 2026-03-10 — Architecture Alignment: Phases 4-6 (Monolith Split, Streaming, Packaging)
+
+**Type:** Refactor / Feature / Packaging
+**Model used:** Claude Sonnet 4.6
+**Human oversight level:** Specification provided; implementation reviewed via automated tests
+**Files created:** `ww_trainer/visualization.py`, `ww_trainer/mining.py`, `ww_trainer/checkpoint.py`, `test/test_streaming.py`, `pyproject.toml`
+**Files modified:** `ww_trainer/trainer.py`, `ww_trainer/model.py`, `FAQ.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Implemented phases 4-6 of the ww-trainer architecture alignment plan.
+
+**Phase 4 — Monolith split:**
+- Extracted all visualization helpers from `WakeWordTrainer` into `ww_trainer/visualization.py` as standalone functions (`plot_roc`, `plot_pr`, `plot_det`, `log_confidence_histogram`, `log_pca`, `log_tsne`, `log_umap`, `log_embeddings_stats`).
+- Extracted hard-negative mining into `ww_trainer/mining.py` as `mine_hard_negatives()` function; the rolling hardness cache is now passed explicitly rather than stored as instance state.
+- Extracted checkpoint I/O into `ww_trainer/checkpoint.py` as `save_checkpoint()` and `load_checkpoint()` standalone functions.
+- `WakeWordTrainer` in `trainer.py` now delegates to these modules; all existing method signatures preserved for backward compatibility.
+
+**Phase 5 — Streaming inference:**
+- Added `BaseWakeModel.forward_streaming(audio_chunk, cache)` to `ww_trainer/model.py`. Accepts a 1-D audio chunk and a `SlidingFeatureCacheTensor`; returns sigmoid probability as float.
+- Created `test/test_streaming.py` with 5 tests covering: return type, cache growth, cache saturation, 10-call stability, and ONNX streaming via `OnnxWakeWordInferencer.infer_streaming`.
+
+**Phase 6 — Packaging:**
+- Created `pyproject.toml` alongside `setup.py`. Build backend: `setuptools.build_meta`. Version hardcoded as `0.0.1a1` (matching `version.py`). Optional extras: `dev`, `transformers`, `vc`, `mlflow`.
+
+**Test results:** 64 passed, 35 warnings (was 59 before this sprint; 5 new streaming tests added, all passing).
+
+---
+
+### 2026-03-10 — Architecture Alignment: Extractor Consolidation + ONNX Inference Module
+
+**Type:** Feature / Refactor
+**Files modified:** `ww_trainer/feats.py`, `ww_trainer/trainer.py`, `setup.py`, `FAQ.md`
+**Files created:** `ww_trainer/inference.py`, `test/test_feats.py`, `test/test_inference.py`
+
+**Summary:**
+Implemented the architecture alignment plan: consolidated all feature extractors into `ww_trainer/feats.py`, created a zero-PyTorch ONNX inference module at `ww_trainer/inference.py`, fixed the CLI entry point in `setup.py`, and updated the extractor registry in `trainer.py`.
+
+**Changes:**
+
+1. `ww_trainer/feats.py`:
+   - Added `feature_dim` property to `BaseExtractor` (raises `NotImplementedError`)
+   - Added `feature_dim` property to `OnnxFeatureExtractor` (reads from ONNX shape; falls back to dummy inference for dynamic axes)
+   - Added `MfccExtractor` — pure-PyTorch, ONNX-exportable, output `[B, T, n_mfcc]`
+   - Added `HubertExtractor` — HuBERT encoder (requires `transformers`; guarded import)
+   - Added `Wav2Vec2Extractor` — Wav2Vec2 encoder (requires `transformers`; guarded import)
+   - Fixed `SlidingFeatureCacheTensor` memory-aliasing bug: added `.clone()` before in-place copy
+
+2. `ww_trainer/inference.py` (new):
+   - `OnnxWakeWordInferencer` with `infer()`, `infer_batch()`, `infer_streaming()` methods
+   - Zero PyTorch dependency at module level
+
+3. `ww_trainer/trainer.py`:
+   - Added `EXTRACTOR_REGISTRY` module-level dict
+   - `create_model()` now accepts `featurizer_type`, `shared_extractor`, and optional `feature_dim` (auto-detected from extractor if not provided)
+   - `WakeWordTrainer.__init__` updated to accept and pass through `featurizer_type` and `shared_extractor`
+
+4. `setup.py`: Fixed CLI entry point `ww_trainer.train:train` → `ww_trainer.trainer:train`
+
+**Verification:** `uv run --python .venv pytest test/ -v` → 59 passed, 0 failed
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read all relevant source files; implemented all 6 tasks; fixed SlidingFeatureCacheTensor memory-aliasing bug; fixed test_inference.py to use legacy TorchScript ONNX exporter (onnxscript not installed)
+- Human oversight level: User-directed; executing approved architecture alignment plan
+
+---
+
+### 2026-03-10 — Architecture Alignment: PLAN.md & TODO.md Rewrite
+
+**Type:** Documentation / Planning
+**Files modified:** `PLAN.md`, `TODO.md`
+
+**Summary:**
+Rewrote `PLAN.md` and `TODO.md` to reflect the architecture-first guideline:
+wake words are always modeled as `feature-extractor + classifier head`; everything is exported to
+ONNX; inference requires only ONNX runtime. The plan now defines hardware tiers (micro → large),
+consolidates all extractors into `ww_trainer/feats.py`, mandates a zero-PyTorch inference module
+(`ww_trainer/inference.py`), and fixes the broken CLI entry point.
+
+**Actions taken:**
+- Rewrote `PLAN.md` with 6-phase roadmap aligned to architecture guideline and hardware tiers
+- Rewrote `TODO.md` with prioritized checklist; moved completed bug-fix/test/docs items to
+  "Completed" section; added new P0 items for extractor consolidation, ONNX inference module,
+  CLI fix, and extractor registry
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read source files (feats.py, model.py, setup.py, scripts/); rewrote PLAN.md and TODO.md
+- Human oversight level: User-directed; executing approved plan document
+
+---
+
+### 2026-03-10 — Production Readiness Sprint (Bugs + Tests + Docs)
+
+**Type:** Bug fixes, new test suite, new documentation
+**Files modified:** `ww_trainer/feats.py`, `ww_trainer/dataset.py`, `ww_trainer/model.py`, `ww_trainer/loss.py`
+**Files created:** `test/conftest.py`, `test/test_smoke.py`, `test/test_models.py`, `test/test_losses.py`, `test/test_dataset.py`, `test/test_utils.py`, `FAQ.md`, `QUICK_FACTS.md`, `AUDIT.md`, `SUGGESTIONS.md`
+
+**Bug fixes applied:**
+1. `feats.py:87` — `onnx.checker.check_model(out)` → `check_model(onnx_model)` (BUG-001)
+2. `dataset.py` — replaced `/tmp/vc_...wav` hardcode with `tempfile.NamedTemporaryFile` (BUG-002)
+3. `dataset.py` — bare `except:` → `except Exception as exc:` + `logger.warning` (BUG-003)
+4. `model.py:219` — added `ValueError` for ambiguous GRU shape when `D1==D2==input_size` (BUG-004)
+5. `feats.py:44` — fixed `SlidingFeatureCacheTensor` shift logic out-of-bounds error (BUG-005)
+6. `dataset.py` — moved `chatterbox_onnx` import inside conditional block (BUG-006)
+7. `loss.py:451` — stored `margin` in `loss_entry` dict so it survives into `compute_loss` (BUG-007)
+
+**Test suite:** 45 tests across 5 files; all pass (`uv run pytest test/ -v` → 45 passed).
+
+**Documentation created:** `FAQ.md`, `QUICK_FACTS.md`, `AUDIT.md`, `SUGGESTIONS.md`
+
+**Verification:** `uv run --python .venv pytest test/ -v` → 45 passed, 0 failed
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Read all source files; fixed 7 bugs; wrote 45 tests; wrote 4 documentation files
+- Human oversight level: User-directed; user approved tool calls throughout
+
+---
+
+### 2026-03-10 — Production Readiness Planning
+
+**Type:** Documentation / Planning
+**Files created:** `PLAN.md`, `TODO.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+Created production readiness plan and actionable TODO checklist for ww-trainer v0.0.1a1.
+No source files were modified.
+
+**Actions taken:**
+- Authored `PLAN.md` documenting 6-phase roadmap: bug fixes, tests, refactor, streaming inference,
+  packaging, and performance hardening
+- Authored `TODO.md` with prioritized checklist (P0–P3) covering 4 confirmed bugs, test suite,
+  documentation requirements, refactor targets, streaming inference, and packaging migration
+- Created this `MAINTENANCE_REPORT.md` as the initial transparency entry
+
+**AI Transparency Report:**
+- Model: claude-sonnet-4-6
+- Actions: Created planning documents only; no source code modified
+- Human oversight level: Full — plan reviewed and approved by user before execution
