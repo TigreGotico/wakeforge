@@ -5,9 +5,9 @@ from typing import List, Dict, Any, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from ww_trainer.dataset import AudioDataset
 from ww_trainer.utils import get_hard_pair_distances, sample_triplets, pairwise_distance, sample_semihard_triplets, \
-    pairwise_cosine_similarity
+    pairwise_cosine_similarity, timed
 
 
 class CN2Plus1PairLoss(nn.Module):
@@ -448,9 +448,10 @@ class LossManager:
             else:
                 raise ValueError(f"Unknown loss: {name}")
 
-            self.losses.append({"name": name, "weight": weight, "criterion": crit})
+            self.losses.append({"name": name, "weight": weight, "criterion": crit, "margin": cfg.get("margin", 1.0)})
 
-    def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor, dataset_ref: Optional[Any] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
+    @timed
+    def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor, dataset_ref: Optional[AudioDataset] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Compute total loss and per-loss values based on the configured criteria.
 

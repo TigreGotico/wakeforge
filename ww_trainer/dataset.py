@@ -1,4 +1,6 @@
+import logging
 import random
+import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
@@ -8,10 +10,12 @@ import numpy as np
 import soundfile as sf
 import torch
 import torchaudio
-from chatterbox_onnx import ChatterboxOnnx
+
+logger = logging.getLogger(__name__)
 from torch.utils.data import Dataset
+from ww_trainer.utils import timed
 
-
+#@timed
 def _load_audio_mono(path, sr=16000):
     """Load audio and ensure it's mono at the target sample rate."""
     wav, orig_sr = sf.read(str(path))
@@ -21,7 +25,7 @@ def _load_audio_mono(path, sr=16000):
         wav = librosa.resample(wav.astype(np.float32), orig_sr=orig_sr, target_sr=sr)
     return wav.astype(np.float32)
 
-
+#@timed
 def _mix_background(clean, bg, snr_db):
     """
     Mix two sound waves at a specified Signal-to-Noise Ratio (SNR).
@@ -49,7 +53,7 @@ def _mix_background(clean, bg, snr_db):
         mixed = mixed / peak
     return mixed.astype(np.float32)
 
-
+#@timed
 def _apply_reverb(wav, rir):
     """Apply room impulse response (RIR) convolution."""
     REVERB_ATTENUATION_FACTOR = 0.5
@@ -59,17 +63,18 @@ def _apply_reverb(wav, rir):
     out = out * (rms_wav / rms_out) * REVERB_ATTENUATION_FACTOR
     return out.astype(np.float32)
 
-
+#@timed
 def _pitch_shift(wav, sr, n_steps):
     """Apply pitch shift."""
     return librosa.effects.pitch_shift(wav, sr=sr, n_steps=n_steps).astype(np.float32)
 
-
+#@timed
 def _speed_perturb(wav, factor):
     """Apply speed perturbation."""
     return librosa.effects.time_stretch(wav, rate=factor).astype(np.float32)
 
 
+@timed
 def _collect_audio_files(base_folder):
     """Collect all valid audio files from a folder."""
     exts = [".wav", ".flac", ".mp3", ".m4a", ".ogg"]
@@ -81,6 +86,7 @@ def _collect_audio_files(base_folder):
         # Using print instead of click.echo here since we are inside a core PyTorch module
         print(f"Warning: Augmentation folder not found: {base_folder}")
         return files
+    print(f"Collecting files from '{base_folder}'")
     for ext in exts:
         files.extend(p.rglob(f"*{ext}"))
     return sorted(files)
@@ -97,7 +103,7 @@ class AudioDataset(Dataset):
 
     def __init__(self, samples,
                  sample_rate: int = 16000,
-                 aug_prob: float = 0.7, # set to 0 to disable
+                 aug_prob: float = 0.0, # set to 0 to disable
                  vc_prob: float = 0.3,
                  bg_noise_folder: str = None,
                  music_folder: str = None,
@@ -110,9 +116,9 @@ class AudioDataset(Dataset):
                  pitch_min: float = -1.0,
                  pitch_max: float = 1.0,
                  speed_min: float = 0.95,
-                 speed_max: float = 1.05
+                 speed_max: float = 1.05,
+                 device="auto"
                  ):
-
         self.samples = samples
         self.sample_rate = sample_rate
         self.aug_prob = aug_prob
@@ -127,20 +133,43 @@ class AudioDataset(Dataset):
         self.speed_max = speed_max
 
         # Collect file paths for external augmentations
-        self.bg_noise_files = _collect_audio_files(bg_noise_folder)
-        self.music_files = _collect_audio_files(music_folder)
-        self.bg_speech_files = _collect_audio_files(bg_speech_folder)
-        self.mic_noise_files = _collect_audio_files(mic_noise_folder)
-        self.rir_files = _collect_audio_files(rir_folder)
-        self.vc_files = _collect_audio_files(vc_folder)
+        self.bg_noise_files = _collect_audio_files(bg_noise_folder) if bg_noise_folder else []
+        self.music_files = _collect_audio_files(music_folder) if music_folder else []
+        self.bg_speech_files = _collect_audio_files(bg_speech_folder)  if bg_speech_folder else []
+        self.mic_noise_files = _collect_audio_files(mic_noise_folder) if mic_noise_folder else []
+        self.rir_files = _collect_audio_files(rir_folder) if rir_folder else []
+        self.vc_files = []
 
-        self.vc: Optional[ChatterboxOnnx] = None
+        self.vc = None
         if vc_folder and vc_prob > 0:
-            self.vc = ChatterboxOnnx()
+            from chatterbox_onnx import ChatterboxOnnx  # optional dependency
+            device: str = device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+            self.vc = ChatterboxOnnx(device=device)
+            self.vc_files = _collect_audio_files(vc_folder)
+
+        # Store data alias for validation (samples may be list of (path, label) tuples)
+        self.data = self.samples
+
+        # Validate files and log label distribution
+        import os as _os
+        missing = [path for path, _ in self.data if not _os.path.isfile(path)]
+        if missing:
+            logger.warning("AudioDataset: %d missing files (of %d total)", len(missing), len(self.data))
+            for p in missing[:5]:
+                logger.warning("  Missing: %s", p)
+            if len(missing) > 5:
+                logger.warning("  ... and %d more", len(missing) - 5)
+
+        if self.data:
+            labels = [label for _, label in self.data]
+            unique = set(labels)
+            dist = {lbl: labels.count(lbl) for lbl in sorted(unique)}
+            logger.info("AudioDataset: %d samples, label distribution: %s", len(self.data), dist)
 
     def __len__(self):
         return len(self.samples)
 
+    #@timed
     def get_augmented(self, wav: Union[numpy.ndarray, torch.Tensor]) -> torch.Tensor:
         # --- Handle input types ---
         input_device = None
@@ -223,23 +252,29 @@ class AudioDataset(Dataset):
 
         return wav_t
 
+    @timed
+    def revoice(self, idx):
+        path, label = self.samples[idx]
+        target_voice = random.choice(self.vc_files)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            vc_path = f.name
+        self.vc.voice_convert(
+            source_audio_path=path,
+            target_voice_path=target_voice,
+            output_file_name=vc_path,
+        )
+        wav, sr = torchaudio.load(vc_path)
+        return wav, sr
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
 
         # 0. Apply Voice Conversion -> simulate a new speaker
         if label == "1" and self.vc is not None and random.random() < self.vc_prob:
-            target_voice = random.choice(self.vc_files)
-            from uuid import uuid4
-            vc_path = f"/tmp/vc_{uuid4()}.wav" # TODO
             try:
-                self.vc.voice_convert(
-                    source_audio_path=path,
-                    target_voice_path=target_voice,
-                    output_file_name=vc_path,
-                )
-                wav, sr = torchaudio.load(vc_path)
-            except:
+                wav, sr = self.revoice(idx)
+            except Exception as exc:
+                logger.warning("Voice conversion failed for %s: %s", path, exc)
                 wav, sr = torchaudio.load(path)
         else:
             # 1. Load and Resample Source WAV
@@ -247,7 +282,11 @@ class AudioDataset(Dataset):
 
         # 1. Resample Source WAV if needed
         if sr != self.sample_rate:
-            wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
+            logger.warning(
+                "Sample rate mismatch: expected %d Hz, got %d Hz for %s. "
+                "Resampling automatically.", self.sample_rate, sr, path
+            )
+            wav = torchaudio.functional.resample(wav, orig_freq=sr, new_freq=self.sample_rate)
 
         # Squeeze to mono [Length]
         wav = wav.squeeze(0)
