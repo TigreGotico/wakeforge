@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ww_trainer"
-version = "0.0.1a1"
+dynamic = ["version"]
 description = "Full training and research suite for wake words — MFCC to HuBERT, all exported to ONNX"
 license = {text = "Apache-2.0"}
 authors = [{name = "JarbasAi", email = "jarbasai@mailfence.com"}]
@@ -22,6 +22,7 @@ dependencies = [
     "tqdm",
     "scikit-learn",
     "matplotlib",
+    "librosa",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +49,9 @@ ww_trainer-benchmark = "ww_trainer.benchmark:main"
 
 [project.urls]
 Homepage = "https://github.com/TigreGotico/ww_trainer"
+
+[tool.setuptools.dynamic]
+version = {attr = "ww_trainer.version.VERSION_STR"}
 
 [tool.setuptools.packages.find]
 where = ["."]
