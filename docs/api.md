@@ -842,7 +842,7 @@ Final model saved as `output_dir/final_model.pt`. Mining cache saved as `output_
 
 ### CLI: `train` command — `trainer.py:668`
 
-Entry point: `ww_trainer-train` (defined in `setup.py` and `pyproject.toml`).
+Entry point: `ww_trainer-train` (defined in `pyproject.toml`, implemented in `cli.py`).
 
 See [training.md](training.md) for the full option table.
 
