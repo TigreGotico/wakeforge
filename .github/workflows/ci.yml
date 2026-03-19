@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install package
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Install onnx and onnxruntime
+        run: uv pip install --system onnx onnxruntime
+
+      - name: Run tests
+        run: pytest test/ -v --cov=ww_trainer --cov-report=term-missing
+
+      - name: Verify CLI entry point
+        run: ww_trainer-train --help
