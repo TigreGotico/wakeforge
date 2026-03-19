@@ -1463,23 +1463,21 @@ class SileroVadWrapper(BaseExtractor):
         self.onnx_path = onnx_path
         self.chunk_size = 512
         
+        self._force_reload = force_reload
         if onnx_path:
             import onnxruntime as ort
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if torch.cuda.is_available() else ["CPUExecutionProvider"]
+            providers = (
+                ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                if torch.cuda.is_available()
+                else ["CPUExecutionProvider"]
+            )
             self.ort_sess = ort.InferenceSession(onnx_path, providers=providers)
             self._input_name = self.ort_sess.get_inputs()[0].name
             self._output_name = self.ort_sess.get_outputs()[0].name
             self.vad_model = None
         else:
-            # Lazy load the model from torch hub
-            import torch.hub
-            self.vad_model, _ = torch.hub.load(
-                repo_or_dir='snakers4/silero-vad', 
-                model='silero_vad', 
-                force_reload=force_reload,
-                trust_repo=True
-            )
-            self.vad_model.eval()
+            # Lazy: loaded on first forward() to avoid network access at import/init
+            self.vad_model = None
             self.ort_sess = None
 
     @property
@@ -1495,9 +1493,20 @@ class SileroVadWrapper(BaseExtractor):
         Returns:
             ``[B, T, base_dim + 1]`` enriched features.
         """
+        # Lazy-load PyTorch Hub model on first forward() call
+        if self.vad_model is None and self.ort_sess is None:
+            import torch.hub
+            self.vad_model, _ = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                force_reload=self._force_reload,
+                trust_repo=True,
+            )
+            self.vad_model.eval()
+
         # 1. Base features [B, T_base, F]
         base_feats = self.base(wavs, **kwargs)
-        
+
         # Format wavs to [B, L]
         wav_list = ensure_wav_list(wavs)
         max_len = max(w.shape[-1] for w in wav_list)
