@@ -42,6 +42,58 @@ def save_checkpoint(
     logger.info("[Checkpoint] Saved model + trainer state at epoch %d -> %s", epoch, model_ckpt_path)
 
 
+def save_intermediate_checkpoint(
+        model,
+        wake_word: str,
+        arch: str,
+        epoch: int,
+        metrics: dict,
+        optimizer: Optional[torch.optim.Optimizer],
+        model_file: Path,
+        export_onnx: bool = False,
+        mlflow=None,
+) -> None:
+    """Save a training checkpoint with optional ONNX export and MLflow logging.
+
+    Args:
+        model: The BaseWakeModel instance.
+        wake_word: Wake word label (stored in ONNX metadata).
+        arch: Architecture name (stored in ONNX metadata).
+        epoch: Current epoch.
+        metrics: Current best metrics dict.
+        optimizer: Optimizer for state dict.
+        model_file: Destination path for the ``.pt`` file.
+        export_onnx: If True, also export the model to ONNX.
+        mlflow: Optional mlflow module for artifact logging.
+    """
+    model_file = Path(model_file)
+    onnx_path = model_file.with_suffix(".onnx")
+    save_checkpoint(model, epoch, metrics or {}, optimizer, model_file)
+
+    if export_onnx:
+        logger.info("Exporting model to onnx: %s", onnx_path)
+        meta: dict = {
+            "wake_word": wake_word,
+            "arch": arch,
+            "epoch": epoch,
+            "featurizer": model.feature_extractor.__class__.__name__,
+        }
+        if metrics:
+            meta.update({f"metric_{k}": str(v) for k, v in metrics.items()})
+        model.export_to_onnx(onnx_path, metadata=meta)
+
+    if mlflow is not None:
+        if export_onnx:
+            try:
+                mlflow.log_artifact(str(onnx_path), artifact_path="checkpoints")
+            except Exception as exc:
+                logger.error("Failed to log onnx to MLflow: %s", exc)
+        try:
+            mlflow.log_artifact(str(model_file), artifact_path="checkpoints")
+        except Exception as exc:
+            logger.error("Failed to log model to MLflow: %s", exc)
+
+
 def load_checkpoint(
         model,
         path: "Path | str",

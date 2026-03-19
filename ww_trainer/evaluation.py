@@ -187,6 +187,24 @@ def compute_fitness_score(
     return max(0.0, detection_score * size_penalty)
 
 
+def compute_readiness(stats: dict) -> float:
+    """Measure hard-negative readiness from embedding statistics.
+
+    Args:
+        stats: Dict with keys ``intra_pos_var`` and ``embed_var_total`` as
+               returned by :func:`~ww_trainer.visualization.log_embeddings_stats`.
+
+    Returns:
+        Readiness score in [0, 1].  Higher means the embeddings are spread
+        enough to benefit from hard-negative mining in the next epoch.
+    """
+    import numpy as np
+    intra_pos = stats.get("intra_pos_var", 1.0)
+    total_var = stats.get("embed_var_total", 1.0)
+    readiness = total_var / (intra_pos + 1e-6)
+    return float(np.clip(readiness / 5.0, 0.0, 1.0))
+
+
 def log_metrics_csv(
     path: str,
     epoch: int,
