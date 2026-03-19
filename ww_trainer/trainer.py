@@ -45,7 +45,7 @@ EXTRACTOR_REGISTRY = {
 }
 from ww_trainer.loss import LossManager
 from ww_trainer.mining import mine_hard_negatives, save_mining_cache, load_mining_cache
-from ww_trainer.model import FfnClassifierHead, GruClassifierHead, CnnClassifierHead
+from ww_trainer.model import FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead
 from ww_trainer.model import BaseWakeModel
 from ww_trainer.utils import timed
 from ww_trainer.visualization import (

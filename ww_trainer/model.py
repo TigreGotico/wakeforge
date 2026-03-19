@@ -257,3 +257,274 @@ class GruClassifierHead(ClassifierHead):
         pooled = out.mean(dim=1)
         return F.relu(self.fc1(pooled))
 
+
+# ---------------------- BC-ResNet classifier head ----------------------
+
+
+class _ConvBNReLU(nn.Module):
+    """Conv2d block with optional SubSpectralNorm/BatchNorm and activation.
+
+    Ported from Qualcomm AI Research's BC-ResNet (Interspeech 2021).
+    """
+
+    def __init__(
+        self,
+        in_plane: int,
+        out_plane: int,
+        idx: int,
+        kernel_size: int | tuple[int, int] = 3,
+        stride: int | tuple[int, int] = 1,
+        groups: int = 1,
+        use_dilation: bool = False,
+        activation: bool = True,
+        swish: bool = False,
+        bn: bool = True,
+        ssn: bool = False,
+        ssn_groups: int = 5,
+    ) -> None:
+        super().__init__()
+        from ww_trainer.subspectralnorm import SubSpectralNorm
+
+        if isinstance(kernel_size, int):
+            padding = kernel_size // 2
+        else:
+            padding = (kernel_size[0] // 2, kernel_size[1] // 2)
+        dilation = (idx + 1, 1) if use_dilation else 1
+        if use_dilation:
+            if isinstance(kernel_size, int):
+                padding = (dilation[0] * (kernel_size // 2), kernel_size // 2)
+            else:
+                padding = (dilation[0] * (kernel_size[0] // 2), kernel_size[1] // 2)
+
+        layers: list[nn.Module] = [
+            nn.Conv2d(
+                in_plane, out_plane, kernel_size,
+                stride=stride, padding=padding,
+                dilation=dilation, groups=groups, bias=False,
+            )
+        ]
+
+        if bn:
+            if ssn:
+                layers.append(SubSpectralNorm(out_plane, spec_groups=ssn_groups))
+            else:
+                layers.append(nn.BatchNorm2d(out_plane))
+
+        if activation:
+            layers.append(nn.SiLU(inplace=True) if swish else nn.ReLU(inplace=True))
+
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass."""
+        return self.block(x)
+
+
+class _BCResBlock(nn.Module):
+    """Broadcasted Residual block with 2D and 1D pathways.
+
+    The 2D pathway processes frequency-temporal features while the 1D pathway
+    operates on temporally-pooled features, broadcasting back to add 2D detail.
+    """
+
+    def __init__(self, in_plane: int, out_plane: int, idx: int,
+                 stride: tuple[int, int] = (1, 1),
+                 ssn_groups: int = 5) -> None:
+        super().__init__()
+        self.transition_block = in_plane != out_plane
+
+        # --- 2D pathway (f2) ---
+        f2_layers: list[nn.Module] = []
+        if self.transition_block:
+            f2_layers.append(
+                _ConvBNReLU(in_plane, out_plane, idx, kernel_size=1)
+            )
+        f2_layers.append(
+            _ConvBNReLU(
+                out_plane, out_plane, idx,
+                kernel_size=(3, 1), stride=stride,
+                groups=out_plane, activation=False, ssn=True,
+                ssn_groups=ssn_groups,
+            )
+        )
+        self.f2 = nn.Sequential(*f2_layers)
+
+        # --- 1D pathway (f1) ---
+        self.f1 = nn.Sequential(
+            _ConvBNReLU(
+                out_plane, out_plane, idx,
+                kernel_size=(1, 3), groups=out_plane,
+                use_dilation=True, swish=True,
+            ),
+            _ConvBNReLU(out_plane, out_plane, idx, kernel_size=1),
+            nn.Dropout2d(0.1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward with broadcasted residual connection."""
+        shortcut = x
+        x = self.f2(x)
+        aux_2d = x
+        x = x.mean(dim=2, keepdim=True)  # [B, C, 1, W] — pool frequency
+        x = self.f1(x)               # 1D pathway
+        x = x + aux_2d               # broadcast back to 2D
+        if not self.transition_block:
+            x = x + shortcut
+        return F.relu(x, inplace=True)
+
+
+def _bc_block_stage(
+    num_layers: int,
+    last_channel: int,
+    cur_channel: int,
+    idx: int,
+    use_stride: bool,
+    ssn_groups: int = 5,
+) -> nn.ModuleList:
+    """Build a stage of BCResBlocks."""
+    channels = [last_channel] + [cur_channel] * num_layers
+    stage = nn.ModuleList()
+    for i in range(num_layers):
+        stride = (2, 1) if use_stride and i == 0 else (1, 1)
+        stage.append(_BCResBlock(channels[i], channels[i + 1], idx, stride,
+                                 ssn_groups=ssn_groups))
+    return stage
+
+
+def _largest_divisor(n: int, max_val: int = 16) -> int:
+    """Return the largest divisor of *n* that is ≤ *max_val*, minimum 1."""
+    for d in range(min(n, max_val), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+class BCResNetHead(ClassifierHead):
+    """BC-ResNet classifier head for wake word detection on mel-spectrogram features.
+
+    Ported from Qualcomm AI Research's BC-ResNet (Kim et al., Interspeech 2021).
+    Expects input features of shape ``[B, T, F]`` (e.g. from MfccExtractor or
+    FilterbankExtractor).  Internally reshapes to ``[B, 1, F, T]`` for 2D
+    convolutions, then outputs a single binary logit per sample.
+
+    The ``tau`` parameter controls model width:
+
+    ======  ===========  ==============
+    tau     base_c       Approx params
+    ======  ===========  ==============
+    1       8            ~6 K
+    1.5     12           ~12 K
+    2       16           ~20 K
+    3       24           ~43 K
+    6       48           ~160 K
+    8       64           ~280 K
+    ======  ===========  ==============
+
+    Args:
+        input_size: Feature dimension F (number of mel bins, e.g. 40).
+        tau: Width multiplier (1, 1.5, 2, 3, 6, 8). Default 8.
+        sample_rate: Audio sample rate (metadata only).
+        device: Device placement.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 40,
+        tau: float = 8,
+        sample_rate: int = 16000,
+        device: str = "auto",
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.tau = tau
+        base_c = int(tau * 8)
+
+        self.n = [2, 2, 4, 4]  # layers per stage
+        c = [
+            base_c * 2,           # head output channels
+            base_c,               # stage 0
+            int(base_c * 1.5),    # stage 1
+            base_c * 2,           # stage 2
+            int(base_c * 2.5),    # stage 3
+            base_c * 4,           # classifier hidden
+        ]
+        self.s = [1, 2]  # stages that use stride
+
+        # --- Head ---
+        self.cnn_head = nn.Sequential(
+            nn.Conv2d(1, c[0], kernel_size=5, stride=(2, 1), padding=2, bias=False),
+            nn.BatchNorm2d(c[0]),
+            nn.ReLU(inplace=True),
+        )
+
+        # --- Body: 4 stages of BCResBlocks ---
+        # Track frequency dimension through strides to compute valid SSN groups.
+        # Head: stride (2,1) on freq with kernel=5, padding=2
+        freq = (input_size + 2 * 2 - 5) // 2 + 1  # after head conv
+
+        self.bc_blocks = nn.ModuleList()
+        for i, num_layers in enumerate(self.n):
+            use_stride = i in self.s
+            last_c = c[0] if i == 0 else c[i]
+            # SSN is applied AFTER the strided conv, so compute post-stride freq.
+            # Conv kernel=(3,1), padding=(1,0), stride=(2,1) if use_stride.
+            if use_stride:
+                freq_after_stride = (freq + 2 * 1 - 3) // 2 + 1
+            else:
+                freq_after_stride = freq  # stride=1 with padding=1 preserves
+            ssn_g = _largest_divisor(freq_after_stride, max_val=16)
+            self.bc_blocks.append(
+                _bc_block_stage(num_layers, last_c, c[i + 1], i, use_stride,
+                                ssn_groups=ssn_g)
+            )
+            if use_stride:
+                freq = freq_after_stride
+
+        # --- Classifier (binary: 1 logit) ---
+        # Adaptive freq kernel: original uses 5, but clamp to final freq dim
+        cls_freq_k = min(5, freq)
+        self._classifier = nn.Sequential(
+            nn.Conv2d(c[-2], c[-2], kernel_size=(cls_freq_k, 5),
+                      groups=c[-2], padding=(0, 2), bias=False),
+            nn.Conv2d(c[-2], c[-1], kernel_size=1, bias=False),
+            nn.BatchNorm2d(c[-1]),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(c[-1], 1, kernel_size=1),
+        )
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        """Classify mel-spectrogram features.
+
+        Args:
+            feats: ``[B, T, F]`` mel-spectrogram features.
+
+        Returns:
+            ``[B]`` raw logits (apply sigmoid for probability).
+        """
+        # [B, T, F] → [B, 1, F, T]  (channel=1, freq=F, time=T)
+        x = feats.transpose(1, 2).unsqueeze(1)
+        x = self.cnn_head(x)
+        for i, num_layers in enumerate(self.n):
+            for j in range(num_layers):
+                x = self.bc_blocks[i][j](x)
+        x = self._classifier(x)
+        return x.squeeze(-1).squeeze(-1).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        """Extract embeddings from penultimate layer.
+
+        Args:
+            feats: ``[B, T, F]`` mel-spectrogram features.
+
+        Returns:
+            ``[B, C]`` embedding vectors.
+        """
+        x = feats.transpose(1, 2).unsqueeze(1)
+        x = self.cnn_head(x)
+        for i, num_layers in enumerate(self.n):
+            for j in range(num_layers):
+                x = self.bc_blocks[i][j](x)
+        # Run through classifier up to (but not including) final conv
+        for layer in list(self._classifier.children())[:-1]:
+            x = layer(x)
+        return x.flatten(1)
