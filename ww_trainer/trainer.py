@@ -242,6 +242,9 @@ class WakeWordTrainer:
               use_amp: bool = False,
               accumulate_grad_batches: int = 1,
               resume: Optional[str] = None,
+              neg_weight_schedule: Optional[str] = None,
+              max_neg_weight: float = 100.0,
+              target_fpr: Optional[float] = None,
               ) -> float:
         """High-level training loop. Supports loss types: 'bce', 'triplet', 'pair'."""
         if isinstance(output_dir, str):
@@ -268,7 +271,10 @@ class WakeWordTrainer:
         eta_min = lr * (0.05 if len(train_data) > 5000 else 0.2)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=eta_min)
 
-        loss_manager = LossManager(loss_configs=self.losses_cfg, mining_type=mining_type, device=self.device)
+        loss_manager = LossManager(
+            loss_configs=self.losses_cfg, mining_type=mining_type, device=self.device,
+            neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
+        )
 
         wakes = [x for x in train_data if x[1] == "1" and os.path.isfile(x[0])]
         nonwakes = [x for x in train_data if x[1] == "0" and os.path.isfile(x[0])]
@@ -351,9 +357,13 @@ class WakeWordTrainer:
 
             total_loss = 0.0
             loss_breakdown = {cfg["name"]: 0.0 for cfg in self.losses_cfg}
+            total_steps = epochs * max(1, len(loader))
 
             optimizer.zero_grad()
             for batch_idx, (wavs, labels, _) in enumerate(tqdm(loader, desc="Training", leave=False)):
+                global_step = ep * len(loader) + batch_idx
+                loss_manager.update_neg_weight(global_step, total_steps)
+
                 with torch.amp.autocast(device_type=self.device.type, enabled=effective_amp):
                     loss, loss_dict = loss_manager.compute_loss(self.model, wavs, labels, loader.dataset)
 
@@ -394,6 +404,14 @@ class WakeWordTrainer:
             logger.info(
                 "Loss=%.4f Epoch %d: Acc=%.3f Prec=%.3f Rec=%.3f F1=%.3f AUC=%.3f EER=%.4f",
                 avg_loss, ep + 1, acc, prec, rec, f1, auc, det_report.eer)
+
+            # FPR-adaptive negative weight adjustment
+            if target_fpr is not None and neg_weight_schedule is not None:
+                current_fpr = 1.0 - prec if prec > 0 else 1.0
+                if current_fpr > target_fpr:
+                    loss_manager.adjust_max_neg_weight(2.0)
+                    logger.info("[NegWeight] FPR %.4f > target %.4f — doubled max_neg_weight to %.1f",
+                                current_fpr, target_fpr, loss_manager.max_neg_weight)
 
             if metrics_log:
                 self._log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)

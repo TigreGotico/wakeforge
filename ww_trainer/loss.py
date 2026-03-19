@@ -813,17 +813,61 @@ class SizeAwareLoss(nn.Module):
         return base + self.l1_weight * l1 + self.size_weight * size_ratio
 
 
+def compute_neg_weight_schedule(
+    step: int,
+    total_steps: int,
+    max_neg_weight: float,
+    schedule: str = "linear",
+) -> float:
+    """Compute negative class weight at a given training step.
+
+    Inspired by openWakeWord's technique of ramping negative weight
+    from 1x to 1000x over training to suppress false positives.
+
+    Args:
+        step: Current training step (0-indexed).
+        total_steps: Total number of training steps.
+        max_neg_weight: Maximum negative weight at end of schedule.
+        schedule: Schedule type — ``"linear"`` or ``"cosine"``.
+
+    Returns:
+        Negative weight value in ``[1.0, max_neg_weight]``.
+
+    Raises:
+        ValueError: If schedule is not ``"linear"`` or ``"cosine"``.
+    """
+    if total_steps <= 1:
+        return max_neg_weight
+    progress = min(step / max(1, total_steps - 1), 1.0)
+    if schedule == "linear":
+        return 1.0 + (max_neg_weight - 1.0) * progress
+    elif schedule == "cosine":
+        import math
+        # Cosine schedule: slow start, fast middle, slow end
+        return 1.0 + (max_neg_weight - 1.0) * 0.5 * (1.0 - math.cos(math.pi * progress))
+    else:
+        raise ValueError(f"Unknown neg weight schedule: {schedule!r}. Use 'linear' or 'cosine'.")
+
+
 class LossManager:
     """Manages multiple weighted loss functions for training."""
 
-    def __init__(self, loss_configs: List[Dict[str, Any]], mining_type: str = "semihard", device: str = "cpu") -> None:
+    def __init__(self, loss_configs: List[Dict[str, Any]], mining_type: str = "semihard",
+                 device: str = "cpu",
+                 neg_weight_schedule: Optional[str] = None,
+                 max_neg_weight: float = 100.0) -> None:
         """
         Initialize the LossManager.
 
         Args:
             loss_configs: A list of dictionaries, each describing a loss:
                           `{"name": str, "weight": float, ...}`.
+            mining_type: Triplet mining strategy.
             device: The torch device ('cpu' or 'cuda') where losses should reside.
+            neg_weight_schedule: Dynamic negative weight schedule — ``"linear"``,
+                ``"cosine"``, or ``None`` (disabled). When active, ``pos_weight``
+                is passed to BCE/focal/label_smoothing_bce losses.
+            max_neg_weight: Maximum negative class weight (default 100.0).
 
         Raises:
             ValueError: If an unknown loss name is encountered.
@@ -831,6 +875,9 @@ class LossManager:
         self.device = torch.device(device)
         self.losses: List[Dict[str, Any]] = []
         self.mining_type = mining_type
+        self.neg_weight_schedule = neg_weight_schedule
+        self.max_neg_weight = max_neg_weight
+        self._current_neg_weight: float = 1.0
 
         for cfg in loss_configs:
             name = cfg["name"].lower()
@@ -919,6 +966,32 @@ class LossManager:
 
             self.losses.append({"name": name, "weight": weight, "criterion": crit, "margin": cfg.get("margin", 1.0)})
 
+    def update_neg_weight(self, step: int, total_steps: int) -> float:
+        """Update the dynamic negative class weight for the current step.
+
+        Call this once per batch when ``neg_weight_schedule`` is active.
+
+        Args:
+            step: Current global training step.
+            total_steps: Total training steps across all epochs.
+
+        Returns:
+            The current negative weight value.
+        """
+        if self.neg_weight_schedule is not None:
+            self._current_neg_weight = compute_neg_weight_schedule(
+                step, total_steps, self.max_neg_weight, self.neg_weight_schedule,
+            )
+        return self._current_neg_weight
+
+    def adjust_max_neg_weight(self, factor: float) -> None:
+        """Multiply ``max_neg_weight`` by a factor (FPR-adaptive adjustment).
+
+        Args:
+            factor: Multiplier for the maximum negative weight.
+        """
+        self.max_neg_weight *= factor
+
     @timed
     def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor, dataset_ref: Optional[AudioDataset] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
@@ -951,8 +1024,14 @@ class LossManager:
             loss_val = torch.tensor(0.0, device=self.device, requires_grad=True)  # Zero loss must require grad
 
             if name == "bce":
-                # Binary Cross-Entropy Loss
-                loss_val = crit(logits.view_as(labels_float), labels_float)
+                # Binary Cross-Entropy Loss — with optional dynamic neg weight
+                if self.neg_weight_schedule is not None and self._current_neg_weight > 1.0:
+                    pw = torch.tensor([self._current_neg_weight], device=self.device)
+                    loss_val = F.binary_cross_entropy_with_logits(
+                        logits.view_as(labels_float), labels_float, pos_weight=pw,
+                    )
+                else:
+                    loss_val = crit(logits.view_as(labels_float), labels_float)
 
             elif name in ["triplet", "soft_triplet"]:
                 # Triplet Margin Loss or Soft Triplet Loss

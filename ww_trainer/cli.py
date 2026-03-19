@@ -93,6 +93,14 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="Overall target number of negatives per wake sample.")
 @click.option("--blend-ratio", default=0.7, type=float,
               help="Blend factor between progress-based and LR-based adaptation (0-1).")
+# -------------------------- Negative Weight Scheduling --------------------------
+@click.option("--neg-weight-schedule", default=None,
+              type=click.Choice(["linear", "cosine"]),
+              help="Dynamic negative weight schedule (ramps from 1x to max over training).")
+@click.option("--max-neg-weight", default=100.0, type=float,
+              help="Maximum negative class weight for BCE/focal losses (default: 100).")
+@click.option("--target-fpr", default=None, type=float,
+              help="Target false positive rate. If exceeded, max_neg_weight doubles per epoch.")
 # -------------------------- Augmentation --------------------------
 @click.option('--aug-prob', default=0.8, type=float,
               help='Probability of applying any augmentation to each training sample.')
@@ -152,6 +160,9 @@ def train(**opts: dict) -> None:
     feat_dim = opts.pop("feature_dim")
     use_amp = opts.pop("use_amp", False)
     accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
+    neg_weight_schedule = opts.pop("neg_weight_schedule", None)
+    max_neg_weight = opts.pop("max_neg_weight", 100.0)
+    target_fpr = opts.pop("target_fpr", None)
 
     if tier is not None:
         tc = get_tier(tier)
@@ -241,6 +252,9 @@ def train(**opts: dict) -> None:
         use_amp=use_amp,
         accumulate_grad_batches=accumulate_grad_batches,
         resume=resume,
+        neg_weight_schedule=neg_weight_schedule,
+        max_neg_weight=max_neg_weight,
+        target_fpr=target_fpr,
     )
 
     # Post-training: C header export
