@@ -2,6 +2,7 @@
 """Wake-word trainer core: model lifecycle, training loop, and inference."""
 import csv
 import json
+import logging
 import os.path
 import random
 from pathlib import Path
@@ -9,7 +10,6 @@ from typing import List, Optional, Tuple, Dict, Any
 
 import numpy as np
 import torch
-from colorama import Fore, Style
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -24,6 +24,8 @@ from ww_trainer.visualization import (
     log_confidence_histogram, log_pca, log_tsne, log_umap,
     log_embeddings_stats,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WakeWordTrainer:
@@ -107,7 +109,7 @@ class WakeWordTrainer:
                 **model_kwargs
             })
             self.mlflow = mlflow
-            print(f"{Fore.GREEN}[MLflow]{Style.RESET_ALL} Enabled at {mlflow_uri}")
+            logger.info("[MLflow] Enabled at %s", mlflow_uri)
 
     # --------------------- Checkpoint I/O ---------------------
     def save_checkpoint(self, epoch: int, metrics: dict, optimizer: torch.optim.Optimizer, out_path: "Path | str"):
@@ -255,7 +257,7 @@ class WakeWordTrainer:
             cache_path = str(Path(resume).parent / "hardneg_cache.pt")
             hardness_cache = load_mining_cache(cache_path)
             if hardness_cache:
-                print(f"[Mining] Loaded {len(hardness_cache)} cached hardness scores from {cache_path}")
+                logger.info("[Mining] Loaded %d cached hardness scores from %s", len(hardness_cache), cache_path)
 
         params = filter(lambda p: p.requires_grad, self.model.parameters())
         optimizer = torch.optim.Adam(params, lr=lr)
@@ -269,8 +271,8 @@ class WakeWordTrainer:
         wakes = [x for x in train_data if x[1] == "1" and os.path.isfile(x[0])]
         nonwakes = [x for x in train_data if x[1] == "0" and os.path.isfile(x[0])]
 
-        print(f"{Fore.GREEN}Total wake-word samples:{Style.RESET_ALL} {len(wakes)}")
-        print(f"{Fore.YELLOW}Total not-wake-word samples:{Style.RESET_ALL} {len(nonwakes)}")
+        logger.info("Total wake-word samples: %d", len(wakes))
+        logger.info("Total not-wake-word samples: %d", len(nonwakes))
 
         best_metrics = {"loss": float("inf"), "precision": 0.0, "recall": 0.0, "f1": 0.0}
         epochs_no_new = 0
@@ -279,7 +281,7 @@ class WakeWordTrainer:
         easy_negatives: List[Tuple[str, str]] = []
         ep = 0
         for ep in range(epochs):
-            print(f"\n{Fore.CYAN}=== Epoch {ep + 1}/{epochs} ==={Style.RESET_ALL}")
+            logger.info("=== Epoch %d/%d ===", ep + 1, epochs)
 
             current_lr = optimizer.param_groups[0]['lr']
             lr_factor = current_lr / initial_lr
@@ -307,8 +309,8 @@ class WakeWordTrainer:
             easy_ratio = base_easy - (base_easy - min_easy) * adaptive_phase
             random_ratio = max(base_random, total_ratio - (hard_ratio + easy_ratio))
 
-            print(f"[Adaptive] readiness={self._readiness_ema:.3f} → hard_ratio={hard_ratio:.2f}")
-            print(f"{Fore.GREEN}learning-rate={current_lr} hard-ratio={hard_ratio} easy-ratio={easy_ratio} random-ratio={random_ratio}{Style.RESET_ALL}")
+            logger.info("[Adaptive] readiness=%.3f -> hard_ratio=%.2f", self._readiness_ema, hard_ratio)
+            logger.info("learning-rate=%s hard-ratio=%s easy-ratio=%s random-ratio=%s", current_lr, hard_ratio, easy_ratio, random_ratio)
 
             if self.mlflow:
                 self.mlflow.log_metrics({
@@ -331,15 +333,13 @@ class WakeWordTrainer:
             epoch_data = wakes + selected_hard + selected_easy + selected_random
             random.shuffle(epoch_data)
 
-            print(
-                f"{Fore.MAGENTA}New data subset:{Style.RESET_ALL} total={len(epoch_data)} "
-                f"{Fore.GREEN}wake={len(wakes)}{Style.RESET_ALL} "
-                f"{Fore.YELLOW}nonwake={len(epoch_data) - len(wakes)}{Style.RESET_ALL}"
+            logger.info(
+                "New data subset: total=%d wake=%d nonwake=%d",
+                len(epoch_data), len(wakes), len(epoch_data) - len(wakes),
             )
-            print(
-                f"  {Fore.RED}hard={len(selected_hard)}{Style.RESET_ALL}  "
-                f"{Fore.BLUE}easy={len(selected_easy)}{Style.RESET_ALL}  "
-                f"{Fore.WHITE}random={len(selected_random)}{Style.RESET_ALL}"
+            logger.info(
+                "  hard=%d  easy=%d  random=%d",
+                len(selected_hard), len(selected_easy), len(selected_random),
             )
 
             loader = DataLoader(AudioDataset(epoch_data, device=self.device.type, **self.augment_opts),
@@ -379,9 +379,9 @@ class WakeWordTrainer:
             for k in loss_breakdown:
                 loss_breakdown[k] /= max(1, len(loader))
 
-            print(f"Average total loss: {avg_loss:.4f}")
+            logger.info("Average total loss: %.4f", avg_loss)
             for k, v in loss_breakdown.items():
-                print(f"  {k} loss: {v:.4f}")
+                logger.info("  %s loss: %.4f", k, v)
 
             metrics = {"total_loss": avg_loss, **loss_breakdown}
             if self.mlflow:
@@ -389,8 +389,9 @@ class WakeWordTrainer:
 
             acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs, det_report = self._evaluate(
                 test_data, batch_size=batch_size, threshold=0.4, epoch=ep + 1, output_dir=output_dir)
-            print(
-                f"{Fore.GREEN}Loss={avg_loss:.4f} Epoch {ep + 1}: Acc={acc:.3f} Prec={prec:.3f} Rec={rec:.3f} F1={f1:.3f} AUC={auc:.3f} EER={det_report.eer:.4f}{Style.RESET_ALL}")
+            logger.info(
+                "Loss=%.4f Epoch %d: Acc=%.3f Prec=%.3f Rec=%.3f F1=%.3f AUC=%.3f EER=%.4f",
+                avg_loss, ep + 1, acc, prec, rec, f1, auc, det_report.eer)
 
             if metrics_log:
                 self._log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)
@@ -439,7 +440,7 @@ class WakeWordTrainer:
                     self.mlflow.log_artifact(str(fp_csv), artifact_path="false_positives")
                     self.mlflow.log_artifact(str(fn_csv), artifact_path="false_negatives")
                 except Exception as e:
-                    print(f"Failed to log metrics/artifacts to MLflow: {e}")
+                    logger.error("Failed to log metrics/artifacts to MLflow: %s", e)
 
             scheduler.step()
 
@@ -483,7 +484,7 @@ class WakeWordTrainer:
                     updated.append(f"F1={f1:.3f}")
 
                 if updated:
-                    print(f"* Updated best model(s): {', '.join(updated)}")
+                    logger.info("Updated best model(s): %s", ", ".join(updated))
             else:
                 ckpt = output_dir / f"ep{ep + 1}.pt"
                 self.save_intermediate_ckpt(
@@ -491,7 +492,7 @@ class WakeWordTrainer:
                     metrics=best_metrics,
                     optimizer=optimizer,
                     model_file=ckpt)
-                print(f"Saved checkpoint: {ckpt}")
+                logger.info("Saved checkpoint: %s", ckpt)
 
             if ep == epochs - 1:
                 break
@@ -501,7 +502,7 @@ class WakeWordTrainer:
                                                                   dataset_fraction=mine_fraction,
                                                                   max_cache_size=3 * len(wakes))
             if new_hards:
-                print(f"  -> Found {len(new_hards)} false positives")
+                logger.info("  -> Found %d false positives", len(new_hards))
                 merged = {x[0]: x for x in new_hards}
                 hard_neg_list = list(merged.values())
                 max_samples = len(wakes) * 3 if len(wakes) > 0 else len(hard_neg_list)
@@ -509,9 +510,9 @@ class WakeWordTrainer:
                 epochs_no_new = 0
             elif mine_fraction > 0:
                 epochs_no_new += 1
-                print(f"  -> No new false negatives found ({epochs_no_new}/{patience})")
+                logger.info("  -> No new false negatives found (%d/%d)", epochs_no_new, patience)
                 if epochs_no_new >= patience:
-                    print("Early stopping — no new false negatives found.")
+                    logger.info("Early stopping — no new false negatives found.")
                     break
 
         # final save
@@ -525,9 +526,9 @@ class WakeWordTrainer:
             # Persist hard-negative mining cache
             cache_path = str(output_dir / "hardneg_cache.pt")
             save_mining_cache(getattr(self, "hardness_cache", {}), cache_path)
-            print(f"Training complete. Saved to {ckpt}")
+            logger.info("Training complete. Saved to %s", ckpt)
         except Exception as e:
-            print(f"Failed to save final model: {e}")
+            logger.error("Failed to save final model: %s", e)
 
         if self.mlflow:
             try:
@@ -552,7 +553,7 @@ class WakeWordTrainer:
         )
 
         if self.export_onnx:
-            print(f"Exporting model to onnx: {onnx_path}")
+            logger.info("Exporting model to onnx: %s", onnx_path)
             self.model.export_to_onnx(onnx_path)
 
         if self.mlflow:
@@ -560,11 +561,11 @@ class WakeWordTrainer:
                 try:
                     self.mlflow.log_artifact(onnx_path, artifact_path="checkpoints")
                 except Exception as e:
-                    print(f"Failed to log onnx model to MLflow: {e}")
+                    logger.error("Failed to log onnx model to MLflow: %s", e)
             try:
                 self.mlflow.log_artifact(model_file, artifact_path="checkpoints")
             except Exception as e:
-                print(f"Failed to log model to MLflow: {e}")
+                logger.error("Failed to log model to MLflow: %s", e)
 
     # --------------------- Inference API ---------------------
     def infer(self, audio_tensor: torch.Tensor) -> float:

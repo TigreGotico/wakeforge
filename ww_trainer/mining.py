@@ -1,6 +1,7 @@
 """Hard-negative mining logic extracted from WakeWordTrainer."""
 from __future__ import annotations
 
+import logging
 import random
 from typing import Dict, List, Optional, Tuple
 
@@ -9,6 +10,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ww_trainer.dataset import AudioDataset, collate_fn
+
+logger = logging.getLogger(__name__)
 
 
 def mine_hard_negatives(
@@ -46,7 +49,7 @@ def mine_hard_negatives(
         hardness_cache = {}
 
     if dataset_fraction <= 0.0:
-        print("[HardNegMining] Disabled — using full nonwake dataset")
+        logger.info("[HardNegMining] Disabled — using full nonwake dataset")
         return [], nonwakes, hardness_cache
 
     if len(nonwakes) == 0:
@@ -119,7 +122,7 @@ def mine_hard_negatives(
             top_embed = sorted(hardness_cache.items(), key=lambda kv: kv[1], reverse=True)[:embed_top_k]
             hard_negatives = [(p, "0") for p, _ in top_embed]
 
-    print(f"Mined {len(hard_negatives)} hard and {len(easy_negatives)} easy negatives (subset={sample_size})")
+    logger.info("Mined %d hard and %d easy negatives (subset=%d)", len(hard_negatives), len(easy_negatives), sample_size)
     return hard_negatives, easy_negatives, hardness_cache
 
 

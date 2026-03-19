@@ -1,11 +1,14 @@
+import functools
+import logging
+import os
 import random
+import time
 from typing import List, Tuple, Optional
 
 import torch
 import torch.nn.functional as F
-import os
-import time
-import functools
+
+logger = logging.getLogger(__name__)
 
 def timed(func):
     """Decorator that logs function execution time if DEBUG env var is truthy."""
@@ -20,7 +23,7 @@ def timed(func):
         start = time.perf_counter()
         result = func(*args, **kwargs)
         duration = (time.perf_counter() - start) * 1000  # ms
-        print(f"[DEBUG] {func.__name__}() took {duration:.2f} ms")
+        logger.debug("%s() took %.2f ms", func.__name__, duration)
         return result
 
     return wrapper

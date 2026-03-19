@@ -1,10 +1,13 @@
 """Checkpoint save/load helpers extracted from WakeWordTrainer."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional, Tuple
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def save_checkpoint(
@@ -36,7 +39,7 @@ def save_checkpoint(
         "optimizer_state": optimizer.state_dict() if optimizer is not None else {},
     }
     torch.save(trainer_state, out_path.with_suffix(".ts"))
-    print(f"[Checkpoint] Saved model + trainer state at epoch {epoch} -> {model_ckpt_path}")
+    logger.info("[Checkpoint] Saved model + trainer state at epoch %d -> %s", epoch, model_ckpt_path)
 
 
 def load_checkpoint(
@@ -75,8 +78,8 @@ def load_checkpoint(
         metrics = state.get("metrics", {})
         if optimizer is not None and "optimizer_state" in state:
             optimizer.load_state_dict(state["optimizer_state"])
-        print(f"[Resume] Loaded checkpoint from epoch {start_epoch}")
+        logger.info("[Resume] Loaded checkpoint from epoch %d", start_epoch)
     else:
-        print("[Resume] Loaded model weights only (trainer state missing)")
+        logger.info("[Resume] Loaded model weights only (trainer state missing)")
 
     return start_epoch, metrics

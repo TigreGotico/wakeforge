@@ -4,6 +4,7 @@ Extracted from ``WakeWordTrainer`` so they can be used without instantiating
 the full trainer.
 """
 import csv
+import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -18,6 +19,8 @@ from tqdm import tqdm
 from ww_trainer.dataset import AudioDataset, collate_fn
 from ww_trainer.metrics import DetectionReport, classification_report as _metrics_report
 from ww_trainer.visualization import plot_roc, plot_pr, plot_det
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate_model(
@@ -96,7 +99,7 @@ def evaluate_model(
                 "mean_conf_gap": separation,
             }, step=epoch)
         except Exception as e:
-            print(f"Failed to log confidence stats to MLflow: {e}")
+            logger.error("Failed to log confidence stats to MLflow: %s", e)
 
     if output_dir is not None:
         plot_dir = Path(output_dir) / "roc_pr_det"

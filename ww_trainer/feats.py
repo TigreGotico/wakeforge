@@ -1,4 +1,5 @@
 import abc
+import logging
 import math
 from pathlib import Path
 from typing import List, Union, TypeAlias
@@ -7,6 +8,8 @@ import onnxruntime as ort
 import torch
 import torch.nn.functional as F
 from onnxruntime.quantization import quantize_dynamic, QuantType
+
+logger = logging.getLogger(__name__)
 
 WavInput: TypeAlias = Union[torch.Tensor, List[torch.Tensor]]
 
@@ -91,15 +94,15 @@ class BaseExtractor(torch.nn.Module):
                           training=torch.onnx.TrainingMode.EVAL)
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
-        print(f"✅ Exported ONNX model to {out}")
+        logger.info("Exported ONNX model to %s", out)
 
         if quantize:
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int16"))
             quantize_dynamic(out, out_int8, op_types_to_quantize=["MatMul", "Gemm"], weight_type=QuantType.QInt16)
-            print(f"✅ Quantized ONNX model saved to {out_int8}")
+            logger.info("Quantized ONNX model saved to %s", out_int8)
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int8"))
             quantize_dynamic(out, out_int8, op_types_to_quantize=["MatMul", "Gemm"], weight_type=QuantType.QInt8)
-            print(f"✅ Quantized ONNX model saved to {out_int8}")
+            logger.info("Quantized ONNX model saved to %s", out_int8)
 
 
 class OnnxFeatureExtractor(BaseExtractor):
@@ -588,7 +591,7 @@ class DeltaExtractor(BaseExtractor):
         )
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
-        print(f"Exported DeltaExtractor ONNX to {out}")
+        logger.info("Exported DeltaExtractor ONNX to %s", out)
         if quantize:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             from pathlib import Path

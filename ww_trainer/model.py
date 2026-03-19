@@ -1,4 +1,5 @@
 import abc
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,8 @@ import torch.nn.functional as F
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
 from ww_trainer.feats import  WavInput,  ensure_wav_list, BaseExtractor
+
+logger = logging.getLogger(__name__)
 
 
 class ClassifierHead(torch.nn.Module):
@@ -52,14 +55,14 @@ class ClassifierHead(torch.nn.Module):
         )
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
-        print(f"✅ Exported ONNX model to {out}")
+        logger.info("Exported ONNX model to %s", out)
 
         if quantize:
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int8"))
             quantize_dynamic(out, out_int8,
                              op_types_to_quantize=["MatMul", "Gemm"],
                              weight_type=QuantType.QInt8)
-            print(f"✅ Quantized ONNX model saved to {out_int8}")
+            logger.info("Quantized ONNX model saved to %s", out_int8)
 
 
 class BaseWakeModel(nn.Module):

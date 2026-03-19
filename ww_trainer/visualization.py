@@ -8,6 +8,8 @@ from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_curve, precision_recall_curve, det_curve
@@ -40,10 +42,10 @@ def plot_roc(targets, probs, epoch: int, plot_dir: Path, auc: float, mlflow=None
             try:
                 mlflow.log_artifact(str(roc_path), artifact_path="roc_pr_det/roc")
             except Exception as e:
-                print(f"Failed to log ROC plot to MLflow: {e}")
+                logger.error("Failed to log ROC plot to MLflow: %s", e)
         return roc_path
     except Exception as e:
-        print(f"Failed to create ROC plot: {e}")
+        logger.error("Failed to create ROC plot: %s", e)
         return None
 
 
@@ -63,10 +65,10 @@ def plot_pr(targets, probs, epoch: int, plot_dir: Path, mlflow=None) -> Optional
             try:
                 mlflow.log_artifact(str(pr_path), artifact_path="roc_pr_det/pr")
             except Exception as e:
-                print(f"Failed to log PR plot to MLflow: {e}")
+                logger.error("Failed to log PR plot to MLflow: %s", e)
         return pr_path
     except Exception as e:
-        print(f"Failed to create PR plot: {e}")
+        logger.error("Failed to create PR plot: %s", e)
         return None
 
 
@@ -88,10 +90,10 @@ def plot_det(targets, probs, epoch: int, plot_dir: Path, mlflow=None) -> Optiona
             try:
                 mlflow.log_artifact(str(det_path), artifact_path="roc_pr_det/det")
             except Exception as e:
-                print(f"Failed to log DET plot to MLflow: {e}")
+                logger.error("Failed to log DET plot to MLflow: %s", e)
         return det_path
     except Exception as e:
-        print(f"Failed to create DET plot: {e}")
+        logger.error("Failed to create DET plot: %s", e)
         return None
 
 
@@ -130,7 +132,7 @@ def log_confidence_histogram(
         try:
             mlflow.log_artifact(str(outpath), artifact_path="viz/confidence")
         except Exception as e:
-            print(f"Failed to log confidence histogram to MLflow: {e}")
+            logger.error("Failed to log confidence histogram to MLflow: %s", e)
 
     return str(outpath)
 
@@ -168,7 +170,7 @@ def log_pca(model, dataset, outdir: Path, epoch: int, device, sample_size: int =
         try:
             mlflow.log_artifact(str(outpath), artifact_path="viz/pca")
         except Exception as e:
-            print(f"MLflow PCA log failed: {e}")
+            logger.error("MLflow PCA log failed: %s", e)
     return str(outpath)
 
 
@@ -193,7 +195,7 @@ def log_tsne(model, dataset: List[Tuple[str, str]], outdir: Path, epoch: int, de
         tsne = TSNE(n_components=2, perplexity=30, random_state=42, init="pca")
         proj = tsne.fit_transform(embeddings)
     except Exception as e:
-        print(f"t-SNE failed: {e}")
+        logger.error("t-SNE failed: %s", e)
         return None
     plt.figure(figsize=(6, 5))
     plt.scatter(proj[labels == 0, 0], proj[labels == 0, 1], alpha=0.5, s=15, label="Nonwake")
@@ -211,7 +213,7 @@ def log_tsne(model, dataset: List[Tuple[str, str]], outdir: Path, epoch: int, de
         try:
             mlflow.log_artifact(str(outpath), artifact_path="viz/tsne")
         except Exception as e:
-            print(f"Failed to log t-SNE to MLflow: {e}")
+            logger.error("Failed to log t-SNE to MLflow: %s", e)
     return str(outpath)
 
 
@@ -258,7 +260,7 @@ def log_umap(model, dataset, outdir: Path, epoch: int, device, sample_size: int 
         try:
             mlflow.log_artifact(str(outpath), artifact_path="viz/umap")
         except Exception as e:
-            print(f"MLflow UMAP log failed: {e}")
+            logger.error("MLflow UMAP log failed: %s", e)
     return str(outpath)
 
 
