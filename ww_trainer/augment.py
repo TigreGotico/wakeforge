@@ -263,6 +263,66 @@ class SpecAugment(AudioTransform):
         return result
 
 
+class SpectrogramAugment:
+    """SpecAugment on extracted feature tensors (time + frequency masking).
+
+    Operates on ``[B, T, F]`` feature tensors post-extraction, complementing
+    the waveform-domain :class:`SpecAugment`.  Inspired by micro-wake-word
+    which applies both time AND frequency masking on spectrograms.
+
+    Args:
+        n_time_masks: Number of time masks to apply (default 2).
+        max_time_width: Maximum width of each time mask in frames (default 10).
+        n_freq_masks: Number of frequency masks to apply (default 2).
+        max_freq_width: Maximum width of each freq mask in bins (default 4).
+    """
+
+    def __init__(
+        self,
+        n_time_masks: int = 2,
+        max_time_width: int = 10,
+        n_freq_masks: int = 2,
+        max_freq_width: int = 4,
+    ) -> None:
+        self.n_time_masks = n_time_masks
+        self.max_time_width = max_time_width
+        self.n_freq_masks = n_freq_masks
+        self.max_freq_width = max_freq_width
+
+    def __call__(self, feats: "torch.Tensor") -> "torch.Tensor":
+        """Apply time and frequency masking to feature tensor.
+
+        Args:
+            feats: Feature tensor of shape ``[B, T, F]`` or ``[T, F]``.
+
+        Returns:
+            Masked feature tensor (same shape, zeroed mask regions).
+        """
+        import torch
+
+        squeeze = False
+        if feats.dim() == 2:
+            feats = feats.unsqueeze(0)
+            squeeze = True
+
+        B, T, F = feats.shape
+        result = feats.clone()
+
+        for _ in range(self.n_time_masks):
+            width = random.randint(1, min(self.max_time_width, T))
+            start = random.randint(0, max(0, T - width))
+            result[:, start:start + width, :] = 0.0
+
+        for _ in range(self.n_freq_masks):
+            width = random.randint(1, min(self.max_freq_width, F))
+            start = random.randint(0, max(0, F - width))
+            result[:, :, start:start + width] = 0.0
+
+        if squeeze:
+            result = result.squeeze(0)
+        return result
+
+
 class Normalize(AudioTransform):
     """Peak-normalize audio to [-1, 1].
 

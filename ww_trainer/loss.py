@@ -878,6 +878,7 @@ class LossManager:
         self.neg_weight_schedule = neg_weight_schedule
         self.max_neg_weight = max_neg_weight
         self._current_neg_weight: float = 1.0
+        self.spec_augment = None  # Set externally via set_spec_augment()
 
         for cfg in loss_configs:
             name = cfg["name"].lower()
@@ -984,6 +985,17 @@ class LossManager:
             )
         return self._current_neg_weight
 
+    def set_spec_augment(self, spec_augment: "SpectrogramAugment") -> None:
+        """Attach a SpectrogramAugment instance for feature-level augmentation.
+
+        When set, augmentation is applied to features inside ``compute_loss``
+        during training.
+
+        Args:
+            spec_augment: A :class:`ww_trainer.augment.SpectrogramAugment` instance.
+        """
+        self.spec_augment = spec_augment
+
     def adjust_max_neg_weight(self, factor: float) -> None:
         """Multiply ``max_neg_weight`` by a factor (FPR-adaptive adjustment).
 
@@ -1012,8 +1024,17 @@ class LossManager:
         results: Dict[str, float] = {}
         total = torch.tensor(0.0, device=self.device)
 
-        logits = model(wavs)
-        embeds = model.embed(wavs)
+        # Extract features once, optionally apply spectrogram augmentation
+        if self.spec_augment is not None and model.training:
+            from ww_trainer.feats import ensure_wav_list
+            wavs_list = ensure_wav_list(wavs)
+            feats = model.feature_extractor(wavs_list)
+            feats = self.spec_augment(feats)
+            logits = model.classifier.forward(feats)
+            embeds = model.classifier.embed(feats)
+        else:
+            logits = model(wavs)
+            embeds = model.embed(wavs)
         # Embedding normalization is performed inside the metric loss functions
         labels_float = labels.to(self.device).float().view(-1, 1)
 

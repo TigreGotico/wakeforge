@@ -127,6 +127,13 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option('--pitch-max', default=1.0, type=float, help='Maximum pitch shift in semitones.')
 @click.option('--speed-min', default=0.95, type=float, help='Minimum speed perturbation factor.')
 @click.option('--speed-max', default=1.05, type=float, help='Maximum speed perturbation factor.')
+# -------------------------- Spectrogram Augmentation --------------------------
+@click.option("--spec-augment", is_flag=True, default=False,
+              help="Enable SpecAugment frequency+time masking on extracted features.")
+@click.option("--spec-n-time-masks", default=2, type=int, help="Number of time masks for SpecAugment.")
+@click.option("--spec-max-time-width", default=10, type=int, help="Max width of time masks (frames).")
+@click.option("--spec-n-freq-masks", default=2, type=int, help="Number of frequency masks for SpecAugment.")
+@click.option("--spec-max-freq-width", default=4, type=int, help="Max width of frequency masks (bins).")
 # -------------------------- Performance --------------------------
 @click.option("--amp", "use_amp", is_flag=True, default=False,
               help="Enable mixed-precision training (requires CUDA).")
@@ -164,6 +171,11 @@ def train(**opts: dict) -> None:
     use_amp = opts.pop("use_amp", False)
     accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
     ambient_dir = opts.pop("ambient_dir", None)
+    spec_augment = opts.pop("spec_augment", False)
+    spec_n_time_masks = opts.pop("spec_n_time_masks", 2)
+    spec_max_time_width = opts.pop("spec_max_time_width", 10)
+    spec_n_freq_masks = opts.pop("spec_n_freq_masks", 2)
+    spec_max_freq_width = opts.pop("spec_max_freq_width", 4)
     neg_weight_schedule = opts.pop("neg_weight_schedule", None)
     max_neg_weight = opts.pop("max_neg_weight", 100.0)
     target_fpr = opts.pop("target_fpr", None)
@@ -260,6 +272,13 @@ def train(**opts: dict) -> None:
         max_neg_weight=max_neg_weight,
         target_fpr=target_fpr,
         ambient_dir=ambient_dir,
+        spec_augment=spec_augment,
+        spec_augment_kwargs={
+            "n_time_masks": spec_n_time_masks,
+            "max_time_width": spec_max_time_width,
+            "n_freq_masks": spec_n_freq_masks,
+            "max_freq_width": spec_max_freq_width,
+        } if spec_augment else None,
     )
 
     # Post-training: C header export

@@ -246,6 +246,8 @@ class WakeWordTrainer:
               max_neg_weight: float = 100.0,
               target_fpr: Optional[float] = None,
               ambient_dir: Optional[str] = None,
+              spec_augment: bool = False,
+              spec_augment_kwargs: Optional[Dict[str, Any]] = None,
               ) -> float:
         """High-level training loop. Supports loss types: 'bce', 'triplet', 'pair'."""
         if isinstance(output_dir, str):
@@ -276,6 +278,11 @@ class WakeWordTrainer:
             loss_configs=self.losses_cfg, mining_type=mining_type, device=self.device,
             neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
         )
+
+        if spec_augment:
+            from ww_trainer.augment import SpectrogramAugment
+            kwargs = spec_augment_kwargs or {}
+            loss_manager.set_spec_augment(SpectrogramAugment(**kwargs))
 
         wakes = [x for x in train_data if x[1] == "1" and os.path.isfile(x[0])]
         nonwakes = [x for x in train_data if x[1] == "0" and os.path.isfile(x[0])]
