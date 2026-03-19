@@ -14,6 +14,14 @@ Runnable demos covering every architecture in ww-trainer.
 | 06 | `06_gammatone_ffn.py` | Gammatone | FFN | Auditory-inspired features |
 | 07 | `07_delta_mfcc_ffn.py` | Delta-MFCC | FFN | Velocity + acceleration features |
 | 14 | `14_hubert_training.py` | HuBERT / Wav2Vec2 | GRU | Transformer extractors (requires `transformers`) |
+| 15 | `15_tcresnet.py` | MFCC | TC-ResNet | 1D temporal conv residual (Choi 2019) |
+| 16 | `16_dscnn.py` | MFCC | DS-CNN | Depthwise-separable 2D CNN (Zhang 2017) |
+| 17 | `17_matchboxnet.py` | FilterBank | MatchboxNet | Time-channel separable 1D (NVIDIA 2020) |
+| 18 | `18_res15.py` | MFCC | Res15 | Dilated residual 1D (Tang & Lin 2018) |
+| 19 | `19_kwt_transformer.py` | FilterBank | KWT | Keyword Transformer (Berg 2021) |
+| 20 | `20_conformer.py` | FilterBank | Conformer | Conv-augmented transformer (Gulati 2020) |
+| 21 | `21_crnn.py` | MFCC | CRNN | CNN + GRU hybrid |
+| 22 | `22_leaf_extractor.py` | LEAF | FFN / GRU | Learnable audio frontend (Google 2021) |
 
 ## Inference & Deployment
 

@@ -528,3 +528,544 @@ class BCResNetHead(ClassifierHead):
         for layer in list(self._classifier.children())[:-1]:
             x = layer(x)
         return x.flatten(1)
+
+
+# ---------------------- Attention pooling ----------------------
+
+
+class AttentionPooling(nn.Module):
+    """Multi-head self-attention pooling over the time dimension.
+
+    Replaces naive mean-pooling with a learned weighted sum.  Can be
+    inserted into any classifier head that pools ``[B, T, F]`` → ``[B, F]``.
+
+    Args:
+        dim: Feature dimension (F).
+        n_heads: Number of attention heads.
+        dropout: Attention dropout rate.
+    """
+
+    def __init__(self, dim: int, n_heads: int = 4, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.attn = nn.MultiheadAttention(dim, n_heads, dropout=dropout, batch_first=True)
+        self.query = nn.Parameter(torch.randn(1, 1, dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Pool ``[B, T, F]`` → ``[B, F]`` via attention."""
+        q = self.query.expand(x.size(0), -1, -1)
+        out, _ = self.attn(q, x, x, need_weights=False)
+        return out.squeeze(1)
+
+
+# ---------------------- TC-ResNet head ----------------------
+
+
+class _TCResBlock(nn.Module):
+    """Temporal convolution residual block (Choi et al. 2019)."""
+
+    def __init__(self, in_c: int, out_c: int, kernel_size: int = 9,
+                 dilation: int = 1) -> None:
+        super().__init__()
+        pad = (kernel_size - 1) * dilation // 2
+        self.conv1 = nn.Conv1d(in_c, out_c, kernel_size, padding=pad, dilation=dilation)
+        self.bn1 = nn.BatchNorm1d(out_c)
+        self.conv2 = nn.Conv1d(out_c, out_c, kernel_size, padding=pad, dilation=dilation)
+        self.bn2 = nn.BatchNorm1d(out_c)
+        self.shortcut = nn.Conv1d(in_c, out_c, 1) if in_c != out_c else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.shortcut(x)
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.bn2(self.conv2(x))
+        return F.relu(x + residual)
+
+
+class TCResNetHead(ClassifierHead):
+    """TC-ResNet classifier head (Choi et al., Interspeech 2019).
+
+    Purely 1D temporal convolutions with residual connections.
+    Operates on ``[B, T, F]`` features transposed to ``[B, F, T]``.
+
+    ``variant=8`` → 3 blocks (TC-ResNet8), ``variant=14`` → 6 blocks (TC-ResNet14).
+
+    Args:
+        input_size: Feature dimension F.
+        variant: 8 or 14 (number of weight layers).
+        channels: Channel width for residual blocks.
+        kernel_size: Temporal kernel size.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, variant: int = 8,
+                 channels: int = 64, kernel_size: int = 9,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        assert variant in (8, 14), "variant must be 8 or 14"
+        n_blocks = 3 if variant == 8 else 6
+        layers: list[nn.Module] = [_TCResBlock(input_size, channels, kernel_size)]
+        for _ in range(n_blocks - 1):
+            layers.append(_TCResBlock(channels, channels, kernel_size))
+        self.blocks = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(channels, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)  # [B, F, T]
+        x = self.blocks(x)
+        x = self.pool(x).squeeze(-1)
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)
+        x = self.blocks(x)
+        return self.pool(x).squeeze(-1)
+
+
+# ---------------------- DS-CNN head ----------------------
+
+
+class _DSConvBlock(nn.Module):
+    """Depthwise-separable 2D convolution block (Zhang et al. 2017)."""
+
+    def __init__(self, in_c: int, out_c: int, kernel: tuple[int, int] = (3, 3),
+                 stride: tuple[int, int] = (1, 1)) -> None:
+        super().__init__()
+        pad = (kernel[0] // 2, kernel[1] // 2)
+        self.dw = nn.Conv2d(in_c, in_c, kernel, stride=stride, padding=pad, groups=in_c, bias=False)
+        self.bn1 = nn.BatchNorm2d(in_c)
+        self.pw = nn.Conv2d(in_c, out_c, 1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_c)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.relu(self.bn1(self.dw(x)))
+        return F.relu(self.bn2(self.pw(x)))
+
+
+class DSCNNHead(ClassifierHead):
+    """DS-CNN classifier head (Zhang et al., "Hello Edge", 2017).
+
+    Depthwise-separable 2D CNN for keyword spotting on spectrograms.
+    The ARM/Google benchmark standard for microcontroller KWS.
+    Expects ``[B, T, F]`` mel features.
+
+    Sizes: ``"S"`` ~20K params, ``"M"`` ~80K, ``"L"`` ~250K.
+
+    Args:
+        input_size: Feature dimension F (mel bins).
+        size: ``"S"``, ``"M"``, or ``"L"``.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    _CONFIGS = {
+        "S": {"channels": [64, 64, 64, 64], "first_c": 64},
+        "M": {"channels": [64, 64, 64, 64, 64], "first_c": 64},
+        "L": {"channels": [128, 128, 128, 128, 128, 128], "first_c": 128},
+    }
+
+    def __init__(self, input_size: int = 40, size: str = "M",
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        cfg = self._CONFIGS[size]
+        first_c = cfg["first_c"]
+        channels = cfg["channels"]
+
+        self.first_conv = nn.Sequential(
+            nn.Conv2d(1, first_c, (3, 3), stride=(2, 1), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(first_c),
+            nn.ReLU(inplace=True),
+        )
+        blocks: list[nn.Module] = []
+        in_c = first_c
+        for out_c in channels:
+            blocks.append(_DSConvBlock(in_c, out_c))
+            in_c = out_c
+        self.ds_blocks = nn.Sequential(*blocks)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(in_c, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2).unsqueeze(1)  # [B, 1, F, T]
+        x = self.first_conv(x)
+        x = self.ds_blocks(x)
+        x = self.pool(x).flatten(1)
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2).unsqueeze(1)
+        x = self.first_conv(x)
+        x = self.ds_blocks(x)
+        return self.pool(x).flatten(1)
+
+
+# ---------------------- MatchboxNet head ----------------------
+
+
+class _TCSConvBlock(nn.Module):
+    """Time-channel separable convolution block (Majumdar & Ginsburg 2020).
+
+    1D depthwise (temporal) → pointwise → BatchNorm → ReLU, with residual.
+    """
+
+    def __init__(self, channels: int, kernel_size: int = 11,
+                 n_sub: int = 1, dilation: int = 1) -> None:
+        super().__init__()
+        layers: list[nn.Module] = []
+        for _ in range(n_sub):
+            pad = (kernel_size - 1) * dilation // 2
+            layers.extend([
+                nn.Conv1d(channels, channels, kernel_size, padding=pad,
+                          dilation=dilation, groups=channels, bias=False),
+                nn.Conv1d(channels, channels, 1, bias=False),
+                nn.BatchNorm1d(channels),
+                nn.ReLU(inplace=True),
+            ])
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x) + x
+
+
+class MatchboxNetHead(ClassifierHead):
+    """MatchboxNet classifier head (Majumdar & Ginsburg, NVIDIA 2020).
+
+    1D time-channel separable convolutions with residual connections.
+    Architecture: ``MatchboxNet-B×R×C`` where B=blocks, R=sub-blocks, C=channels.
+
+    Predefined sizes:
+
+    ======  ====  ====  =======  ===========
+    size     B     R     C       ~Params
+    ======  ====  ====  =======  ===========
+    3×1×64   3    1     64       ~25K
+    3×2×64   3    2     64       ~45K
+    6×2×64   6    2     64       ~90K
+    ======  ====  ====  =======  ===========
+
+    Args:
+        input_size: Feature dimension F.
+        B: Number of blocks.
+        R: Sub-blocks per block.
+        C: Channel width.
+        kernel_sizes: Kernel size per block (cycles if shorter than B).
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, B: int = 3, R: int = 2,
+                 C: int = 64, kernel_sizes: tuple[int, ...] = (11, 13, 15),
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.prologue = nn.Sequential(
+            nn.Conv1d(input_size, C, 11, padding=5, bias=False),
+            nn.BatchNorm1d(C),
+            nn.ReLU(inplace=True),
+        )
+        blocks: list[nn.Module] = []
+        for i in range(B):
+            ks = kernel_sizes[i % len(kernel_sizes)]
+            blocks.append(_TCSConvBlock(C, kernel_size=ks, n_sub=R))
+        self.blocks = nn.Sequential(*blocks)
+        self.epilogue = nn.Sequential(
+            nn.Conv1d(C, C * 2, 1, bias=False),
+            nn.BatchNorm1d(C * 2),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(C * 2, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)  # [B, F, T]
+        x = self.prologue(x)
+        x = self.blocks(x)
+        x = self.epilogue(x)
+        x = self.pool(x).squeeze(-1)
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)
+        x = self.prologue(x)
+        x = self.blocks(x)
+        x = self.epilogue(x)
+        return self.pool(x).squeeze(-1)
+
+
+# ---------------------- Res15 head ----------------------
+
+
+class _Res15Block(nn.Module):
+    """Dilated residual block (Tang & Lin 2018)."""
+
+    def __init__(self, channels: int, dilation: int) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv1d(channels, channels, 3, padding=dilation,
+                               dilation=dilation, bias=False)
+        self.bn1 = nn.BatchNorm1d(channels)
+        self.conv2 = nn.Conv1d(channels, channels, 3, padding=dilation,
+                               dilation=dilation, bias=False)
+        self.bn2 = nn.BatchNorm1d(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.bn2(self.conv2(x))
+        return F.relu(x + residual)
+
+
+class Res15Head(ClassifierHead):
+    """Res15 classifier head (Tang & Lin, Interspeech 2018).
+
+    1D residual network with exponentially increasing dilation.
+    6 residual blocks with dilations [1, 2, 4, 8, 16, 32].
+
+    Args:
+        input_size: Feature dimension F.
+        channels: Hidden channel width.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, channels: int = 45,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.stem = nn.Sequential(
+            nn.Conv1d(input_size, channels, 3, padding=1, bias=False),
+            nn.BatchNorm1d(channels),
+            nn.ReLU(inplace=True),
+        )
+        self.blocks = nn.Sequential(*[
+            _Res15Block(channels, dilation=2 ** i) for i in range(6)
+        ])
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(channels, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)  # [B, F, T]
+        x = self.stem(x)
+        x = self.blocks(x)
+        x = self.pool(x).squeeze(-1)
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2)
+        x = self.stem(x)
+        x = self.blocks(x)
+        return self.pool(x).squeeze(-1)
+
+
+# ---------------------- KWT (Keyword Transformer) head ----------------------
+
+
+class KWTHead(ClassifierHead):
+    """Keyword Transformer head (Berg et al. 2021).
+
+    Vision Transformer adapted for spectrograms: patches along time,
+    positional embedding, transformer encoder, CLS token for classification.
+
+    Args:
+        input_size: Feature dimension F (mel bins).
+        patch_len: Number of time frames per patch.
+        d_model: Transformer embedding dimension.
+        n_heads: Number of attention heads.
+        n_layers: Number of transformer encoder layers.
+        dim_ff: Feed-forward hidden dimension.
+        dropout: Dropout rate.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, patch_len: int = 5,
+                 d_model: int = 64, n_heads: int = 4, n_layers: int = 4,
+                 dim_ff: int = 128, dropout: float = 0.1,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.patch_len = patch_len
+        patch_dim = input_size * patch_len
+        self.patch_proj = nn.Linear(patch_dim, d_model)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        # max 200 patches + 1 CLS
+        self.pos_embed = nn.Parameter(torch.randn(1, 201, d_model) * 0.02)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=n_heads, dim_feedforward=dim_ff,
+            dropout=dropout, batch_first=True, activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.norm = nn.LayerNorm(d_model)
+        self.fc = nn.Linear(d_model, 1)
+
+    def _patchify(self, feats: torch.Tensor) -> torch.Tensor:
+        """``[B, T, F]`` → ``[B, N_patches, patch_dim]``."""
+        B, T, F = feats.shape
+        # Truncate to multiple of patch_len
+        n_patches = T // self.patch_len
+        feats = feats[:, :n_patches * self.patch_len, :]
+        return feats.reshape(B, n_patches, F * self.patch_len)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = self._patchify(feats)                   # [B, N, patch_dim]
+        x = self.patch_proj(x)                       # [B, N, d_model]
+        B, N, _ = x.shape
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, x], dim=1)              # [B, N+1, d_model]
+        x = x + self.pos_embed[:, :N + 1, :]
+        x = self.encoder(x)
+        x = self.norm(x[:, 0])                      # CLS token
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = self._patchify(feats)
+        x = self.patch_proj(x)
+        B, N, _ = x.shape
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, x], dim=1)
+        x = x + self.pos_embed[:, :N + 1, :]
+        x = self.encoder(x)
+        return self.norm(x[:, 0])
+
+
+# ---------------------- Conformer head ----------------------
+
+
+class _ConformerBlock(nn.Module):
+    """Single Conformer block: FFN → MHSA → Conv → FFN (Gulati et al. 2020)."""
+
+    def __init__(self, d_model: int, n_heads: int, conv_kernel: int = 31,
+                 dim_ff: int = 128, dropout: float = 0.1) -> None:
+        super().__init__()
+        # Half-step FFN
+        self.ffn1 = nn.Sequential(
+            nn.LayerNorm(d_model), nn.Linear(d_model, dim_ff),
+            nn.SiLU(), nn.Dropout(dropout), nn.Linear(dim_ff, d_model),
+            nn.Dropout(dropout),
+        )
+        # Self-attention
+        self.norm_attn = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        # Convolution module
+        self.norm_conv = nn.LayerNorm(d_model)
+        pad = (conv_kernel - 1) // 2
+        self.conv = nn.Sequential(
+            nn.Conv1d(d_model, d_model * 2, 1),
+            nn.GLU(dim=1),
+            nn.Conv1d(d_model, d_model, conv_kernel, padding=pad, groups=d_model),
+            nn.BatchNorm1d(d_model),
+            nn.SiLU(),
+            nn.Conv1d(d_model, d_model, 1),
+            nn.Dropout(dropout),
+        )
+        # Half-step FFN
+        self.ffn2 = nn.Sequential(
+            nn.LayerNorm(d_model), nn.Linear(d_model, dim_ff),
+            nn.SiLU(), nn.Dropout(dropout), nn.Linear(dim_ff, d_model),
+            nn.Dropout(dropout),
+        )
+        self.norm_out = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + 0.5 * self.ffn1(x)
+        xn = self.norm_attn(x)
+        x = x + self.attn(xn, xn, xn, need_weights=False)[0]
+        xn = self.norm_conv(x).transpose(1, 2)
+        x = x + self.conv(xn).transpose(1, 2)
+        x = x + 0.5 * self.ffn2(x)
+        return self.norm_out(x)
+
+
+class ConformerHead(ClassifierHead):
+    """Conformer classifier head (Gulati et al. 2020).
+
+    Convolution-augmented transformer combining self-attention with
+    depthwise convolutions. Dominates ASR; increasingly used for KWS.
+
+    Args:
+        input_size: Feature dimension F.
+        d_model: Conformer hidden dimension.
+        n_heads: Attention heads.
+        n_layers: Number of Conformer blocks.
+        conv_kernel: Convolution kernel size in each block.
+        dim_ff: Feed-forward hidden dimension.
+        dropout: Dropout rate.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, d_model: int = 64,
+                 n_heads: int = 4, n_layers: int = 4, conv_kernel: int = 15,
+                 dim_ff: int = 128, dropout: float = 0.1,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.proj = nn.Linear(input_size, d_model)
+        self.blocks = nn.Sequential(*[
+            _ConformerBlock(d_model, n_heads, conv_kernel, dim_ff, dropout)
+            for _ in range(n_layers)
+        ])
+        self.pool = AttentionPooling(d_model, n_heads=n_heads)
+        self.fc = nn.Linear(d_model, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = self.proj(feats)       # [B, T, d_model]
+        x = self.blocks(x)
+        x = self.pool(x)           # [B, d_model]
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = self.proj(feats)
+        x = self.blocks(x)
+        return self.pool(x)
+
+
+# ---------------------- CRNN head ----------------------
+
+
+class CRNNHead(ClassifierHead):
+    """CRNN (CNN + RNN) classifier head.
+
+    2D CNN frontend extracts local patterns from spectrograms, then
+    a GRU processes the temporal sequence. Common in production KWS.
+
+    Args:
+        input_size: Feature dimension F (mel bins).
+        conv_channels: CNN channel width.
+        gru_hidden: GRU hidden size.
+        gru_layers: Number of GRU layers.
+        dropout: Dropout rate.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 40, conv_channels: int = 32,
+                 gru_hidden: int = 64, gru_layers: int = 1,
+                 dropout: float = 0.1,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.cnn = nn.Sequential(
+            nn.Conv2d(1, conv_channels, (3, 3), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(conv_channels),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d((2, 1)),
+            nn.Conv2d(conv_channels, conv_channels * 2, (3, 3), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(conv_channels * 2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d((2, 1)),
+        )
+        rnn_input = conv_channels * 2 * (input_size // 4)
+        self.gru = nn.GRU(rnn_input, gru_hidden, num_layers=gru_layers,
+                          batch_first=True, dropout=dropout if gru_layers > 1 else 0.0)
+        self.fc = nn.Linear(gru_hidden, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2).unsqueeze(1)  # [B, 1, F, T]
+        x = self.cnn(x)                         # [B, C, F', T]
+        B, C, Fp, T = x.shape
+        x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fp)  # [B, T, C*F']
+        out, _ = self.gru(x)
+        return self.fc(out.mean(dim=1)).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2).unsqueeze(1)
+        x = self.cnn(x)
+        B, C, Fp, T = x.shape
+        x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fp)
+        out, _ = self.gru(x)
+        return out.mean(dim=1)

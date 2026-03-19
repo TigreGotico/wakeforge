@@ -810,3 +810,167 @@ class Wav2Vec2BertExtractor(BaseExtractor):
         with torch.no_grad():
             outputs = self.model(wavs)
         return outputs.last_hidden_state  # [B, T', hidden_size]
+
+
+class LEAFExtractor(BaseExtractor):
+    """LEAF: Learnable Audio Frontend (Zeghidour et al., ICLR 2021, Google).
+
+    Replaces fixed mel filterbanks with fully learnable components:
+    - Gabor convolution layer (learnable center freq + bandwidth)
+    - Squared modulus (energy)
+    - Gaussian low-pass pooling (learnable smoothing)
+    - Per-Channel Energy Normalization (PCEN)
+
+    All components are differentiable — the entire frontend is trained
+    end-to-end with the classifier.
+
+    Args:
+        sr: Sample rate.
+        n_filters: Number of filters (output feature dimension).
+        window_len: Window length in samples (default 400 = 25ms at 16kHz).
+        hop_length: Hop length in samples (default 160 = 10ms at 16kHz).
+        min_freq: Minimum center frequency in Hz.
+        max_freq: Maximum center frequency in Hz (default sr/2).
+        pcen_alpha: PCEN alpha (smoothing).
+        pcen_delta: PCEN delta (bias).
+        pcen_r: PCEN r (exponent).
+        pcen_s: PCEN s (gain normalization strength).
+    """
+
+    def __init__(
+        self,
+        sr: int = 16000,
+        n_filters: int = 40,
+        window_len: int = 400,
+        hop_length: int = 160,
+        min_freq: float = 60.0,
+        max_freq: float = None,
+        pcen_alpha: float = 0.96,
+        pcen_delta: float = 2.0,
+        pcen_r: float = 0.5,
+        pcen_s: float = 0.025,
+    ) -> None:
+        super().__init__(sample_rate=sr)
+        self._n_filters = n_filters
+        self.hop_length = hop_length
+        max_freq = max_freq or sr / 2.0
+
+        # --- Gabor filterbank (learnable sinc-like filters) ---
+        # Initialize center frequencies linearly in mel scale
+        low_mel = 2595.0 * math.log10(1.0 + min_freq / 700.0)
+        high_mel = 2595.0 * math.log10(1.0 + max_freq / 700.0)
+        mel_points = torch.linspace(low_mel, high_mel, n_filters)
+        center_hz = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
+
+        # Learnable parameters: center frequency and bandwidth
+        self.center_hz = torch.nn.Parameter(center_hz)
+        # Initialize bandwidth as ERB
+        erb = 24.7 * (4.37 * center_hz / 1000.0 + 1.0)
+        self.bandwidth_hz = torch.nn.Parameter(erb)
+
+        self.window_len = window_len
+        # Time axis for Gabor kernel
+        t = torch.arange(-(window_len // 2), (window_len + 1) // 2, dtype=torch.float32) / sr
+        self.register_buffer("t", t)
+
+        # --- Gaussian low-pass pooling ---
+        self.lowpass_sigma = torch.nn.Parameter(torch.full((n_filters,), 2.0))
+
+        # --- PCEN parameters (learnable) ---
+        self.pcen_alpha = torch.nn.Parameter(torch.full((1, n_filters, 1), pcen_alpha))
+        self.pcen_delta = torch.nn.Parameter(torch.full((1, n_filters, 1), pcen_delta))
+        self.pcen_r = torch.nn.Parameter(torch.full((1, n_filters, 1), pcen_r))
+        self.pcen_s = torch.nn.Parameter(torch.full((1, n_filters, 1), pcen_s))
+
+    @property
+    def feature_dim(self) -> int:
+        return self._n_filters
+
+    def _gabor_filters(self) -> torch.Tensor:
+        """Compute Gabor filters from learnable parameters. Returns [n_filters, 1, window_len]."""
+        center = self.center_hz.clamp(min=1.0)
+        bw = self.bandwidth_hz.clamp(min=1.0)
+        # Gaussian envelope
+        sigma = 1.0 / (2.0 * math.pi * bw.unsqueeze(1))
+        gaussian = torch.exp(-0.5 * (self.t.unsqueeze(0) / sigma) ** 2)
+        # Cosine carrier
+        carrier = torch.cos(2.0 * math.pi * center.unsqueeze(1) * self.t.unsqueeze(0))
+        filters = gaussian * carrier
+        # Normalize
+        filters = filters / (filters.norm(dim=1, keepdim=True) + 1e-8)
+        return filters.unsqueeze(1)  # [n_filters, 1, window_len]
+
+    def _gaussian_lowpass(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply per-channel Gaussian low-pass pooling along time."""
+        sigma = self.lowpass_sigma.clamp(min=0.5)
+        kernel_size = int(sigma.max().item() * 6) | 1  # odd
+        kernel_size = max(kernel_size, 3)
+        half = kernel_size // 2
+        t = torch.arange(-half, half + 1, device=x.device, dtype=torch.float32)
+        # Per-filter Gaussian kernel [n_filters, 1, kernel_size]
+        kernels = torch.exp(-0.5 * (t.unsqueeze(0) / sigma.unsqueeze(1)) ** 2)
+        kernels = kernels / (kernels.sum(dim=1, keepdim=True) + 1e-8)
+        kernels = kernels.unsqueeze(1)  # [n_filters, 1, kernel_size]
+        # Depthwise conv
+        return F.conv1d(x, kernels, padding=half, groups=x.size(1))
+
+    def _pcen(self, x: torch.Tensor) -> torch.Tensor:
+        """Per-Channel Energy Normalization."""
+        # Compute smoothed energy via EMA approximation (simple IIR)
+        alpha = torch.sigmoid(self.pcen_alpha)
+        # Use a simple low-pass as approximation of the IIR smoother
+        smooth = self._ema_smooth(x, alpha)
+        # PCEN formula
+        return (x / (smooth + self.pcen_delta).pow(self.pcen_r) + 1e-6).pow(self.pcen_s) - 1.0
+
+    @staticmethod
+    def _ema_smooth(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        """Exponential moving average along time (dim=2) for PCEN."""
+        C = x.size(1)
+        kernel_size = min(x.size(2), 21)
+        # alpha: [1, C, 1] → [C]
+        a = alpha.view(C)
+        t_k = torch.arange(kernel_size, device=x.device, dtype=torch.float32).flip(0)
+        # weights: [C, K]
+        weights = (1 - a).unsqueeze(1) * a.unsqueeze(1).pow(t_k.unsqueeze(0))
+        weights = weights.unsqueeze(1)  # [C, 1, K]
+        pad = kernel_size - 1
+        return F.conv1d(F.pad(x, (pad, 0)), weights, groups=C)
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract LEAF features from raw audio.
+
+        Args:
+            wavs: ``[B, T]`` tensor or list of 1-D tensors.
+
+        Returns:
+            ``[B, T_frames, n_filters]`` learnable filterbank features.
+        """
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        _dev = self.center_hz.device
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(_dev)
+
+        if batch.ndim == 1:
+            batch = batch.unsqueeze(0)
+        # [B, T] → [B, 1, T]
+        x = batch.unsqueeze(1)
+
+        # Step 1: Gabor convolution
+        filters = self._gabor_filters()  # [n_filters, 1, window_len]
+        x = F.conv1d(x, filters, stride=self.hop_length,
+                      padding=self.window_len // 2)  # [B, n_filters, T']
+
+        # Step 2: Squared modulus
+        x = x ** 2
+
+        # Step 3: Gaussian low-pass pooling
+        x = self._gaussian_lowpass(x)
+
+        # Step 4: PCEN
+        x = self._pcen(x)
+
+        # [B, n_filters, T'] → [B, T', n_filters]
+        return x.transpose(1, 2)
