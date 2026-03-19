@@ -89,6 +89,9 @@ from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
 # --- Evaluation ---
 from ww_trainer.evaluation import evaluate_model, evaluate_detection, log_metrics_csv
 
+# --- Reproducibility ---
+from ww_trainer.reproducibility import set_seed, get_seed_info
+
 # --- Augmentation ---
 from ww_trainer.augment import (
     AugmentationPipeline,

@@ -55,7 +55,12 @@ class WakeWordTrainer:
                  featurizer_type: str = "onnx",
                  shared_extractor=None,
                  use_amp: bool = False,
+                 seed: Optional[int] = None,
                  **model_kwargs: Any) -> None:
+        if seed is not None:
+            from ww_trainer.reproducibility import set_seed
+            set_seed(seed)
+
         self.losses_cfg = losses_cfg
 
         device_str: str = device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
