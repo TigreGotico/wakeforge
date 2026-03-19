@@ -382,10 +382,10 @@ class WakeWordTrainer:
             if self.mlflow:
                 self.mlflow.log_metrics(metrics, step=ep + 1)
 
-            acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs = self._evaluate(
+            acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs, det_report = self._evaluate(
                 test_data, batch_size=batch_size, threshold=0.4, epoch=ep + 1, output_dir=output_dir)
             print(
-                f"{Fore.GREEN}Loss={avg_loss:.4f} Epoch {ep + 1}: Acc={acc:.3f} Prec={prec:.3f} Rec={rec:.3f} F1={f1:.3f} AUC={auc:.3f}{Style.RESET_ALL}")
+                f"{Fore.GREEN}Loss={avg_loss:.4f} Epoch {ep + 1}: Acc={acc:.3f} Prec={prec:.3f} Rec={rec:.3f} F1={f1:.3f} AUC={auc:.3f} EER={det_report.eer:.4f}{Style.RESET_ALL}")
 
             if metrics_log:
                 self._log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)

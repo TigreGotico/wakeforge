@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ww_trainer.dataset import AudioDataset, collate_fn
+from ww_trainer.metrics import DetectionReport, classification_report as _metrics_report
 from ww_trainer.visualization import plot_roc, plot_pr, plot_det
 
 
@@ -104,7 +105,50 @@ def evaluate_model(
         plot_pr(targets, probs, epoch, plot_dir, mlflow)
         plot_det(targets, probs, epoch, plot_dir, mlflow)
 
-    return acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs
+    # Build DetectionReport from collected targets/probs
+    report = _build_detection_report(targets, probs, threshold)
+
+    return acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs, report
+
+
+def _build_detection_report(
+    targets: list,
+    probs: list,
+    threshold: float = 0.5,
+) -> DetectionReport:
+    """Build a DetectionReport from raw targets and probabilities."""
+    if not targets:
+        return DetectionReport()
+    y_true = np.array(targets)
+    y_scores = np.array(probs)
+    return _metrics_report(y_true, y_scores, threshold=threshold)
+
+
+def evaluate_detection(
+    model: torch.nn.Module,
+    dataset: List[Tuple[str, str]],
+    device: torch.device,
+    batch_size: int = 128,
+    threshold: Optional[float] = None,
+) -> DetectionReport:
+    """Evaluate model and return a DetectionReport with EER, FAR/FRR, DET data.
+
+    This is the recommended evaluation function for production use.
+    If no threshold is provided, the optimal F1 threshold is auto-selected.
+
+    Args:
+        model: Wake word model.
+        dataset: List of ``(path, label)`` tuples.
+        device: Torch device.
+        batch_size: Batch size for inference.
+        threshold: Decision threshold (None = auto-optimize for F1).
+
+    Returns:
+        :class:`~ww_trainer.metrics.DetectionReport` with all metrics.
+    """
+    result = evaluate_model(model, dataset, device, batch_size=batch_size,
+                            threshold=threshold or 0.5)
+    return result[-1]  # last element is the DetectionReport
 
 
 def log_metrics_csv(

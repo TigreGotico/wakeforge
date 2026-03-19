@@ -87,7 +87,7 @@ from ww_trainer.metrics import (
 from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
 
 # --- Evaluation ---
-from ww_trainer.evaluation import evaluate_model, log_metrics_csv
+from ww_trainer.evaluation import evaluate_model, evaluate_detection, log_metrics_csv
 
 # --- Augmentation ---
 from ww_trainer.augment import (
