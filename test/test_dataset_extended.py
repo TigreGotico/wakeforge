@@ -110,41 +110,37 @@ class TestApplyReverb:
         assert len(out) == len(wav)
 
 
-# ---- _pitch_shift ----
+# ---- PitchShift / SpeedPerturb (now in augment.py) ----
 
 class TestPitchShift:
     def test_returns_float32(self):
-        from ww_trainer.dataset import _pitch_shift
+        from ww_trainer.augment import PitchShift
         wav = _sine_wav()
-        result = _pitch_shift(wav, SAMPLE_RATE, n_steps=1.0)
+        result = PitchShift(min_steps=1.0, max_steps=1.0)(wav, sr=SAMPLE_RATE)
         assert result.dtype == np.float32
         assert len(result) > 0
 
 
-# ---- _speed_perturb ----
-
 class TestSpeedPerturb:
     def test_returns_float32(self):
-        from ww_trainer.dataset import _speed_perturb
+        from ww_trainer.augment import SpeedPerturb
         wav = _sine_wav()
-        result = _speed_perturb(wav, factor=1.1)
+        result = SpeedPerturb(min_rate=1.1, max_rate=1.1)(wav, sr=SAMPLE_RATE)
         assert result.dtype == np.float32
         assert len(result) > 0
 
     def test_speed_up_shorter(self):
-        from ww_trainer.dataset import _speed_perturb
+        from ww_trainer.augment import SpeedPerturb
         wav = _sine_wav()
-        result = _speed_perturb(wav, factor=1.5)
-        # Speeding up should produce shorter output
+        result = SpeedPerturb(min_rate=1.5, max_rate=1.5)(wav, sr=SAMPLE_RATE)
         assert len(result) < len(wav)
 
 
-# ---- _collect_audio_files ----
+# ---- _collect_audio_files (now in augment.py) ----
 
 class TestCollectAudioFiles:
     def test_empty_base_folder(self):
-        from ww_trainer.dataset import _collect_audio_files
-        assert _collect_audio_files(None) == []
+        from ww_trainer.augment import _collect_audio_files
         assert _collect_audio_files("") == []
 
     def test_nonexistent_folder(self, tmp_path):

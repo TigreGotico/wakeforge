@@ -1,98 +1,24 @@
 import logging
 import random
 import tempfile
-from pathlib import Path
 from typing import Optional, Union
 
-import librosa
 import numpy
 import numpy as np
-import soundfile as sf
 import torch
 import torchaudio
 
-logger = logging.getLogger(__name__)
 from torch.utils.data import Dataset
+
 from ww_trainer.utils import timed
+from ww_trainer.augment import (
+    _collect_audio_files,
+    _load_audio_mono,
+    mix_background as _mix_background,
+    apply_reverb as _apply_reverb,
+)
 
-#@timed
-def _load_audio_mono(path, sr=16000):
-    """Load audio and ensure it's mono at the target sample rate."""
-    wav, orig_sr = sf.read(str(path))
-    if wav.ndim > 1:
-        wav = np.mean(wav, axis=1)
-    if orig_sr != sr:
-        wav = librosa.resample(wav.astype(np.float32), orig_sr=orig_sr, target_sr=sr)
-    return wav.astype(np.float32)
-
-#@timed
-def _mix_background(clean, bg, snr_db):
-    """
-    Mix two sound waves at a specified Signal-to-Noise Ratio (SNR).
-    The background audio is cropped/tiled to match the length of the clean audio.
-    """
-    clean_len = len(clean)
-
-    if len(bg) < clean_len:
-        # Tile the background audio if it's too short
-        nrep = int(np.ceil(clean_len / len(bg)))
-        bg = np.tile(bg, nrep)
-
-    # Randomly select a segment of the background audio that is the length of the clean audio
-    start = random.randint(0, len(bg) - clean_len)
-    bg = bg[start:start + clean_len]
-
-    rms_clean = np.sqrt(np.mean(clean ** 2) + 1e-9)
-    rms_bg = np.sqrt(np.mean(bg ** 2) + 1e-9)
-    desired_bg_rms = rms_clean / (10 ** (snr_db / 20.0))
-    if rms_bg > 0:
-        bg = bg * (desired_bg_rms / rms_bg)
-    mixed = clean + bg
-    peak = np.max(np.abs(mixed))
-    if peak > 1.0:
-        mixed = mixed / peak
-    return mixed.astype(np.float32)
-
-#@timed
-def _apply_reverb(wav, rir):
-    """Apply room impulse response (RIR) convolution."""
-    REVERB_ATTENUATION_FACTOR = 0.5
-    out = np.convolve(wav, rir)[:len(wav)]
-    rms_wav = np.sqrt(np.mean(wav ** 2) + 1e-9)
-    rms_out = np.sqrt(np.mean(out ** 2) + 1e-9)
-    out = out * (rms_wav / rms_out) * REVERB_ATTENUATION_FACTOR
-    return out.astype(np.float32)
-
-#@timed
-def _pitch_shift(wav, sr, n_steps):
-    """Apply pitch shift."""
-    return librosa.effects.pitch_shift(wav, sr=sr, n_steps=n_steps).astype(np.float32)
-
-#@timed
-def _speed_perturb(wav, factor):
-    """Apply speed perturbation."""
-    return librosa.effects.time_stretch(wav, rate=factor).astype(np.float32)
-
-
-@timed
-def _collect_audio_files(base_folder):
-    """Collect all valid audio files from a folder."""
-    exts = [".wav", ".flac", ".mp3", ".m4a", ".ogg"]
-    files = []
-    if not base_folder:
-        return files
-    p = Path(base_folder)
-    if not p.exists():
-        # Using print instead of click.echo here since we are inside a core PyTorch module
-        print(f"Warning: Augmentation folder not found: {base_folder}")
-        return files
-    print(f"Collecting files from '{base_folder}'")
-    for ext in exts:
-        files.extend(p.rglob(f"*{ext}"))
-    return sorted(files)
-
-
-# -----------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
 
@@ -237,9 +163,13 @@ class AudioDataset(Dataset):
                 rir_np = _load_audio_mono(random.choice(self.rir_files), self.sample_rate)
                 wav_np = _apply_reverb(wav_np, rir_np)
             if random.random() < 0.3:
-                wav_np = _pitch_shift(wav_np, self.sample_rate, random.uniform(self.pitch_min, self.pitch_max))
+                import librosa
+                n_steps = random.uniform(self.pitch_min, self.pitch_max)
+                wav_np = librosa.effects.pitch_shift(wav_np, sr=self.sample_rate, n_steps=n_steps).astype(np.float32)
             if random.random() < 0.3:
-                wav_np = _speed_perturb(wav_np, random.uniform(self.speed_min, self.speed_max))
+                import librosa
+                factor = random.uniform(self.speed_min, self.speed_max)
+                wav_np = librosa.effects.time_stretch(wav_np, rate=factor).astype(np.float32)
             peak = np.max(np.abs(wav_np))
             if peak > 1e-9:
                 wav_np = wav_np / peak

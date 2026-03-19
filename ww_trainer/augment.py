@@ -42,11 +42,13 @@ def _collect_audio_files(base_folder: str) -> list[Path]:
     """Collect all valid audio files from a folder recursively.
 
     Args:
-        base_folder: Directory to scan.
+        base_folder: Directory to scan. Empty string or None returns [].
 
     Returns:
         Sorted list of Path objects for audio files.
     """
+    if not base_folder:
+        return []
     exts = [".wav", ".flac", ".mp3", ".m4a", ".ogg"]
     p = Path(base_folder)
     if not p.exists():
