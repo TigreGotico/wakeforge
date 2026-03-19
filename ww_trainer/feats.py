@@ -1,9 +1,10 @@
 import abc
 import logging
 import math
+import numpy as np
 from pathlib import Path
 from typing import List, Union, TypeAlias
-from ww_trainer.utils import timed
+from ww_trainer.utils import timed, embed_onnx_metadata
 import onnxruntime as ort
 import torch
 import torch.nn.functional as F
@@ -66,6 +67,19 @@ class BaseExtractor(torch.nn.Module):
         self.sample_rate = sample_rate
         self.device = torch.device(device)
 
+    def _apply(self, fn: "Callable") -> "BaseExtractor":
+        """Override to keep ``self.device`` in sync with ``.to()``/``.cuda()``/``.cpu()``."""
+        result = super()._apply(fn)
+        # After _apply, detect device from first parameter or buffer
+        for p in self.parameters():
+            self.device = p.device
+            break
+        else:
+            for b in self.buffers():
+                self.device = b.device
+                break
+        return result
+
     @property
     def feature_dim(self) -> int:
         raise NotImplementedError("Subclasses must implement feature_dim")
@@ -77,7 +91,7 @@ class BaseExtractor(torch.nn.Module):
     def __call__(self, wavs: WavInput, **kwargs) -> torch.Tensor:
         return self.forward(wavs, **kwargs)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo=False):
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
         import onnx
         dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
         dynamic_axes = {"input_values": {0: "batch_size", 1: "time"}, "features": {0: "batch_size", 1: "time"}
@@ -95,6 +109,9 @@ class BaseExtractor(torch.nn.Module):
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
         logger.info("Exported ONNX model to %s", out)
+
+        if metadata:
+            embed_onnx_metadata(out, metadata)
 
         if quantize:
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int16"))
@@ -308,6 +325,10 @@ class MfccExtractor(BaseExtractor):
             batch = torch.stack([F.pad(w, (0, max_len - w.shape[-1])) for w in wavs])
         else:
             batch = wavs.unsqueeze(0) if wavs.ndim == 1 else wavs
+
+        # Ensure batch is at least n_fft long for stft reflect padding
+        if batch.shape[-1] < self.n_fft:
+            batch = F.pad(batch, (0, self.n_fft - batch.shape[-1]))
 
         device = batch.device
         window = torch.hann_window(self.n_fft, device=device)
@@ -569,7 +590,7 @@ class DeltaExtractor(BaseExtractor):
         delta2 = self._compute_delta(delta, self.delta_width)            # [B, T, F]
         return torch.cat([feats, delta, delta2], dim=-1)                 # [B, T, 3*F]
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False):
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
         """Export the full DeltaExtractor (base + delta computation) to ONNX."""
         import onnx
         dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
@@ -592,6 +613,8 @@ class DeltaExtractor(BaseExtractor):
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
         logger.info("Exported DeltaExtractor ONNX to %s", out)
+        if metadata:
+            embed_onnx_metadata(out, metadata)
         if quantize:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             from pathlib import Path
@@ -813,6 +836,86 @@ class Wav2Vec2BertExtractor(BaseExtractor):
         with torch.no_grad():
             outputs = self.model(wavs)
         return outputs.last_hidden_state  # [B, T', hidden_size]
+
+
+class TorchAudioHubertExtractor(BaseExtractor):
+    """HuBERT extractor using ``torchaudio.pipelines`` — no ``transformers`` dependency.
+
+    Uses the bundled torchaudio HuBERT model which is downloaded from
+    torch hub on first use. Produces the same ``[B, T, hidden]`` output
+    as :class:`HubertExtractor` but only requires ``torchaudio``.
+
+    Args:
+        bundle_name: Name of the torchaudio pipeline bundle.
+            Options: ``"HUBERT_BASE"``, ``"HUBERT_LARGE"``,
+            ``"HUBERT_XLARGE"``, ``"HUBERT_ASR_LARGE"``, ``"HUBERT_ASR_XLARGE"``.
+        sample_rate: Audio sample rate (must match bundle's expected rate).
+        device: Torch device string or ``"auto"``.
+    """
+
+    _BUNDLE_MAP = {
+        "HUBERT_BASE": "torchaudio.pipelines.HUBERT_BASE",
+        "HUBERT_LARGE": "torchaudio.pipelines.HUBERT_LARGE",
+        "HUBERT_XLARGE": "torchaudio.pipelines.HUBERT_XLARGE",
+        "HUBERT_ASR_LARGE": "torchaudio.pipelines.HUBERT_ASR_LARGE",
+        "HUBERT_ASR_XLARGE": "torchaudio.pipelines.HUBERT_ASR_XLARGE",
+    }
+
+    def __init__(
+        self,
+        bundle_name: str = "HUBERT_BASE",
+        sample_rate: int = 16000,
+        device: str = "auto",
+    ) -> None:
+        super().__init__(sample_rate=sample_rate, device=device)
+        import torchaudio
+
+        if bundle_name not in self._BUNDLE_MAP:
+            raise ValueError(
+                f"Unknown bundle {bundle_name!r}. "
+                f"Available: {list(self._BUNDLE_MAP)}"
+            )
+        bundle = getattr(torchaudio.pipelines, bundle_name)
+        self.model = bundle.get_model().eval().to(self.device)
+        expected_sr = bundle.sample_rate
+        if sample_rate != expected_sr:
+            logger.warning(
+                "TorchAudioHubertExtractor: bundle expects %d Hz but got %d Hz. "
+                "Audio will NOT be resampled automatically.",
+                expected_sr, sample_rate,
+            )
+        # Feature dim from a dummy forward pass
+        with torch.no_grad():
+            dummy = torch.zeros(1, sample_rate, device=self.device)
+            out, _ = self.model.extract_features(dummy)
+            self._feature_dim = out[-1].shape[-1]
+
+    @property
+    def feature_dim(self) -> int:
+        """Output feature dimension."""
+        return self._feature_dim
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract HuBERT features from audio.
+
+        Args:
+            wavs: Audio input.
+
+        Returns:
+            ``[B, T, hidden]`` feature tensor from the last transformer layer.
+        """
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[0] for w in wav_list)
+        padded = [
+            F.pad(w, (0, max_len - w.shape[0])) if w.shape[0] < max_len else w
+            for w in wav_list
+        ]
+        wav_tensor = torch.stack(padded, dim=0).to(torch.float32).to(self.device)
+        abs_max = wav_tensor.abs().amax(dim=1, keepdim=True).clamp(min=1e-9)
+        wav_tensor = wav_tensor / abs_max
+        with torch.no_grad():
+            features, _ = self.model.extract_features(wav_tensor)
+        return features[-1]  # last layer: [B, T, hidden]
 
 
 class LEAFExtractor(BaseExtractor):
@@ -1321,6 +1424,132 @@ class CQTExtractor(BaseExtractor):
 # ---------------------- Feature Enrichment Wrappers ----------------------
 
 
+class SileroVadWrapper(BaseExtractor):
+    """Wrapper that appends Silero VAD probabilities to any base extractor.
+
+    Uses the highly-optimized snakers4/silero-vad (v4+) model to compute
+    robust speech probabilities per frame and concatenates them to the 
+    base features. This provides a state-of-the-art neural VAD signal 
+    to the downstream classifier without needing to train it from scratch.
+
+    Silero VAD operates on 512-sample chunks at 16kHz. This wrapper 
+    unfolds the audio into chunks, runs batch inference, and interpolates 
+    the resulting probabilities to match the time dimension of the base features.
+
+    If *onnx_path* is provided, it uses ONNX Runtime for inference, which 
+    is recommended for production environments and standard blackbox pipelines.
+    Otherwise, it lazy-loads the PyTorch Hub model.
+
+    Note: Direct ONNX export of the full combined pipeline (Base + Silero) 
+    is not supported due to external model dependencies.
+
+    Args:
+        base_extractor: Any BaseExtractor to wrap.
+        onnx_path: Optional path to a pre-trained Silero VAD ONNX file.
+        force_reload: Force redownload of the Silero model from torch.hub.
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        onnx_path: str | None = None,
+        force_reload: bool = False
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        if base_extractor.sample_rate != 16000:
+            raise ValueError("Silero VAD requires a 16000 Hz sample rate.")
+            
+        self.base = base_extractor
+        self.onnx_path = onnx_path
+        self.chunk_size = 512
+        
+        if onnx_path:
+            import onnxruntime as ort
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if torch.cuda.is_available() else ["CPUExecutionProvider"]
+            self.ort_sess = ort.InferenceSession(onnx_path, providers=providers)
+            self._input_name = self.ort_sess.get_inputs()[0].name
+            self._output_name = self.ort_sess.get_outputs()[0].name
+            self.vad_model = None
+        else:
+            # Lazy load the model from torch hub
+            import torch.hub
+            self.vad_model, _ = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad', 
+                model='silero_vad', 
+                force_reload=force_reload,
+                trust_repo=True
+            )
+            self.vad_model.eval()
+            self.ort_sess = None
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + 1
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features and append Silero VAD probabilities.
+
+        Args:
+            wavs: Audio input.
+
+        Returns:
+            ``[B, T, base_dim + 1]`` enriched features.
+        """
+        # 1. Base features [B, T_base, F]
+        base_feats = self.base(wavs, **kwargs)
+        
+        # Format wavs to [B, L]
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        # Pad to multiple of chunk_size for easy unfolding
+        pad_len = (self.chunk_size - (max_len % self.chunk_size)) % self.chunk_size
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1] + pad_len)) for w in wav_list
+        ]).to(base_feats.device)
+        
+        B, L = batch.shape
+        T_chunks = L // self.chunk_size
+        
+        # 2. Unfold into chunks [B * T_chunks, chunk_size]
+        chunks = batch.view(B * T_chunks, self.chunk_size)
+        
+        # 3. Silero VAD inference
+        if self.ort_sess:
+            # ONNX Runtime path
+            # Convert to numpy for ORT
+            chunks_np = chunks.detach().cpu().numpy().astype(np.float32)
+            vad_out = self.ort_sess.run([self._output_name], {self._input_name: chunks_np})[0]
+            vad_probs = torch.from_numpy(vad_out).to(base_feats.device)
+        else:
+            # PyTorch Hub path
+            with torch.no_grad():
+                self.vad_model.to(chunks.device)
+                vad_probs = self.vad_model(chunks, self.sample_rate) # [B * T_chunks, 1]
+            
+        # Reshape to [B, 1, T_chunks] for interpolation
+        vad_probs = vad_probs.view(B, T_chunks, 1).transpose(1, 2)
+        
+        # 4. Interpolate to match base feature length [B, 1, T_base]
+        T_base = base_feats.shape[1]
+        vad_aligned = F.interpolate(
+            vad_probs, 
+            size=T_base, 
+            mode="linear", 
+            align_corners=False
+        ).transpose(1, 2) # [B, T_base, 1]
+        
+        # 5. Concatenate
+        return torch.cat([base_feats, vad_aligned], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export is not supported for external JIT wrappers."""
+        raise NotImplementedError(
+            "SileroVadWrapper cannot be exported to ONNX via standard PyTorch tracing "
+            "because it wraps an external PyTorch Hub JIT model with complex internal control flow. "
+            "Export the base extractor separately, and use the official Silero ONNX model for the VAD stream."
+        )
+
+
 class VoiceActivityExtractor(BaseExtractor):
     """Wrapper that appends voice activity features to any base extractor.
 
@@ -1435,10 +1664,12 @@ class VoiceActivityExtractor(BaseExtractor):
 
         return torch.cat([base_feats, vad_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        """Export is not supported for wrapper extractors — export base + VAD separately."""
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export is not supported natively due to dynamic shape constraints."""
         raise NotImplementedError(
-            "VoiceActivityExtractor wraps another extractor. "
+            "VoiceActivityExtractor cannot be directly exported to ONNX because "
+            "it relies on `torch.arange` framing bound to dynamic sequence lengths and "
+            "untraceable Python list comprehensions (`ensure_wav_list`). "
             "Export the base extractor separately."
         )
 
@@ -1570,10 +1801,13 @@ class PitchExtractor(BaseExtractor):
 
         return torch.cat([base_feats, pitch_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        """Export is not supported for wrapper extractors."""
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export is not supported natively due to dynamic shape constraints and FFTs."""
         raise NotImplementedError(
-            "PitchExtractor wraps another extractor. Export the base separately."
+            "PitchExtractor cannot be directly exported to ONNX because "
+            "it relies on dynamically computed FFT lag ranges and `torch.arange` "
+            "framing which bind the time dimension as a constant during tracing. "
+            "Export the base extractor separately."
         )
 
 
@@ -1623,10 +1857,13 @@ class MultiResolutionExtractor(BaseExtractor):
 
         return torch.cat([fine_feats, coarse_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        """Export is not supported for multi-resolution wrapper."""
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export is not supported natively due to dynamic size constraints in F.interpolate."""
         raise NotImplementedError(
-            "MultiResolutionExtractor wraps two extractors. Export each separately."
+            "MultiResolutionExtractor cannot be directly exported to ONNX because "
+            "it relies on `F.interpolate` with a dynamic sequence length `size`, "
+            "which PyTorch's ONNX tracer evaluates as a static integer, breaking dynamic axes. "
+            "Export each extractor separately."
         )
 
 
@@ -1733,10 +1970,13 @@ class SNRAwareExtractor(BaseExtractor):
 
         return torch.cat([base_feats, snr_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        """Export is not supported for wrapper extractors."""
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export is not supported natively due to dynamic shape and slicing constraints."""
         raise NotImplementedError(
-            "SNRAwareExtractor wraps another extractor. Export the base separately."
+            "SNRAwareExtractor cannot be directly exported to ONNX because "
+            "it uses `torch.arange` framing and conditional slicing based on a dynamically "
+            "computed percentile that eagerly evaluate during standard tracing. "
+            "Export the base separately."
         )
 
 
@@ -1777,11 +2017,11 @@ class MarkovTransitionExtractor(BaseExtractor):
         self.order = order
 
         # Codebook for vector quantization [n_codes, F]
-        self._codebook: torch.Tensor | None = None
+        self.register_buffer("_codebook", torch.zeros(n_codes, base_extractor.feature_dim))
 
         # Transition matrix [n_codes^order, n_codes] — uniform initially
         n_states = n_codes ** order
-        self._transition_matrix = torch.ones(n_states, n_codes) / n_codes
+        self.register_buffer("_transition_matrix", torch.ones(n_states, n_codes) / n_codes)
 
         self._fitted = False
 
@@ -1798,34 +2038,40 @@ class MarkovTransitionExtractor(BaseExtractor):
         Returns:
             ``[B, T]`` integer token IDs.
         """
-        if self._codebook is None:
+        if not self._fitted:
             # No codebook yet — random assignment
             return torch.randint(0, self.n_codes, (feats.shape[0], feats.shape[1]),
                                  device=feats.device)
+        # Ensure codebook is on same device as input features
         cb = self._codebook.to(feats.device)
         # [B, T, F] vs [K, F] → [B, T, K] distances
         dists = torch.cdist(feats, cb.unsqueeze(0).expand(feats.shape[0], -1, -1))
         return dists.argmin(dim=-1)  # [B, T]
 
-    def _context_to_state(self, token_ids: torch.Tensor, t: int) -> torch.Tensor:
-        """Convert context window ending at t into a state index.
+    def _context_to_state(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """Convert token sequences into state indices for all time steps.
+
+        Initial frames (t < order) use clamped context (repeating the first token).
 
         Args:
             token_ids: ``[B, T]`` token sequences.
-            t: Current time step.
 
         Returns:
-            ``[B]`` state indices.
+            ``[B, T]`` state indices.
         """
-        B = token_ids.shape[0]
-        state = torch.zeros(B, dtype=torch.long, device=token_ids.device)
+        B, T = token_ids.shape
+        states = torch.zeros(B, T, dtype=torch.long, device=token_ids.device)
         for i in range(self.order):
-            idx = max(0, t - self.order + 1 + i)
-            state = state * self.n_codes + token_ids[:, idx]
-        return state
+            # Target index for each t is t - order + 1 + i
+            t_indices = torch.arange(T, device=token_ids.device)
+            fetch_indices = (t_indices - self.order + 1 + i).clamp(min=0)
+            states = states * self.n_codes + token_ids[:, fetch_indices]
+        return states
 
     def fit(self, audio_list: list[torch.Tensor]) -> None:
         """Train the codebook and Markov chain from audio samples.
+
+        Ensures boundary frames are correctly accounted for in transitions.
 
         Args:
             audio_list: List of 1-D waveform tensors (wake word samples).
@@ -1839,28 +2085,32 @@ class MarkovTransitionExtractor(BaseExtractor):
         all_feats_cat = torch.cat(all_feats, dim=0)  # [N, F]
 
         # Step 2: K-means for codebook
-        self._codebook = self._simple_kmeans(all_feats_cat, self.n_codes)
+        self._codebook.data = self._simple_kmeans(all_feats_cat, self.n_codes)
+        self._fitted = True
 
         # Step 3: Quantize all features
         all_tokens = []
         for feats in all_feats:
-            dists = torch.cdist(feats.unsqueeze(0), self._codebook.unsqueeze(0))
-            tokens = dists.squeeze(0).argmin(dim=-1)
+            tokens = self._quantize(feats.unsqueeze(0)).squeeze(0)
             all_tokens.append(tokens)
 
         # Step 4: Count transitions → build matrix
         n_states = self.n_codes ** self.order
-        counts = torch.zeros(n_states, self.n_codes)
+        counts = torch.zeros(n_states, self.n_codes, device=self._codebook.device)
         for tokens in all_tokens:
-            for t in range(self.order, len(tokens)):
-                state = 0
-                for i in range(self.order):
-                    state = state * self.n_codes + tokens[t - self.order + i].item()
-                counts[state, tokens[t].item()] += 1
+            # Vectorized state extraction for this utterance
+            states = self._context_to_state(tokens.unsqueeze(0)).squeeze(0)  # [T]
+            
+            # Transition is P(token[t+1] | state[t])
+            # Valid for t = 0 to T-2
+            if len(tokens) > 1:
+                curr_states = states[:-1]
+                next_tokens = tokens[1:]
+                # Vectorized count accumulation
+                counts.index_put_((curr_states, next_tokens), torch.tensor(1.0, device=counts.device), accumulate=True)
 
         # Normalize with smoothing
-        self._transition_matrix = (counts + 1e-5) / (counts.sum(dim=1, keepdim=True) + 1e-5 * self.n_codes)
-        self._fitted = True
+        self._transition_matrix.data = (counts + 1e-5) / (counts.sum(dim=1, keepdim=True) + 1e-5 * self.n_codes)
 
     @staticmethod
     def _simple_kmeans(data: torch.Tensor, k: int, n_iter: int = 20) -> torch.Tensor:
@@ -1898,24 +2148,38 @@ class MarkovTransitionExtractor(BaseExtractor):
             ``[B, T, base_dim + n_codes]`` enriched features.
         """
         base_feats = self.base(wavs, **kwargs)  # [B, T, F]
-        B, T, F = base_feats.shape
-
         token_ids = self._quantize(base_feats)  # [B, T]
 
+        # Vectorized state computation
+        states = self._context_to_state(token_ids)
+
         # Look up transition probabilities for each frame
-        trans_mat = self._transition_matrix.to(base_feats.device)
-        trans_feats = torch.zeros(B, T, self.n_codes, device=base_feats.device)
-        for t in range(T):
-            states = self._context_to_state(token_ids, t)  # [B]
-            states = states.clamp(0, trans_mat.shape[0] - 1)
-            trans_feats[:, t] = trans_mat[states]
+        trans_feats = self._transition_matrix[states]  # [B, T, n_codes]
 
         return torch.cat([base_feats, trans_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        raise NotImplementedError(
-            "MarkovTransitionExtractor wraps another extractor. Export base separately."
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export the Markov extractor as a standalone ONNX graph."""
+        # Export full pipeline (Base + Markov)
+        self.eval()
+        dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
+        
+        torch.onnx.export(
+            self,
+            (dummy_wav,),
+            out,
+            input_names=["input_values"],
+            output_names=["features"],
+            dynamic_axes={
+                "input_values": {0: "batch_size", 1: "time"},
+                "features": {0: "batch_size", 1: "time"}
+            },
+            opset_version=18
         )
+        
+        if metadata:
+            embed_onnx_metadata(out, metadata)
+        logger.info("Exported MarkovTransitionExtractor to %s", out)
 
 
 class HMMStateExtractor(BaseExtractor):
@@ -1945,12 +2209,12 @@ class HMMStateExtractor(BaseExtractor):
         self.n_states = n_states
         self.n_codes = n_codes
 
-        self._codebook: torch.Tensor | None = None
+        self.register_buffer("_codebook", torch.zeros(n_codes, base_extractor.feature_dim))
 
         # HMM parameters (uniform initialization)
-        self._pi = torch.ones(n_states) / n_states
-        self._A = torch.ones(n_states, n_states) / n_states
-        self._B = torch.ones(n_states, n_codes) / n_codes
+        self.register_buffer("_pi", torch.ones(n_states) / n_states)
+        self.register_buffer("_A", torch.ones(n_states, n_states) / n_states)
+        self.register_buffer("_B", torch.ones(n_states, n_codes) / n_codes)
         self._fitted = False
 
     @property
@@ -1978,7 +2242,7 @@ class HMMStateExtractor(BaseExtractor):
             all_feats.append(feats)
 
         all_feats_cat = torch.cat(all_feats, dim=0)
-        self._codebook = MarkovTransitionExtractor._simple_kmeans(all_feats_cat, self.n_codes)
+        self._codebook.data = MarkovTransitionExtractor._simple_kmeans(all_feats_cat, self.n_codes)
 
         # Quantize to token sequences
         obs_sequences = []
@@ -2001,41 +2265,14 @@ class HMMStateExtractor(BaseExtractor):
         hmm.fit_unsupervised(obs_sequences, n_iter=n_iter)
 
         # Extract parameters as tensors
-        self._pi = torch.tensor(hmm.pi, dtype=torch.float32)
-        self._A = torch.tensor(hmm.A, dtype=torch.float32)
-        self._B = torch.tensor(hmm.B, dtype=torch.float32)
+        self._pi.data = torch.tensor(hmm.pi, dtype=torch.float32)
+        self._A.data = torch.tensor(hmm.A, dtype=torch.float32)
+        
+        # Slice emission matrix: skip column 0 (markovonnx.Vocabulary.UNK)
+        # and ensure it matches n_codes exactly.
+        B_mat = hmm.B[:, 1:1+self.n_codes]
+        self._B.data = torch.tensor(B_mat, dtype=torch.float32)
         self._fitted = True
-
-    def _forward_algorithm(self, obs_ids: torch.Tensor) -> torch.Tensor:
-        """Run HMM forward algorithm, returning per-frame state posteriors.
-
-        Args:
-            obs_ids: ``[T]`` observation token IDs.
-
-        Returns:
-            ``[T, n_states]`` normalized state posteriors.
-        """
-        T = obs_ids.shape[0]
-        device = obs_ids.device
-        pi = self._pi.to(device)
-        A = self._A.to(device)
-        B = self._B.to(device)
-
-        posteriors = torch.zeros(T, self.n_states, device=device)
-
-        # Initial
-        alpha = pi * B[:, obs_ids[0].clamp(0, self.n_codes - 1)]
-        alpha = alpha / (alpha.sum() + 1e-10)
-        posteriors[0] = alpha
-
-        # Forward pass
-        for t in range(1, T):
-            obs = obs_ids[t].clamp(0, self.n_codes - 1)
-            alpha = (alpha.unsqueeze(1) * A).sum(dim=0) * B[:, obs]
-            alpha = alpha / (alpha.sum() + 1e-10)
-            posteriors[t] = alpha
-
-        return posteriors
 
     def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
         """Extract base features + HMM state posteriors.
@@ -2047,21 +2284,57 @@ class HMMStateExtractor(BaseExtractor):
         B_size, T, F = base_feats.shape
 
         # Quantize
-        if self._codebook is not None:
+        if self._fitted:
+            # Ensure codebook is on same device as input features
             cb = self._codebook.to(base_feats.device)
             dists = torch.cdist(base_feats, cb.unsqueeze(0).expand(B_size, -1, -1))
             token_ids = dists.argmin(dim=-1)
         else:
             token_ids = torch.randint(0, self.n_codes, (B_size, T), device=base_feats.device)
 
-        # Forward algorithm per sample
-        hmm_feats = torch.zeros(B_size, T, self.n_states, device=base_feats.device)
-        for b in range(B_size):
-            hmm_feats[b] = self._forward_algorithm(token_ids[b])
+        # Forward algorithm
+        device = base_feats.device
+        pi = self._pi.to(device)
+        A = self._A.to(device)
+        B = self._B.to(device)
+
+        hmm_feats = torch.zeros(B_size, T, self.n_states, device=device)
+
+        # Initial
+        alpha = pi * B[:, token_ids[:, 0].clamp(0, self.n_codes - 1)].T
+        alpha = alpha / (alpha.sum(dim=1, keepdim=True) + 1e-10)
+        hmm_feats[:, 0] = alpha
+
+        # Forward pass (time loop remains, but batch is vectorized)
+        for t in range(1, T):
+            obs = token_ids[:, t].clamp(0, self.n_codes - 1)
+            # (alpha @ A) * B[:, obs]
+            # alpha: [B, S], A: [S, S] -> [B, S]
+            # B[:, obs]: [S, B] -> [B, S]
+            alpha = torch.matmul(alpha, A) * B[:, obs].T
+            alpha = alpha / (alpha.sum(dim=1, keepdim=True) + 1e-10)
+            hmm_feats[:, t] = alpha
 
         return torch.cat([base_feats, hmm_feats], dim=-1)
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
-        raise NotImplementedError(
-            "HMMStateExtractor wraps another extractor. Export base separately."
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        """Export the HMM extractor as a standalone ONNX graph."""
+        # Export full pipeline (Base + HMM)
+        self.eval()
+        dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
+        
+        torch.onnx.export(
+            self,
+            (dummy_wav,),
+            out,
+            input_names=["input_values"],
+            output_names=["features"],
+            dynamic_axes={
+                "input_values": {0: "batch_size", 1: "time"},
+                "features": {0: "batch_size", 1: "time"}
+            },
+            opset_version=18
         )
+        if metadata:
+            embed_onnx_metadata(out, metadata)
+        logger.info("Exported HMMStateExtractor to %s", out)

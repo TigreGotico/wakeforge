@@ -8,7 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
-from ww_trainer.feats import  WavInput,  ensure_wav_list, BaseExtractor
+from ww_trainer.feats import WavInput, ensure_wav_list, BaseExtractor
+from ww_trainer.utils import embed_onnx_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,14 @@ class ClassifierHead(torch.nn.Module):
         self.device = torch.device(device)
         self.input_size = input_size
 
+    def _apply(self, fn: "Callable") -> "ClassifierHead":
+        """Override to keep ``self.device`` in sync with ``.to()``/``.cuda()``/``.cpu()``."""
+        result = super()._apply(fn)
+        for p in self.parameters():
+            self.device = p.device
+            break
+        return result
+
     @abc.abstractmethod
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
@@ -30,13 +39,14 @@ class ClassifierHead(torch.nn.Module):
     def embed(self, feats: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo=False):
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo=False, metadata: dict = None):
         import onnx
 
         dummy_features = torch.zeros(1, 200, self.input_size, device=self.device)
 
         dynamic_axes = {
-            "input_features": {1: "T_features"} # Time dimension (T) is dynamic
+            "input_features": {0: "batch_size", 1: "T_features"},
+            "logits": {0: "batch_size"},
         }
 
         torch.onnx.export(
@@ -57,11 +67,16 @@ class ClassifierHead(torch.nn.Module):
         onnx.checker.check_model(onnx_model)
         logger.info("Exported ONNX model to %s", out)
 
+        if metadata:
+            embed_onnx_metadata(out, metadata)
+
         if quantize:
             out_int8 = str(Path(out).with_stem(Path(out).stem + "_int8"))
             quantize_dynamic(out, out_int8,
                              op_types_to_quantize=["MatMul", "Gemm"],
                              weight_type=QuantType.QInt8)
+            if metadata:
+                embed_onnx_metadata(out_int8, metadata)
             logger.info("Quantized ONNX model saved to %s", out_int8)
 
 
@@ -139,12 +154,13 @@ class BaseWakeModel(nn.Module):
     def export_to_onnx(self, out: str,
                        simplify: bool = False,
                        quantize: bool = False,
-                       export_featurizer=False):
+                       export_featurizer: bool = False,
+                       metadata: dict = None) -> None:
         # usually featurizer was already exported previously, only head missing
-        self.classifier.export_to_onnx(out, simplify, quantize)
+        self.classifier.export_to_onnx(out, quantize=quantize, dynamo=simplify, metadata=metadata)
         if export_featurizer:
-            out = out.replace(".onnx", "") + "_featurizer.onnx"
-            self.feature_extractor.export_to_onnx(out, simplify, quantize)
+            f_out = out.replace(".onnx", "") + "_featurizer.onnx"
+            self.feature_extractor.export_to_onnx(f_out, quantize=quantize, metadata=metadata)
 
 
 # ---------------------- classifier heads ----------------------
