@@ -92,6 +92,9 @@ from ww_trainer.factory import (
 # --- Evaluation ---
 from ww_trainer.evaluation import evaluate_model, evaluate_detection, log_metrics_csv
 
+# --- Quantization ---
+from ww_trainer.quantize import quantize_onnx, quantize_model_pair, QuantizationReport
+
 # --- Reproducibility ---
 from ww_trainer.reproducibility import set_seed, get_seed_info
 
