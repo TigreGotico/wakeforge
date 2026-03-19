@@ -137,6 +137,28 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--spec-max-time-width", default=10, type=int, help="Max width of time masks (frames).")
 @click.option("--spec-n-freq-masks", default=2, type=int, help="Number of frequency masks for SpecAugment.")
 @click.option("--spec-max-freq-width", default=4, type=int, help="Max width of frequency masks (bins).")
+# -------------------------- Feature Cache --------------------------
+@click.option("--feature-cache-dir", default=".feature_cache/",
+              help="Directory for cached feature vectors (default: .feature_cache/).")
+@click.option("--no-feature-cache", is_flag=True, default=False,
+              help="Disable feature vectorization cache.")
+# -------------------------- Layer Freezing --------------------------
+@click.option("--freeze-extractor", is_flag=True, default=False,
+              help="Freeze the feature extractor for transfer learning.")
+@click.option("--freeze-layers", default=0, type=int,
+              help="Freeze first N classifier layer parameters.")
+@click.option("--unfreeze-at-epoch", default=None, type=int,
+              help="Unfreeze all layers at this epoch (progressive unfreezing).")
+# -------------------------- Data Replacement --------------------------
+@click.option("--replacement-ratio", default=0.0, type=float,
+              help="Fraction of training data to resample each epoch (0 = disabled).")
+@click.option("--balanced-replacement", is_flag=True, default=False,
+              help="Ensure equal pos/neg in resampled portion.")
+# -------------------------- Fitness Checkpoint --------------------------
+@click.option("--fitness-checkpoint", is_flag=True, default=False,
+              help="Save best_fitness.pt based on composite fitness score.")
+@click.option("--fitness-param-budget", default=100000, type=int,
+              help="Parameter budget for fitness score size penalty (default: 100000).")
 # -------------------------- Performance --------------------------
 @click.option("--amp", "use_amp", is_flag=True, default=False,
               help="Enable mixed-precision training (requires CUDA).")
@@ -183,6 +205,16 @@ def train(**opts: dict) -> None:
     neg_weight_schedule = opts.pop("neg_weight_schedule", None)
     max_neg_weight = opts.pop("max_neg_weight", 100.0)
     target_fpr = opts.pop("target_fpr", None)
+
+    feature_cache_dir = opts.pop("feature_cache_dir", ".feature_cache/")
+    no_feature_cache = opts.pop("no_feature_cache", False)
+    freeze_extractor = opts.pop("freeze_extractor", False)
+    freeze_layers = opts.pop("freeze_layers", 0)
+    unfreeze_at_epoch = opts.pop("unfreeze_at_epoch", None)
+    replacement_ratio = opts.pop("replacement_ratio", 0.0)
+    balanced_replacement = opts.pop("balanced_replacement", False)
+    fitness_checkpoint = opts.pop("fitness_checkpoint", False)
+    fitness_param_budget = opts.pop("fitness_param_budget", 100000)
 
     if tier is not None:
         tc = get_tier(tier)
@@ -245,6 +277,9 @@ def train(**opts: dict) -> None:
                               wake_word=ww_name,
                               mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
                               use_amp=use_amp,
+                              freeze_extractor=freeze_extractor,
+                              freeze_layers=freeze_layers,
+                              unfreeze_at_epoch=unfreeze_at_epoch,
                               **opts)
     if training_stages:
         from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
@@ -299,6 +334,10 @@ def train(**opts: dict) -> None:
                 "n_freq_masks": spec_n_freq_masks,
                 "max_freq_width": spec_max_freq_width,
             } if spec_augment else None,
+            replacement_ratio=replacement_ratio,
+            balanced_replacement=balanced_replacement,
+            fitness_checkpoint=fitness_checkpoint,
+            fitness_param_budget=fitness_param_budget,
         )
 
     # Post-training: C header export

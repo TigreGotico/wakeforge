@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from ww_trainer.checkpoint import save_checkpoint, load_checkpoint
 from ww_trainer.dataset import AudioDataset, collate_fn
-from ww_trainer.evaluation import evaluate_model, log_metrics_csv
+from ww_trainer.evaluation import evaluate_model, log_metrics_csv, compute_fitness_score
 from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
 from ww_trainer.loss import LossManager
 from ww_trainer.mining import mine_hard_negatives, save_mining_cache, load_mining_cache
@@ -59,6 +59,9 @@ class WakeWordTrainer:
                  shared_extractor=None,
                  use_amp: bool = False,
                  seed: Optional[int] = None,
+                 freeze_extractor: bool = False,
+                 freeze_layers: int = 0,
+                 unfreeze_at_epoch: Optional[int] = None,
                  **model_kwargs: Any) -> None:
         if seed is not None:
             from ww_trainer.reproducibility import set_seed
@@ -80,6 +83,13 @@ class WakeWordTrainer:
                                        shared_extractor=shared_extractor,
                                        device=self.device, **model_kwargs)
         self.model.to(self.device)
+
+        # Layer freezing for transfer learning
+        self.freeze_extractor = freeze_extractor
+        self.freeze_layers = freeze_layers
+        self.unfreeze_at_epoch = unfreeze_at_epoch
+        if freeze_extractor or freeze_layers > 0:
+            self._freeze()
 
         self.augment_opts = {
             k: v for k, v in model_kwargs.items()
@@ -134,6 +144,32 @@ class WakeWordTrainer:
                             device=device,
                             shared_extractor=shared_extractor,
                             **kwargs)
+
+    # ----------------- Layer Freezing -----------------
+    def _freeze(self) -> None:
+        """Freeze extractor and/or first N classifier layers.
+
+        Controlled by ``self.freeze_extractor`` and ``self.freeze_layers``.
+        """
+        if self.freeze_extractor and hasattr(self.model, "feature_extractor"):
+            for param in self.model.feature_extractor.parameters():
+                param.requires_grad = False
+            logger.info("[Freeze] Feature extractor frozen")
+
+        if self.freeze_layers > 0 and hasattr(self.model, "classifier"):
+            frozen = 0
+            for name, param in self.model.classifier.named_parameters():
+                if frozen >= self.freeze_layers:
+                    break
+                param.requires_grad = False
+                frozen += 1
+            logger.info("[Freeze] Froze %d classifier layer parameters", frozen)
+
+    def _unfreeze(self) -> None:
+        """Unfreeze all model parameters."""
+        for param in self.model.parameters():
+            param.requires_grad = True
+        logger.info("[Freeze] All layers unfrozen")
 
     # ----------------- Evaluation & training -----------------
     @staticmethod
@@ -248,6 +284,10 @@ class WakeWordTrainer:
               ambient_dir: Optional[str] = None,
               spec_augment: bool = False,
               spec_augment_kwargs: Optional[Dict[str, Any]] = None,
+              replacement_ratio: float = 0.0,
+              balanced_replacement: bool = True,
+              fitness_checkpoint: bool = False,
+              fitness_param_budget: int = 100_000,
               ) -> float:
         """High-level training loop. Supports loss types: 'bce', 'triplet', 'pair'."""
         if isinstance(output_dir, str):
@@ -291,6 +331,7 @@ class WakeWordTrainer:
         logger.info("Total not-wake-word samples: %d", len(nonwakes))
 
         best_metrics = {"loss": float("inf"), "precision": 0.0, "recall": 0.0, "f1": 0.0}
+        best_fitness = -1.0
         epochs_no_new = 0
 
         hard_negatives: List[Tuple[str, str]] = []
@@ -298,6 +339,14 @@ class WakeWordTrainer:
         ep = 0
         for ep in range(epochs):
             logger.info("=== Epoch %d/%d ===", ep + 1, epochs)
+
+            # Progressive unfreezing
+            if self.unfreeze_at_epoch is not None and ep == self.unfreeze_at_epoch:
+                self._unfreeze()
+                # Re-add all params to optimizer
+                optimizer = torch.optim.Adam(
+                    filter(lambda p: p.requires_grad, self.model.parameters()), lr=optimizer.param_groups[0]['lr']
+                )
 
             current_lr = optimizer.param_groups[0]['lr']
             lr_factor = current_lr / initial_lr
@@ -347,6 +396,24 @@ class WakeWordTrainer:
             ) if nonwakes else []
 
             epoch_data = wakes + selected_hard + selected_easy + selected_random
+
+            # Data replacement / epoch resampling
+            if replacement_ratio > 0 and len(epoch_data) > 0:
+                n_replace = int(len(epoch_data) * replacement_ratio)
+                if n_replace > 0:
+                    # Drop random subset
+                    keep = random.sample(epoch_data, len(epoch_data) - n_replace)
+                    # Sample replacements from full pool
+                    full_pool = wakes + nonwakes
+                    if balanced_replacement:
+                        half = n_replace // 2
+                        rep_wake = random.choices(wakes, k=half) if wakes else []
+                        rep_nonwake = random.choices(nonwakes, k=n_replace - half) if nonwakes else []
+                        replacements = rep_wake + rep_nonwake
+                    else:
+                        replacements = random.choices(full_pool, k=n_replace)
+                    epoch_data = keep + replacements
+
             random.shuffle(epoch_data)
 
             logger.info(
@@ -412,6 +479,26 @@ class WakeWordTrainer:
             logger.info(
                 "Loss=%.4f Epoch %d: Acc=%.3f Prec=%.3f Rec=%.3f F1=%.3f AUC=%.3f EER=%.4f",
                 avg_loss, ep + 1, acc, prec, rec, f1, auc, det_report.eer)
+
+            # Composite fitness score
+            if fitness_checkpoint:
+                param_count = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                fp_rate = 1.0 - prec if prec > 0 else 1.0
+                fn_rate = 1.0 - rec if rec > 0 else 1.0
+                fitness = compute_fitness_score(
+                    f1=f1, fp_rate=fp_rate, fn_rate=fn_rate,
+                    param_count=param_count, param_budget=fitness_param_budget,
+                )
+                logger.info("Fitness score: %.4f", fitness)
+                if self.mlflow:
+                    self.mlflow.log_metrics({"fitness": fitness}, step=ep + 1)
+                if fitness > best_fitness:
+                    best_fitness = fitness
+                    self.save_intermediate_ckpt(
+                        epoch=ep, metrics={**best_metrics, "fitness": fitness},
+                        optimizer=optimizer, model_file=output_dir / "best_fitness.pt",
+                    )
+                    logger.info("Updated best fitness: %.4f", fitness)
 
             # FPR-adaptive negative weight adjustment
             if target_fpr is not None and neg_weight_schedule is not None:
