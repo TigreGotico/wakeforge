@@ -3,6 +3,27 @@ from typing import List, Tuple, Optional
 
 import torch
 import torch.nn.functional as F
+import os
+import time
+import functools
+
+def timed(func):
+    """Decorator that logs function execution time if DEBUG env var is truthy."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        debug_enabled = bool(os.getenv("DEBUG", "").lower() in ("1", "true", "yes", "on"))
+        #debug_enabled = True
+        if not debug_enabled:
+            return func(*args, **kwargs)
+
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        duration = (time.perf_counter() - start) * 1000  # ms
+        print(f"[DEBUG] {func.__name__}() took {duration:.2f} ms")
+        return result
+
+    return wrapper
 
 
 # -------------------- Utility metric functions --------------------
