@@ -390,8 +390,9 @@ Yes. `pyproject.toml` was added alongside `setup.py` (both coexist for backward 
 | `transformers` | transformers | HubertExtractor, Wav2Vec2Extractor |
 | `vc` | chatterbox_onnx | Voice-cloning augmentation |
 | `mlflow` | mlflow | Experiment tracking |
+| `datagen` | datasets, ovos-plugin-manager, ovos-tts-plugin-edge-tts, ovos-vad-plugin-silero | Synthetic dataset generation |
 
-Install with: `pip install "ww_trainer[transformers,mlflow]"`
+Install with: `uv pip install -e ".[transformers,mlflow]"`
 
 ---
 
@@ -442,3 +443,19 @@ All six `docs/` files were created (or replaced for `index.md`) in a single docu
 **Q: Is TODO.md up to date?**
 
 Yes. As of 2026-03-10 all P0, P1, P2, and P3 items are complete and the active sections have been removed. Only the Completed section remains.
+
+---
+
+## Datagen (ww_trainer-datagen)
+
+**Q: How does TTS plugin discovery work in datagen?**
+
+`_collect_tts_plugins()` calls `ovos_plugin_manager.tts.find_tts_plugins()` to discover all installed OVOS TTS plugins via entry points. Any plugin (edge-tts, google-tx, phoonnx, piper, etc.) is automatically used if installed. No hardcoded imports.
+
+**Q: What VAD engine does datagen use?**
+
+OVOS VAD via `OVOSVADFactory` with `ovos-vad-plugin-silero` as default. Replaces the previous `webrtcvad` dependency. The plugin exposes `is_silence(chunk)` on 16kHz PCM frames.
+
+**Q: How do I add a new TTS engine to datagen?**
+
+Install any OVOS TTS plugin (`uv pip install ovos-tts-plugin-<name>`). It will be auto-discovered via OPM entry points — no code changes needed.

@@ -44,10 +44,17 @@ sweep = [
 markov = [
     "markovonnx",
 ]
+datagen = [
+    "datasets",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",  # default TTS, others discovered via OPM
+    "ovos-vad-plugin-silero",    # default VAD
+]
 
 [project.scripts]
 ww_trainer-train = "ww_trainer.cli:train"
 ww_trainer-benchmark = "ww_trainer.benchmark:main"
+ww_trainer-datagen = "ww_trainer.datagen:cli_main"
 
 [project.urls]
 Homepage = "https://github.com/TigreGotico/ww_trainer"

@@ -4,6 +4,22 @@
 
 ---
 
+### 2026-03-19 — Datagen v2: OPM plugin discovery + OVOS VAD
+
+**Type:** Refactor
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed; plan reviewed before implementation
+**Files modified:** `ww_trainer/datagen.py`, `pyproject.toml`, `test/test_datagen.py`, `FAQ.md`
+
+**Summary:**
+- Replaced hardcoded Edge/Google TTS imports with `ovos_plugin_manager.tts.find_tts_plugins()` for automatic discovery of all installed OVOS TTS plugins (including phoonnx)
+- Replaced `webrtcvad` with `ovos_plugin_manager.vad.OVOSVADFactory` using `ovos-vad-plugin-silero` as default
+- Updated `[datagen]` optional deps: removed `webrtcvad` and `ovos-tts-plugin-google-tx`, added `ovos-plugin-manager` and `ovos-vad-plugin-silero`
+- Added `TestCollectTTSPluginsMocked` test, updated existing TTS mock test
+- 697 tests passing (26 datagen-specific)
+
+---
+
 ### 2026-03-19 — Inspiration features from precise-lite-trainer
 
 **Type:** Feature
