@@ -93,6 +93,9 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="Overall target number of negatives per wake sample.")
 @click.option("--blend-ratio", default=0.7, type=float,
               help="Blend factor between progress-based and LR-based adaptation (0-1).")
+# -------------------------- Ambient Validation --------------------------
+@click.option("--ambient-dir", default=None, type=click.Path(exists=True),
+              help="Folder of long-form non-wake audio for FP/hour estimation.")
 # -------------------------- Negative Weight Scheduling --------------------------
 @click.option("--neg-weight-schedule", default=None,
               type=click.Choice(["linear", "cosine"]),
@@ -160,6 +163,7 @@ def train(**opts: dict) -> None:
     feat_dim = opts.pop("feature_dim")
     use_amp = opts.pop("use_amp", False)
     accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
+    ambient_dir = opts.pop("ambient_dir", None)
     neg_weight_schedule = opts.pop("neg_weight_schedule", None)
     max_neg_weight = opts.pop("max_neg_weight", 100.0)
     target_fpr = opts.pop("target_fpr", None)
@@ -255,6 +259,7 @@ def train(**opts: dict) -> None:
         neg_weight_schedule=neg_weight_schedule,
         max_neg_weight=max_neg_weight,
         target_fpr=target_fpr,
+        ambient_dir=ambient_dir,
     )
 
     # Post-training: C header export

@@ -245,6 +245,7 @@ class WakeWordTrainer:
               neg_weight_schedule: Optional[str] = None,
               max_neg_weight: float = 100.0,
               target_fpr: Optional[float] = None,
+              ambient_dir: Optional[str] = None,
               ) -> float:
         """High-level training loop. Supports loss types: 'bce', 'triplet', 'pair'."""
         if isinstance(output_dir, str):
@@ -412,6 +413,16 @@ class WakeWordTrainer:
                     loss_manager.adjust_max_neg_weight(2.0)
                     logger.info("[NegWeight] FPR %.4f > target %.4f — doubled max_neg_weight to %.1f",
                                 current_fpr, target_fpr, loss_manager.max_neg_weight)
+
+            # Ambient FP/hour estimation
+            if ambient_dir is not None:
+                from ww_trainer.metrics import estimate_fp_per_hour
+                ambient_paths = sorted(Path(ambient_dir).rglob("*.wav"))
+                if ambient_paths:
+                    fp_per_hour = estimate_fp_per_hour(self.model.infer, ambient_paths, threshold=0.5)
+                    logger.info("[Ambient] FP/hour: %.2f (on %d files)", fp_per_hour, len(ambient_paths))
+                    if self.mlflow:
+                        self.mlflow.log_metrics({"fp_per_hour": fp_per_hour}, step=ep + 1)
 
             if metrics_log:
                 self._log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)

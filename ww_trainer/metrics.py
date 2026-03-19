@@ -1,7 +1,7 @@
 """Standalone evaluation metrics for wake word detection.
 
 Computes detection-specific metrics: EER, FAR/FRR at threshold,
-optimal threshold selection, and DET curve data.
+optimal threshold selection, DET curve data, and FP/hour ambient validation.
 
 Usage::
 
@@ -11,6 +11,7 @@ Usage::
         find_optimal_threshold,
         det_curve,
         classification_report,
+        estimate_fp_per_hour,
     )
 
     report = classification_report(y_true, y_scores)
@@ -18,10 +19,14 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import List, Optional, Union
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -283,3 +288,127 @@ def classification_report(
         n_negative=int((y_true == 0).sum()),
         far_at_frr=far_at_frr,
     )
+
+
+def estimate_fp_per_hour(
+    infer_fn: "Callable[[np.ndarray], float]",
+    ambient_audio_paths: List[Union[str, Path]],
+    threshold: float = 0.5,
+    window_sec: float = 1.5,
+    stride_sec: float = 0.75,
+    sample_rate: int = 16000,
+) -> float:
+    """Estimate false positives per hour on ambient (non-wake) audio.
+
+    Slides a window over long-form ambient audio files, counts activations
+    above threshold, and extrapolates to FP/hour.
+
+    Inspired by openWakeWord and micro-wake-word which validate with
+    separate ambient sets measuring FP/hour.
+
+    Args:
+        infer_fn: Callable that takes a 1-D float32 numpy array and returns
+            a probability in [0, 1]. Compatible with ``model.infer`` or
+            ``OnnxWakeWordInferencer.infer``.
+        ambient_audio_paths: Paths to long-form non-wake audio files.
+        threshold: Detection threshold.
+        window_sec: Sliding window duration in seconds.
+        stride_sec: Stride between windows in seconds.
+        sample_rate: Audio sample rate.
+
+    Returns:
+        Estimated false positives per hour. Returns 0.0 if no audio is provided
+        or total duration is zero.
+    """
+    import soundfile as sf
+
+    window_samples = int(window_sec * sample_rate)
+    stride_samples = int(stride_sec * sample_rate)
+    total_fp = 0
+    total_duration_sec = 0.0
+
+    for path in ambient_audio_paths:
+        path = str(path)
+        try:
+            audio, sr = sf.read(path, dtype="float32")
+        except Exception as exc:
+            logger.warning("Failed to read ambient file %s: %s", path, exc)
+            continue
+
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        if sr != sample_rate:
+            try:
+                import librosa
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+            except ImportError:
+                logger.warning("librosa not available for resampling %s (sr=%d)", path, sr)
+                continue
+
+        total_duration_sec += len(audio) / sample_rate
+
+        pos = 0
+        while pos + window_samples <= len(audio):
+            chunk = audio[pos:pos + window_samples]
+            prob = infer_fn(chunk)
+            if prob >= threshold:
+                total_fp += 1
+            pos += stride_samples
+
+    if total_duration_sec <= 0:
+        return 0.0
+
+    total_hours = total_duration_sec / 3600.0
+    return total_fp / total_hours
+
+
+def compute_detection_metrics(
+    infer_fn: "Callable[[np.ndarray], float]",
+    test_audio_paths: List[Union[str, Path]],
+    test_labels: List[int],
+    thresholds: Optional[np.ndarray] = None,
+    sample_rate: int = 16000,
+) -> dict:
+    """Compute ROC, DET, and recall@FPR curves from audio files.
+
+    Args:
+        infer_fn: Callable returning probability for a 1-D float32 array.
+        test_audio_paths: Paths to test audio files.
+        test_labels: Binary labels (0 or 1) for each file.
+        thresholds: Array of thresholds to evaluate. Defaults to 500 points in [0, 1].
+        sample_rate: Audio sample rate.
+
+    Returns:
+        Dict with keys: ``"y_scores"``, ``"y_true"``, ``"report"``
+        (a :class:`DetectionReport`).
+    """
+    import soundfile as sf
+
+    scores: List[float] = []
+    valid_labels: List[int] = []
+
+    for path, label in zip(test_audio_paths, test_labels):
+        try:
+            audio, sr = sf.read(str(path), dtype="float32")
+        except Exception:
+            continue
+
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        if sr != sample_rate:
+            try:
+                import librosa
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+            except ImportError:
+                continue
+
+        prob = infer_fn(audio)
+        scores.append(prob)
+        valid_labels.append(label)
+
+    y_scores = np.array(scores)
+    y_true = np.array(valid_labels)
+    report = classification_report(y_true, y_scores)
+
+    return {"y_scores": y_scores, "y_true": y_true, "report": report}
