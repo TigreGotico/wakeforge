@@ -974,3 +974,764 @@ class LEAFExtractor(BaseExtractor):
 
         # [B, n_filters, T'] → [B, T', n_filters]
         return x.transpose(1, 2)
+
+
+# ---------------------- PLP Extractor ----------------------
+
+
+class PLPExtractor(BaseExtractor):
+    """Perceptual Linear Prediction feature extractor (Hermansky 1990).
+
+    Models human auditory perception using:
+    1. Bark-scale spectral warping
+    2. Equal-loudness pre-emphasis
+    3. Intensity-loudness power law (cube root compression)
+    4. Autoregressive (LP) modeling
+    5. Cepstral conversion
+
+    More noise-robust than MFCC for many conditions.
+
+    Args:
+        sr: Sample rate.
+        n_plp: Number of PLP coefficients to output.
+        n_fft: FFT size.
+        hop_length: Hop length in samples.
+        n_bark: Number of Bark-scale filters.
+        lp_order: Linear prediction order.
+    """
+
+    def __init__(
+        self,
+        sr: int = 16000,
+        n_plp: int = 13,
+        n_fft: int = 512,
+        hop_length: int = 160,
+        n_bark: int = 21,
+        lp_order: int = 12,
+    ) -> None:
+        super().__init__(sample_rate=sr)
+        self._n_plp = n_plp
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.n_bark = n_bark
+        self.lp_order = lp_order
+
+        # Precompute Bark filterbank
+        n_bins = n_fft // 2 + 1
+        freqs = torch.linspace(0, sr / 2, n_bins)
+        barks = 6.0 * torch.arcsinh(freqs / 600.0)
+        bark_min = barks[1]
+        bark_max = barks[-2]
+        bark_centers = torch.linspace(bark_min, bark_max, n_bark)
+        bark_width = 1.3  # Bark bandwidth
+
+        # Triangular Bark filterbank [n_bark, n_bins]
+        fb = torch.zeros(n_bark, n_bins)
+        for i in range(n_bark):
+            low = bark_centers[i] - bark_width
+            high = bark_centers[i] + bark_width
+            for j in range(n_bins):
+                if low <= barks[j] <= bark_centers[i]:
+                    fb[i, j] = (barks[j] - low) / (bark_centers[i] - low + 1e-8)
+                elif bark_centers[i] < barks[j] <= high:
+                    fb[i, j] = (high - barks[j]) / (high - bark_centers[i] + 1e-8)
+        self.register_buffer("bark_fb", fb)
+
+        # Equal-loudness weighting (simplified ITU-R 468)
+        f_hz = bark_centers * 600.0  # rough bark → Hz
+        # Approximate equal-loudness curve (inverted threshold of hearing)
+        el = (f_hz ** 2 + 56.8e6) * f_hz ** 4 / (
+            (f_hz ** 2 + 6.3e6) ** 2 * (f_hz ** 2 + 3.8e8) + 1e-10
+        )
+        el = el / (el.max() + 1e-10)
+        self.register_buffer("equal_loudness", el.unsqueeze(0).unsqueeze(-1))
+
+        # Hanning window
+        self.register_buffer("window", torch.hann_window(n_fft))
+
+    @property
+    def feature_dim(self) -> int:
+        return self._n_plp
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract PLP features.
+
+        Args:
+            wavs: ``[B, T]`` tensor or list of 1-D tensors.
+
+        Returns:
+            ``[B, T_frames, n_plp]`` PLP coefficients.
+        """
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(self.bark_fb.device)
+
+        # Power spectrum
+        spec = torch.stft(
+            batch, self.n_fft, self.hop_length, window=self.window,
+            return_complex=False, onesided=True,
+        )
+        power = spec[..., 0] ** 2 + spec[..., 1] ** 2  # [B, n_bins, T']
+
+        # Bark-scale warping
+        bark_spec = torch.matmul(self.bark_fb, power)  # [B, n_bark, T']
+
+        # Equal-loudness pre-emphasis
+        bark_spec = bark_spec * self.equal_loudness
+
+        # Intensity-loudness power law (cube root)
+        bark_spec = bark_spec.clamp(min=1e-10).pow(1.0 / 3.0)
+
+        # Simplified cepstral conversion via DCT-like transform
+        # (full LP analysis would require Levinson-Durbin, approximated here)
+        n = torch.arange(self._n_plp, device=bark_spec.device, dtype=torch.float32)
+        k = torch.arange(self.n_bark, device=bark_spec.device, dtype=torch.float32)
+        dct_mat = torch.cos(math.pi * n.unsqueeze(1) * (2 * k.unsqueeze(0) + 1) / (2 * self.n_bark))
+        plp = torch.matmul(dct_mat, bark_spec)  # [B, n_plp, T']
+
+        return plp.transpose(1, 2)  # [B, T', n_plp]
+
+
+# ---------------------- PNCC Extractor ----------------------
+
+
+class PNCCExtractor(BaseExtractor):
+    """Power-Normalized Cepstral Coefficients (Kim & Stern 2016).
+
+    Designed for noise robustness using:
+    1. Gammatone-like filterbank
+    2. Medium-time power processing (asymmetric noise suppression)
+    3. Power-law nonlinearity (1/15 power instead of log)
+    4. DCT to produce cepstral coefficients
+
+    Significantly outperforms MFCC in noisy conditions.
+
+    Args:
+        sr: Sample rate.
+        n_pncc: Number of PNCC coefficients.
+        n_fft: FFT size.
+        hop_length: Hop length in samples.
+        n_filters: Number of gammatone-like filters.
+        power: Power-law exponent (default 1/15).
+    """
+
+    def __init__(
+        self,
+        sr: int = 16000,
+        n_pncc: int = 13,
+        n_fft: int = 512,
+        hop_length: int = 160,
+        n_filters: int = 40,
+        power: float = 1.0 / 15.0,
+    ) -> None:
+        super().__init__(sample_rate=sr)
+        self._n_pncc = n_pncc
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self._power = power
+
+        # Gammatone-like filterbank on ERB scale
+        n_bins = n_fft // 2 + 1
+        freqs = torch.linspace(0, sr / 2, n_bins)
+        erb_low = 9.265 * math.log(1 + 20.0 / (24.7 * 9.265))
+        erb_high = 9.265 * math.log(1 + (sr / 2) / (24.7 * 9.265))
+        erb_points = torch.linspace(erb_low, erb_high, n_filters + 2)
+        center_freqs = 24.7 * 9.265 * (torch.exp(erb_points / 9.265) - 1)
+
+        fb = torch.zeros(n_filters, n_bins)
+        for i in range(n_filters):
+            low = center_freqs[i]
+            mid = center_freqs[i + 1]
+            high = center_freqs[i + 2]
+            for j in range(n_bins):
+                if low <= freqs[j] <= mid:
+                    fb[i, j] = (freqs[j] - low) / (mid - low + 1e-8)
+                elif mid < freqs[j] <= high:
+                    fb[i, j] = (high - freqs[j]) / (high - mid + 1e-8)
+        self.register_buffer("filterbank", fb)
+        self.register_buffer("window", torch.hann_window(n_fft))
+
+        # DCT matrix [n_pncc, n_filters]
+        n = torch.arange(n_pncc, dtype=torch.float32)
+        k = torch.arange(n_filters, dtype=torch.float32)
+        dct_mat = torch.cos(math.pi * n.unsqueeze(1) * (2 * k.unsqueeze(0) + 1) / (2 * n_filters))
+        self.register_buffer("dct_mat", dct_mat)
+
+    @property
+    def feature_dim(self) -> int:
+        return self._n_pncc
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract PNCC features.
+
+        Args:
+            wavs: ``[B, T]`` tensor or list of 1-D tensors.
+
+        Returns:
+            ``[B, T_frames, n_pncc]`` PNCC coefficients.
+        """
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(self.filterbank.device)
+
+        # Power spectrum
+        spec = torch.stft(
+            batch, self.n_fft, self.hop_length, window=self.window,
+            return_complex=False, onesided=True,
+        )
+        power = spec[..., 0] ** 2 + spec[..., 1] ** 2  # [B, n_bins, T']
+
+        # Gammatone filterbank
+        filtered = torch.matmul(self.filterbank, power)  # [B, n_filters, T']
+
+        # Medium-time power processing (asymmetric temporal smoothing)
+        # Forward pass: slow adaptation to rising energy (noise floor tracking)
+        # Simplified as temporal mean with asymmetric weighting
+        kernel_size = min(filtered.size(2), 11)
+        if kernel_size > 1:
+            avg_kernel = torch.ones(1, 1, kernel_size, device=filtered.device) / kernel_size
+            padded = F.pad(filtered, (kernel_size - 1, 0))
+            noise_floor = F.conv1d(
+                padded.view(-1, 1, padded.size(2)), avg_kernel
+            ).view(filtered.shape)
+            # Asymmetric suppression
+            filtered = torch.max(filtered - noise_floor, torch.zeros_like(filtered))
+            filtered = filtered + 1e-10
+
+        # Power-law nonlinearity (1/15 power instead of log)
+        filtered = filtered.clamp(min=1e-10).pow(self._power)
+
+        # DCT → cepstral coefficients
+        pncc = torch.matmul(self.dct_mat, filtered)  # [B, n_pncc, T']
+
+        return pncc.transpose(1, 2)  # [B, T', n_pncc]
+
+
+# ---------------------- CQT Extractor ----------------------
+
+
+class CQTExtractor(BaseExtractor):
+    """Constant-Q Transform feature extractor.
+
+    Better low-frequency resolution than FFT (logarithmic frequency spacing).
+    Each frequency bin has a constant Q factor (center_freq / bandwidth).
+    Good for tonal wake words and music-like patterns.
+
+    Args:
+        sr: Sample rate.
+        n_bins: Number of CQT bins per octave.
+        n_octaves: Number of octaves.
+        f_min: Minimum frequency in Hz.
+        hop_length: Hop length in samples.
+    """
+
+    def __init__(
+        self,
+        sr: int = 16000,
+        n_bins: int = 12,
+        n_octaves: int = 7,
+        f_min: float = 32.7,
+        hop_length: int = 160,
+    ) -> None:
+        super().__init__(sample_rate=sr)
+        self._total_bins = n_bins * n_octaves
+        self.hop_length = hop_length
+        self.n_bins = n_bins
+        self.n_octaves = n_octaves
+
+        # Compute CQT center frequencies (geometric spacing)
+        total = self._total_bins
+        freqs = f_min * (2.0 ** (torch.arange(total, dtype=torch.float32) / n_bins))
+        # Filter out frequencies above Nyquist
+        valid = freqs < sr / 2
+        freqs = freqs[valid]
+        self._total_bins = len(freqs)
+
+        # Q factor
+        q = 1.0 / (2.0 ** (1.0 / n_bins) - 1.0)
+
+        # Precompute CQT kernels as complex sinusoids windowed by Hanning
+        max_len = int(q * sr / freqs[0].item()) + 1
+        # For efficiency, use FFT-based CQT approximation
+        # Store center frequencies and compute per-frame via Goertzel-like approach
+        self.register_buffer("center_freqs", freqs)
+        self.register_buffer("q_val", torch.tensor(q))
+
+        # Use STFT with large FFT + frequency-domain resampling
+        self.n_fft = max(512, 2 ** int(math.ceil(math.log2(max_len))))
+        self.register_buffer("window", torch.hann_window(self.n_fft))
+
+        # CQT filter mapping: for each CQT bin, which FFT bins to weight
+        fft_freqs = torch.linspace(0, sr / 2, self.n_fft // 2 + 1)
+        fb = torch.zeros(self._total_bins, self.n_fft // 2 + 1)
+        for i, cf in enumerate(freqs):
+            bw = cf / q
+            low = cf - bw / 2
+            high = cf + bw / 2
+            mask = (fft_freqs >= low) & (fft_freqs <= high)
+            if mask.any():
+                weights = torch.zeros_like(fft_freqs)
+                weights[mask] = 1.0 - ((fft_freqs[mask] - cf) / (bw / 2 + 1e-8)).abs()
+                weights = weights.clamp(min=0)
+                fb[i] = weights / (weights.sum() + 1e-8)
+        self.register_buffer("cqt_fb", fb)
+
+    @property
+    def feature_dim(self) -> int:
+        return self._total_bins
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract CQT features.
+
+        Args:
+            wavs: ``[B, T]`` tensor or list of 1-D tensors.
+
+        Returns:
+            ``[B, T_frames, n_cqt_bins]`` log-magnitude CQT features.
+        """
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(self.cqt_fb.device)
+
+        # STFT
+        spec = torch.stft(
+            batch, self.n_fft, self.hop_length, window=self.window,
+            return_complex=False, onesided=True,
+        )
+        magnitude = (spec[..., 0] ** 2 + spec[..., 1] ** 2).sqrt()  # [B, n_bins, T']
+
+        # Apply CQT filterbank
+        cqt = torch.matmul(self.cqt_fb, magnitude)  # [B, n_cqt_bins, T']
+
+        # Log-magnitude
+        cqt = (cqt.clamp(min=1e-10)).log()
+
+        return cqt.transpose(1, 2)  # [B, T', n_cqt_bins]
+
+
+# ---------------------- Feature Enrichment Wrappers ----------------------
+
+
+class VoiceActivityExtractor(BaseExtractor):
+    """Wrapper that appends voice activity features to any base extractor.
+
+    Adds per-frame energy-based VAD signals as extra feature channels:
+    - RMS energy (log-scaled)
+    - Zero-crossing rate (speech vs noise indicator)
+    - Spectral flatness (tonal vs noise-like)
+    - Voice activity probability (combined soft decision)
+
+    These signals let the classifier explicitly focus on speech regions
+    without learning this from scratch.
+
+    Args:
+        base_extractor: Any BaseExtractor to wrap.
+        frame_len: Frame length in samples for VAD computation.
+        hop_length: Hop length in samples (should match base extractor).
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        frame_len: int = 400,
+        hop_length: int = 160,
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        self.base = base_extractor
+        self.frame_len = frame_len
+        self.hop_length = hop_length
+        self._n_vad_feats = 4  # energy, zcr, spectral_flatness, vad_prob
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + self._n_vad_feats
+
+    def _compute_vad_features(self, wavs: torch.Tensor) -> torch.Tensor:
+        """Compute frame-level VAD features from raw audio.
+
+        Args:
+            wavs: ``[B, T]`` waveform tensor.
+
+        Returns:
+            ``[B, T_frames, 4]`` VAD features.
+        """
+        B, T = wavs.shape
+        device = wavs.device
+
+        # Frame the signal [B, n_frames, frame_len]
+        n_frames = max(1, (T - self.frame_len) // self.hop_length + 1)
+        indices = torch.arange(self.frame_len, device=device).unsqueeze(0) + \
+                  torch.arange(n_frames, device=device).unsqueeze(1) * self.hop_length
+        indices = indices.clamp(max=T - 1)
+        frames = wavs[:, indices]  # [B, n_frames, frame_len]
+
+        # 1. Log RMS energy
+        rms = (frames ** 2).mean(dim=-1).clamp(min=1e-10).sqrt()
+        log_energy = rms.log()
+        # Normalize to [0, 1] range per utterance
+        e_min = log_energy.min(dim=-1, keepdim=True).values
+        e_max = log_energy.max(dim=-1, keepdim=True).values
+        log_energy = (log_energy - e_min) / (e_max - e_min + 1e-8)
+
+        # 2. Zero-crossing rate
+        signs = torch.sign(frames)
+        zcr = (signs[:, :, 1:] != signs[:, :, :-1]).float().mean(dim=-1)
+
+        # 3. Spectral flatness (geometric mean / arithmetic mean of spectrum)
+        windowed = frames * torch.hann_window(self.frame_len, device=device)
+        spec = torch.fft.rfft(windowed, dim=-1).abs().clamp(min=1e-10)
+        log_spec = spec.log()
+        geo_mean = log_spec.mean(dim=-1).exp()
+        arith_mean = spec.mean(dim=-1)
+        spectral_flatness = (geo_mean / (arith_mean + 1e-10)).clamp(0, 1)
+
+        # 4. Voice activity probability (soft combination)
+        # High energy + low ZCR + low flatness → likely speech
+        vad_prob = torch.sigmoid(
+            3.0 * log_energy - 2.0 * zcr - 2.0 * spectral_flatness
+        )
+
+        return torch.stack([log_energy, zcr, spectral_flatness, vad_prob], dim=-1)
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features concatenated with VAD features.
+
+        Args:
+            wavs: ``[B, T]`` tensor or list of 1-D tensors.
+
+        Returns:
+            ``[B, T_frames, base_dim + 4]`` enriched features.
+        """
+        # Get base features
+        base_feats = self.base(wavs, **kwargs)  # [B, T', F]
+
+        # Prepare batch for VAD computation
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(base_feats.device)
+
+        # Compute VAD features
+        vad_feats = self._compute_vad_features(batch)  # [B, T_vad, 4]
+
+        # Align time dimensions (interpolate if different)
+        T_base = base_feats.size(1)
+        T_vad = vad_feats.size(1)
+        if T_vad != T_base:
+            vad_feats = F.interpolate(
+                vad_feats.transpose(1, 2), size=T_base, mode="linear",
+                align_corners=False
+            ).transpose(1, 2)
+
+        return torch.cat([base_feats, vad_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        """Export is not supported for wrapper extractors — export base + VAD separately."""
+        raise NotImplementedError(
+            "VoiceActivityExtractor wraps another extractor. "
+            "Export the base extractor separately."
+        )
+
+
+class PitchExtractor(BaseExtractor):
+    """Wrapper that appends pitch (F0) features to any base extractor.
+
+    Adds per-frame:
+    - Fundamental frequency (F0) in Hz, normalized
+    - Voicing probability (0 = unvoiced, 1 = voiced)
+    - F0 delta (rate of pitch change)
+
+    Pitch information helps distinguish speakers, tonal patterns,
+    and speech prosody — useful for multi-word wake phrases.
+
+    Args:
+        base_extractor: Any BaseExtractor to wrap.
+        f0_min: Minimum F0 in Hz (default 50).
+        f0_max: Maximum F0 in Hz (default 600).
+        frame_len: Frame length in samples.
+        hop_length: Hop length in samples.
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        f0_min: float = 50.0,
+        f0_max: float = 600.0,
+        frame_len: int = 400,
+        hop_length: int = 160,
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        self.base = base_extractor
+        self.f0_min = f0_min
+        self.f0_max = f0_max
+        self.frame_len = frame_len
+        self.hop_length = hop_length
+        self._n_pitch_feats = 3  # f0_norm, voicing_prob, f0_delta
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + self._n_pitch_feats
+
+    def _compute_pitch_features(self, wavs: torch.Tensor) -> torch.Tensor:
+        """Compute per-frame pitch features via autocorrelation.
+
+        Args:
+            wavs: ``[B, T]`` waveform.
+
+        Returns:
+            ``[B, T_frames, 3]`` (normalized F0, voicing probability, F0 delta).
+        """
+        B, T = wavs.shape
+        device = wavs.device
+        sr = self.sample_rate
+
+        # Frame the signal
+        n_frames = max(1, (T - self.frame_len) // self.hop_length + 1)
+        indices = torch.arange(self.frame_len, device=device).unsqueeze(0) + \
+                  torch.arange(n_frames, device=device).unsqueeze(1) * self.hop_length
+        indices = indices.clamp(max=T - 1)
+        frames = wavs[:, indices]  # [B, n_frames, frame_len]
+
+        # Window
+        win = torch.hann_window(self.frame_len, device=device)
+        frames = frames * win
+
+        # Autocorrelation via FFT
+        n_fft = 2 ** int(math.ceil(math.log2(self.frame_len * 2)))
+        spec = torch.fft.rfft(frames, n=n_fft, dim=-1)
+        acf = torch.fft.irfft(spec * spec.conj(), n=n_fft, dim=-1)
+        acf = acf[..., :self.frame_len]
+
+        # Normalize
+        acf = acf / (acf[..., :1].clamp(min=1e-10))
+
+        # Search for peak in valid lag range
+        lag_min = max(1, int(sr / self.f0_max))
+        lag_max = min(self.frame_len - 1, int(sr / self.f0_min))
+
+        if lag_max <= lag_min:
+            zeros = torch.zeros(B, n_frames, 3, device=device)
+            return zeros
+
+        acf_search = acf[..., lag_min:lag_max + 1]  # [B, n_frames, lag_range]
+        peak_vals, peak_indices = acf_search.max(dim=-1)
+
+        # F0 from lag
+        lags = peak_indices + lag_min
+        f0 = sr / lags.float().clamp(min=1)
+
+        # Normalize F0 to [0, 1]
+        f0_norm = (f0 - self.f0_min) / (self.f0_max - self.f0_min + 1e-8)
+        f0_norm = f0_norm.clamp(0, 1)
+
+        # Voicing probability from autocorrelation peak
+        voicing_prob = peak_vals.clamp(0, 1)
+
+        # F0 delta (finite difference)
+        f0_delta = torch.zeros_like(f0_norm)
+        if n_frames > 1:
+            f0_delta[:, 1:] = f0_norm[:, 1:] - f0_norm[:, :-1]
+
+        return torch.stack([f0_norm, voicing_prob, f0_delta], dim=-1)
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features + pitch features.
+
+        Returns:
+            ``[B, T_frames, base_dim + 3]`` enriched features.
+        """
+        base_feats = self.base(wavs, **kwargs)
+
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(base_feats.device)
+
+        pitch_feats = self._compute_pitch_features(batch)
+
+        T_base = base_feats.size(1)
+        T_pitch = pitch_feats.size(1)
+        if T_pitch != T_base:
+            pitch_feats = F.interpolate(
+                pitch_feats.transpose(1, 2), size=T_base, mode="linear",
+                align_corners=False
+            ).transpose(1, 2)
+
+        return torch.cat([base_feats, pitch_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        """Export is not supported for wrapper extractors."""
+        raise NotImplementedError(
+            "PitchExtractor wraps another extractor. Export the base separately."
+        )
+
+
+class MultiResolutionExtractor(BaseExtractor):
+    """Wrapper combining features from two extractors at different time resolutions.
+
+    Runs two extractors (e.g. same type with different hop lengths) and
+    concatenates their outputs along the feature dimension.  The coarse
+    extractor captures broad temporal patterns while the fine extractor
+    captures details.
+
+    Args:
+        fine_extractor: Extractor with shorter hop length (more frames).
+        coarse_extractor: Extractor with longer hop length (fewer frames).
+    """
+
+    def __init__(
+        self,
+        fine_extractor: BaseExtractor,
+        coarse_extractor: BaseExtractor,
+    ) -> None:
+        super().__init__(sample_rate=fine_extractor.sample_rate)
+        self.fine = fine_extractor
+        self.coarse = coarse_extractor
+
+    @property
+    def feature_dim(self) -> int:
+        return self.fine.feature_dim + self.coarse.feature_dim
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract multi-resolution features.
+
+        Returns:
+            ``[B, T_frames, fine_dim + coarse_dim]`` concatenated features.
+            Time dimension matches the fine extractor; coarse is interpolated.
+        """
+        fine_feats = self.fine(wavs, **kwargs)     # [B, T_fine, F1]
+        coarse_feats = self.coarse(wavs, **kwargs)  # [B, T_coarse, F2]
+
+        T_fine = fine_feats.size(1)
+        T_coarse = coarse_feats.size(1)
+        if T_coarse != T_fine:
+            coarse_feats = F.interpolate(
+                coarse_feats.transpose(1, 2), size=T_fine, mode="linear",
+                align_corners=False,
+            ).transpose(1, 2)
+
+        return torch.cat([fine_feats, coarse_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        """Export is not supported for multi-resolution wrapper."""
+        raise NotImplementedError(
+            "MultiResolutionExtractor wraps two extractors. Export each separately."
+        )
+
+
+class SNRAwareExtractor(BaseExtractor):
+    """Wrapper that appends per-frame SNR estimate to any base extractor.
+
+    Estimates signal-to-noise ratio per frame using a simple noise floor
+    tracker.  The SNR channel lets the classifier weight clean frames
+    more heavily than noisy ones.
+
+    Adds 2 features:
+    - Estimated per-frame SNR (dB, normalized)
+    - Noise floor estimate (log energy, normalized)
+
+    Args:
+        base_extractor: Any BaseExtractor to wrap.
+        frame_len: Frame length in samples.
+        hop_length: Hop length in samples.
+        noise_percentile: Percentile for noise floor estimation (0-100).
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        frame_len: int = 400,
+        hop_length: int = 160,
+        noise_percentile: float = 10.0,
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        self.base = base_extractor
+        self.frame_len = frame_len
+        self.hop_length = hop_length
+        self.noise_percentile = noise_percentile
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + 2
+
+    def _compute_snr_features(self, wavs: torch.Tensor) -> torch.Tensor:
+        """Estimate per-frame SNR.
+
+        Args:
+            wavs: ``[B, T]`` waveform.
+
+        Returns:
+            ``[B, T_frames, 2]`` (normalized SNR, normalized noise floor).
+        """
+        B, T = wavs.shape
+        device = wavs.device
+
+        # Frame the signal
+        n_frames = max(1, (T - self.frame_len) // self.hop_length + 1)
+        indices = torch.arange(self.frame_len, device=device).unsqueeze(0) + \
+                  torch.arange(n_frames, device=device).unsqueeze(1) * self.hop_length
+        indices = indices.clamp(max=T - 1)
+        frames = wavs[:, indices]  # [B, n_frames, frame_len]
+
+        # Frame energy (log)
+        frame_energy = (frames ** 2).mean(dim=-1).clamp(min=1e-10).log()  # [B, n_frames]
+
+        # Noise floor: rolling minimum (percentile of energy)
+        # Use quantile as noise floor estimate
+        k = max(1, int(self.noise_percentile / 100.0 * n_frames))
+        sorted_energy, _ = frame_energy.sort(dim=-1)
+        noise_floor = sorted_energy[:, min(k, n_frames - 1)].unsqueeze(-1)  # [B, 1]
+        noise_floor = noise_floor.expand_as(frame_energy)
+
+        # SNR in dB
+        snr_db = frame_energy - noise_floor  # log-domain subtraction = dB difference
+
+        # Normalize to [0, 1]
+        snr_max = snr_db.max(dim=-1, keepdim=True).values.clamp(min=1e-8)
+        snr_norm = (snr_db / snr_max).clamp(0, 1)
+
+        e_min = frame_energy.min(dim=-1, keepdim=True).values
+        e_max = frame_energy.max(dim=-1, keepdim=True).values
+        noise_norm = (noise_floor - e_min) / (e_max - e_min + 1e-8)
+
+        return torch.stack([snr_norm, noise_norm], dim=-1)
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features + SNR features.
+
+        Returns:
+            ``[B, T_frames, base_dim + 2]`` enriched features.
+        """
+        base_feats = self.base(wavs, **kwargs)
+
+        wav_list = ensure_wav_list(wavs)
+        max_len = max(w.shape[-1] for w in wav_list)
+        batch = torch.stack([
+            F.pad(w, (0, max_len - w.shape[-1])) for w in wav_list
+        ]).to(base_feats.device)
+
+        snr_feats = self._compute_snr_features(batch)
+
+        T_base = base_feats.size(1)
+        T_snr = snr_feats.size(1)
+        if T_snr != T_base:
+            snr_feats = F.interpolate(
+                snr_feats.transpose(1, 2), size=T_base, mode="linear",
+                align_corners=False,
+            ).transpose(1, 2)
+
+        return torch.cat([base_feats, snr_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        """Export is not supported for wrapper extractors."""
+        raise NotImplementedError(
+            "SNRAwareExtractor wraps another extractor. Export the base separately."
+        )
