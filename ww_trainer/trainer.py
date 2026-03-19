@@ -685,6 +685,8 @@ class WakeWordTrainer:
             except Exception:
                 pass
 
+        return best_metrics.get("f1", 0.0)
+
     def save_intermediate_ckpt(self, model_file: Path,
                                optimizer: torch.optim.Optimizer = None,
                                metrics: dict = None,
