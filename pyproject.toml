@@ -41,6 +41,9 @@ mlflow = [
 sweep = [
     "optuna",
 ]
+markov = [
+    "markovonnx",
+]
 
 [project.scripts]
 ww_trainer-train = "ww_trainer.cli:train"

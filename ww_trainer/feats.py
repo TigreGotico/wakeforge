@@ -1738,3 +1738,330 @@ class SNRAwareExtractor(BaseExtractor):
         raise NotImplementedError(
             "SNRAwareExtractor wraps another extractor. Export the base separately."
         )
+
+
+# ---------------------- Markov-Based Extractors ----------------------
+
+
+class MarkovTransitionExtractor(BaseExtractor):
+    """Feature extractor using Markov chain transition probabilities.
+
+    Quantizes audio frames into discrete tokens via k-means, then
+    uses a trained Markov chain's transition probabilities as features.
+    Captures temporal dynamics without any neural network parameters.
+
+    Workflow:
+    1. Base extractor produces ``[B, T, F]`` features
+    2. Each frame is quantized to nearest codebook entry (VQ)
+    3. For each frame, the Markov transition probability vector is looked up
+    4. Transition probs are appended as extra feature channels
+
+    The Markov chain must be pre-trained on wake word audio via ``fit()``.
+    Without training, outputs uniform probabilities (still valid features).
+
+    Args:
+        base_extractor: Any BaseExtractor for initial features.
+        n_codes: Number of VQ codebook entries (discrete tokens).
+        order: Markov chain order (context length).
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        n_codes: int = 64,
+        order: int = 2,
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        self.base = base_extractor
+        self.n_codes = n_codes
+        self.order = order
+
+        # Codebook for vector quantization [n_codes, F]
+        self._codebook: torch.Tensor | None = None
+
+        # Transition matrix [n_codes^order, n_codes] — uniform initially
+        n_states = n_codes ** order
+        self._transition_matrix = torch.ones(n_states, n_codes) / n_codes
+
+        self._fitted = False
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + self.n_codes
+
+    def _quantize(self, feats: torch.Tensor) -> torch.Tensor:
+        """Assign each frame to nearest codebook entry.
+
+        Args:
+            feats: ``[B, T, F]`` continuous features.
+
+        Returns:
+            ``[B, T]`` integer token IDs.
+        """
+        if self._codebook is None:
+            # No codebook yet — random assignment
+            return torch.randint(0, self.n_codes, (feats.shape[0], feats.shape[1]),
+                                 device=feats.device)
+        cb = self._codebook.to(feats.device)
+        # [B, T, F] vs [K, F] → [B, T, K] distances
+        dists = torch.cdist(feats, cb.unsqueeze(0).expand(feats.shape[0], -1, -1))
+        return dists.argmin(dim=-1)  # [B, T]
+
+    def _context_to_state(self, token_ids: torch.Tensor, t: int) -> torch.Tensor:
+        """Convert context window ending at t into a state index.
+
+        Args:
+            token_ids: ``[B, T]`` token sequences.
+            t: Current time step.
+
+        Returns:
+            ``[B]`` state indices.
+        """
+        B = token_ids.shape[0]
+        state = torch.zeros(B, dtype=torch.long, device=token_ids.device)
+        for i in range(self.order):
+            idx = max(0, t - self.order + 1 + i)
+            state = state * self.n_codes + token_ids[:, idx]
+        return state
+
+    def fit(self, audio_list: list[torch.Tensor]) -> None:
+        """Train the codebook and Markov chain from audio samples.
+
+        Args:
+            audio_list: List of 1-D waveform tensors (wake word samples).
+        """
+        # Step 1: Extract features from all samples
+        all_feats = []
+        for wav in audio_list:
+            with torch.no_grad():
+                feats = self.base(wav.unsqueeze(0))  # [1, T, F]
+            all_feats.append(feats.squeeze(0))
+        all_feats_cat = torch.cat(all_feats, dim=0)  # [N, F]
+
+        # Step 2: K-means for codebook
+        self._codebook = self._simple_kmeans(all_feats_cat, self.n_codes)
+
+        # Step 3: Quantize all features
+        all_tokens = []
+        for feats in all_feats:
+            dists = torch.cdist(feats.unsqueeze(0), self._codebook.unsqueeze(0))
+            tokens = dists.squeeze(0).argmin(dim=-1)
+            all_tokens.append(tokens)
+
+        # Step 4: Count transitions → build matrix
+        n_states = self.n_codes ** self.order
+        counts = torch.zeros(n_states, self.n_codes)
+        for tokens in all_tokens:
+            for t in range(self.order, len(tokens)):
+                state = 0
+                for i in range(self.order):
+                    state = state * self.n_codes + tokens[t - self.order + i].item()
+                counts[state, tokens[t].item()] += 1
+
+        # Normalize with smoothing
+        self._transition_matrix = (counts + 1e-5) / (counts.sum(dim=1, keepdim=True) + 1e-5 * self.n_codes)
+        self._fitted = True
+
+    @staticmethod
+    def _simple_kmeans(data: torch.Tensor, k: int, n_iter: int = 20) -> torch.Tensor:
+        """Simple k-means clustering.
+
+        Args:
+            data: ``[N, F]`` feature vectors.
+            k: Number of clusters.
+            n_iter: Number of iterations.
+
+        Returns:
+            ``[K, F]`` codebook.
+        """
+        # Initialize with random samples
+        indices = torch.randperm(len(data))[:k]
+        centroids = data[indices].clone()
+
+        for _ in range(n_iter):
+            dists = torch.cdist(data, centroids)
+            assignments = dists.argmin(dim=1)
+            for j in range(k):
+                mask = assignments == j
+                if mask.any():
+                    centroids[j] = data[mask].mean(dim=0)
+
+        return centroids
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features + Markov transition probabilities.
+
+        Args:
+            wavs: Audio input.
+
+        Returns:
+            ``[B, T, base_dim + n_codes]`` enriched features.
+        """
+        base_feats = self.base(wavs, **kwargs)  # [B, T, F]
+        B, T, F = base_feats.shape
+
+        token_ids = self._quantize(base_feats)  # [B, T]
+
+        # Look up transition probabilities for each frame
+        trans_mat = self._transition_matrix.to(base_feats.device)
+        trans_feats = torch.zeros(B, T, self.n_codes, device=base_feats.device)
+        for t in range(T):
+            states = self._context_to_state(token_ids, t)  # [B]
+            states = states.clamp(0, trans_mat.shape[0] - 1)
+            trans_feats[:, t] = trans_mat[states]
+
+        return torch.cat([base_feats, trans_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        raise NotImplementedError(
+            "MarkovTransitionExtractor wraps another extractor. Export base separately."
+        )
+
+
+class HMMStateExtractor(BaseExtractor):
+    """Feature extractor using Hidden Markov Model state posteriors.
+
+    Trains an HMM on quantized audio frame sequences, then extracts
+    per-frame state posterior probabilities as features. Models
+    temporal phoneme-like patterns without neural networks.
+
+    The HMM forward algorithm provides ``P(state | observations_so_far)``
+    for each frame — a rich temporal feature capturing sequential structure.
+
+    Args:
+        base_extractor: Any BaseExtractor for initial features.
+        n_states: Number of HMM hidden states.
+        n_codes: Number of VQ observation tokens.
+    """
+
+    def __init__(
+        self,
+        base_extractor: BaseExtractor,
+        n_states: int = 8,
+        n_codes: int = 32,
+    ) -> None:
+        super().__init__(sample_rate=base_extractor.sample_rate)
+        self.base = base_extractor
+        self.n_states = n_states
+        self.n_codes = n_codes
+
+        self._codebook: torch.Tensor | None = None
+
+        # HMM parameters (uniform initialization)
+        self._pi = torch.ones(n_states) / n_states
+        self._A = torch.ones(n_states, n_states) / n_states
+        self._B = torch.ones(n_states, n_codes) / n_codes
+        self._fitted = False
+
+    @property
+    def feature_dim(self) -> int:
+        return self.base.feature_dim + self.n_states
+
+    def fit(self, audio_list: list[torch.Tensor], n_iter: int = 10) -> None:
+        """Train codebook + HMM via Baum-Welch (unsupervised).
+
+        Args:
+            audio_list: List of 1-D waveform tensors.
+            n_iter: EM iterations.
+        """
+        try:
+            from markovonnx import HiddenMarkovModel, Vocabulary
+        except ImportError:
+            raise ImportError("markovonnx is required for HMMStateExtractor.fit(). "
+                              "Install with: pip install markovonnx")
+
+        # Extract and quantize features
+        all_feats = []
+        for wav in audio_list:
+            with torch.no_grad():
+                feats = self.base(wav.unsqueeze(0)).squeeze(0)
+            all_feats.append(feats)
+
+        all_feats_cat = torch.cat(all_feats, dim=0)
+        self._codebook = MarkovTransitionExtractor._simple_kmeans(all_feats_cat, self.n_codes)
+
+        # Quantize to token sequences
+        obs_sequences = []
+        for feats in all_feats:
+            dists = torch.cdist(feats.unsqueeze(0), self._codebook.unsqueeze(0))
+            tokens = dists.squeeze(0).argmin(dim=-1).tolist()
+            obs_sequences.append([str(t) for t in tokens])
+
+        # Train HMM
+        obs_vocab = Vocabulary()
+        obs_vocab.build_from_sequences(obs_sequences)
+        state_vocab = Vocabulary()
+        state_vocab.build_from_sequences([[str(i) for i in range(self.n_states)]])
+
+        hmm = HiddenMarkovModel(
+            n_states=self.n_states,
+            obs_vocab=obs_vocab,
+            state_vocab=state_vocab,
+        )
+        hmm.fit_unsupervised(obs_sequences, n_iter=n_iter)
+
+        # Extract parameters as tensors
+        self._pi = torch.tensor(hmm.pi, dtype=torch.float32)
+        self._A = torch.tensor(hmm.A, dtype=torch.float32)
+        self._B = torch.tensor(hmm.B, dtype=torch.float32)
+        self._fitted = True
+
+    def _forward_algorithm(self, obs_ids: torch.Tensor) -> torch.Tensor:
+        """Run HMM forward algorithm, returning per-frame state posteriors.
+
+        Args:
+            obs_ids: ``[T]`` observation token IDs.
+
+        Returns:
+            ``[T, n_states]`` normalized state posteriors.
+        """
+        T = obs_ids.shape[0]
+        device = obs_ids.device
+        pi = self._pi.to(device)
+        A = self._A.to(device)
+        B = self._B.to(device)
+
+        posteriors = torch.zeros(T, self.n_states, device=device)
+
+        # Initial
+        alpha = pi * B[:, obs_ids[0].clamp(0, self.n_codes - 1)]
+        alpha = alpha / (alpha.sum() + 1e-10)
+        posteriors[0] = alpha
+
+        # Forward pass
+        for t in range(1, T):
+            obs = obs_ids[t].clamp(0, self.n_codes - 1)
+            alpha = (alpha.unsqueeze(1) * A).sum(dim=0) * B[:, obs]
+            alpha = alpha / (alpha.sum() + 1e-10)
+            posteriors[t] = alpha
+
+        return posteriors
+
+    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
+        """Extract base features + HMM state posteriors.
+
+        Returns:
+            ``[B, T, base_dim + n_states]`` enriched features.
+        """
+        base_feats = self.base(wavs, **kwargs)
+        B_size, T, F = base_feats.shape
+
+        # Quantize
+        if self._codebook is not None:
+            cb = self._codebook.to(base_feats.device)
+            dists = torch.cdist(base_feats, cb.unsqueeze(0).expand(B_size, -1, -1))
+            token_ids = dists.argmin(dim=-1)
+        else:
+            token_ids = torch.randint(0, self.n_codes, (B_size, T), device=base_feats.device)
+
+        # Forward algorithm per sample
+        hmm_feats = torch.zeros(B_size, T, self.n_states, device=base_feats.device)
+        for b in range(B_size):
+            hmm_feats[b] = self._forward_algorithm(token_ids[b])
+
+        return torch.cat([base_feats, hmm_feats], dim=-1)
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None:
+        raise NotImplementedError(
+            "HMMStateExtractor wraps another extractor. Export base separately."
+        )

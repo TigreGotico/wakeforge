@@ -22,6 +22,8 @@ from ww_trainer.feats import (
     MultiResolutionExtractor,
     SNRAwareExtractor,
     SlidingFeatureCacheTensor,
+    MarkovTransitionExtractor,
+    HMMStateExtractor,
 )
 
 # --- Classifier Heads ---
