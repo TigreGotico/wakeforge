@@ -535,3 +535,16 @@ No source files were modified.
 - Model: claude-sonnet-4-6
 - Actions: Created planning documents only; no source code modified
 - Human oversight level: Full — plan reviewed and approved by user before execution
+
+---
+
+## 2026-03-19 — Quickstart module
+
+**AI Model**: Claude Sonnet 4.6
+**Actions Taken**:
+- Created `ww_trainer/quickstart.py` (~270 lines): `QuickstartConfig`, `QuickstartResult`, `train_from_wakeword()`, `_run_or_load_datagen()`, `_train_from_datagen_result()`, `cli_main()`.
+- Added `ww_trainer-quickstart` script entry point to `pyproject.toml`.
+- Created `test/test_quickstart.py` (11 tests, all passing).
+- Created `docs/quickstart.md`.
+- Updated `FAQ.md` and `AUDIT.md`.
+**Oversight**: Human review required before push.

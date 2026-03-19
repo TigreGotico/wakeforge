@@ -122,3 +122,6 @@ Root cause: identical-frequency sinusoids → trivial K-means → near-uniform H
 
 ### TD-009 — ClassifierHead ONNX batch axis was fixed ✅ FIXED
 `ClassifierHead.export_to_onnx` (`model.py:47`) previously only set dynamic axes for the time dimension, not batch. Batch>1 ONNX inference failed. Fixed by adding `{0: "batch_size"}` to dynamic_axes for both input and output.
+
+### S-015 — Quickstart module added ✅ DONE
+`ww_trainer/quickstart.py` — `train_from_wakeword()` Python API + `ww_trainer-quickstart` CLI. Glues `run_datagen_pipeline` → `WakeWordTrainer.train` with automatic augmentation wiring from `DatagenResult`. 11 unit tests in `test/test_quickstart.py`. See `docs/quickstart.md`.

@@ -481,3 +481,35 @@ OVOS VAD via `OVOSVADFactory` with `ovos-vad-plugin-silero` as default. Replaces
 **Q: How do I add a new TTS engine to datagen?**
 
 Install any OVOS TTS plugin (`uv pip install ovos-tts-plugin-<name>`). It will be auto-discovered via OPM entry points — no code changes needed.
+
+---
+
+## Quickstart (ww_trainer-quickstart)
+
+**Q: How do I go from a wake-word string to a trained ONNX model in one command?**
+
+```bash
+ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis
+```
+
+This runs datagen (TTS synthesis + negatives) then training automatically. See `docs/quickstart.md` for all options.
+
+**Q: How do I use the Python API?**
+
+```python
+from ww_trainer.quickstart import train_from_wakeword
+result = train_from_wakeword("hey jarvis", "./hey_jarvis", tier="micro", epochs=2)
+print(result.best_onnx_path)
+```
+
+**Q: How do I skip datagen if I already have a dataset?**
+
+Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset directory must contain `train/metadata.csv` and `test/metadata.csv`.
+
+**Q: What tier should I use?**
+
+`small` (default) targets RPi-class hardware (~200K params). Use `micro` for MCU/RPi Zero or `medium`/`large` for server-side accuracy. Run `ww_trainer-tiers` to see all options.
+
+**Q: How is augmentation data wired from datagen to training?**
+
+`_train_from_datagen_result` reads `bg_noise_dir`, `music_dir`, and `rir_dir` from `DatagenResult` and passes them as `bg_noise_folder`, `music_folder`, `rir_folder` kwargs to `WakeWordTrainer` — `ww_trainer/quickstart.py:168`.

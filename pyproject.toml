@@ -55,6 +55,7 @@ datagen = [
 ww_trainer-train = "ww_trainer.cli:train"
 ww_trainer-benchmark = "ww_trainer.benchmark:main"
 ww_trainer-datagen = "ww_trainer.datagen:cli_main"
+ww_trainer-quickstart = "ww_trainer.quickstart:cli_main"
 
 [project.urls]
 Homepage = "https://github.com/TigreGotico/ww_trainer"
