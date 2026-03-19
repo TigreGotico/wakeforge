@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
-from ww_trainer.feats import EndToEndCnnGruExtractor, WavInput, MfccExtractor, OnnxFeatureExtractor, ensure_wav_list, BaseExtractor
+from ww_trainer.feats import  WavInput,  ensure_wav_list, BaseExtractor
 
 
 class ClassifierHead(torch.nn.Module):
@@ -107,6 +107,23 @@ class BaseWakeModel(nn.Module):
     def save_checkpoint(self, ckpt_path: str):
         torch.save(self.state_dict(), ckpt_path)
 
+    def forward_streaming(self, audio_chunk: torch.Tensor,
+                          cache: "SlidingFeatureCacheTensor") -> float:
+        """Process one audio chunk with a rolling feature cache.
+
+        Args:
+            audio_chunk: 1-D float32 tensor (one chunk of audio at self.sample_rate).
+            cache: SlidingFeatureCacheTensor instance — updated in-place.
+
+        Returns:
+            Sigmoid probability as a Python float.
+        """
+        from ww_trainer.feats import SlidingFeatureCacheTensor  # noqa: F401 (type only)
+        feats = self.feature_extractor([audio_chunk])   # [1, T_new, F]
+        cached = cache(feats.squeeze(0))                # [T_window, F]
+        logit = self.classifier.forward(cached.unsqueeze(0))  # [1]
+        return torch.sigmoid(logit).item()
+
     def infer(self, audio: np.ndarray) -> float:
         """Single-waveform inference returning sigmoid(logit)."""
         if audio.ndim != 1:
@@ -118,9 +135,13 @@ class BaseWakeModel(nn.Module):
 
     def export_to_onnx(self, out: str,
                        simplify: bool = False,
-                       quantize: bool = False):
-        # featurizer already exported previously, only head missing
+                       quantize: bool = False,
+                       export_featurizer=False):
+        # usually featurizer was already exported previously, only head missing
         self.classifier.export_to_onnx(out, simplify, quantize)
+        if export_featurizer:
+            out = out.replace(".onnx", "") + "_featurizer.onnx"
+            self.feature_extractor.export_to_onnx(out, simplify, quantize)
 
 
 # ---------------------- classifier heads ----------------------
@@ -134,6 +155,8 @@ class FfnClassifierHead(ClassifierHead):
                  dropout=0.2,
                  device: str = "auto",
                  input_size=None) -> None:
+        self.hidden_dim = hidden_dim
+        self.dropout = dropout
         super().__init__(sample_rate=sample_rate, device=device,  input_size=input_size)
         self.sequential = nn.Sequential(nn.Linear(self.input_size, hidden_dim),
                                         nn.ReLU(),
@@ -170,12 +193,14 @@ class CnnClassifierHead(ClassifierHead):
         self.fc2 = nn.Linear(linear_dim, 1)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        conv_out = self.conv(feats.transpose(1, 2)).squeeze(-1)
+        feats = feats.transpose(1, 2)  # [B, T, F] -> [B, F, T] for Conv1d
+        conv_out = self.conv(feats).squeeze(-1)
         h = F.relu(self.fc1(conv_out))
         return self.fc2(h).squeeze(-1)
 
     def embed(self, feats: WavInput) -> torch.Tensor:
-        conv_out = self.conv(feats.transpose(1, 2)).squeeze(-1)
+        feats = feats.transpose(1, 2)  # [B, T, F] -> [B, F, T] for Conv1d
+        conv_out = self.conv(feats).squeeze(-1)
         return F.relu(self.fc1(conv_out))
 
 
@@ -210,6 +235,11 @@ class GruClassifierHead(ClassifierHead):
 
         B, D1, D2 = feats.shape
         # Heuristic: whichever matches input_size is feature dim
+        if D1 == self.input_size and D2 == self.input_size:
+            raise ValueError(
+                f"Ambiguous feature shape {feats.shape}; cannot determine time vs feature dim "
+                f"when both equal input_size={self.input_size}. Pass [B, T, F] explicitly."
+            )
         if D1 == self.input_size and D2 != self.input_size:
             return feats.transpose(1, 2)
         return feats  # already correct
@@ -227,115 +257,3 @@ class GruClassifierHead(ClassifierHead):
         pooled = out.mean(dim=1)
         return F.relu(self.fc1(pooled))
 
-
-# ---------------------- MFCC-based models ----------------------
-
-class MfccCnnWakeModel(BaseWakeModel):
-    """Simple CNN on log-mel / mfcc spectrograms."""
-
-    def __init__(
-            self,
-            conv_dim: int = 256,
-            linear_dim: int = 128,
-            kernel_size: int = 3,
-            stride: int = 1,
-            n_mels: int = 64,
-            n_mfcc: int = 40,
-            n_fft: int = 400,
-            hop_length: int = 160,
-            sample_rate: int = 16000,
-            device: str = "auto"
-    ) -> None:
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        clf = CnnClassifierHead(sample_rate=sample_rate, device=device,
-                                input_size=self.n_mfcc,
-                                conv_dim=conv_dim, linear_dim=linear_dim,
-                                kernel_size=kernel_size, stride=stride)
-        super().__init__(sample_rate=sample_rate, device=device,
-                         classifier=clf,
-                         feature_extractor=MfccExtractor(
-                             n_mels=n_mels,
-                             n_mfcc=n_mfcc,
-                             n_fft=n_fft,
-                             hop_length=hop_length,
-                             sample_rate=sample_rate))
-
-
-class MfccGruWakeModel(BaseWakeModel):
-    """Mel/MFCC + GRU + classifier with ONNX-safe forward/export."""
-
-    def __init__(
-            self,
-            hidden_dim: int = 128,
-            linear_dim: int = 128,
-            dropout=0.0,
-            bidirectional=False,
-            gru_n_layers=1,
-            n_mels: int = 64,
-            n_mfcc: int = 40,
-            n_fft: int = 400,
-            hop_length: int = 160,
-            sample_rate: int = 16000,
-            device: str = "auto",
-    ) -> None:
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-
-        self.hidden_dim = hidden_dim
-        self.num_layers = gru_n_layers
-        self.bidirectional = bidirectional
-        self.gru_dropout = dropout if gru_n_layers > 1 else 0.0
-
-        clf = GruClassifierHead(hidden_dim=hidden_dim, linear_dim=linear_dim, dropout=dropout,
-                                input_size=self.n_mfcc,
-                                bidirectional=bidirectional, gru_n_layers=gru_n_layers,
-                                sample_rate=sample_rate, device=device)
-        super().__init__(sample_rate=sample_rate, device=device,
-                         classifier=clf,
-                         feature_extractor=MfccExtractor(
-                             n_mels=n_mels,
-                             n_mfcc=n_mfcc,
-                             n_fft=n_fft,
-                             hop_length=hop_length,
-                             sample_rate=sample_rate))
-
-# ---------------------- from scratch models ----------------------
-
-class RawCnnGruWakeModel(BaseWakeModel):
-    """
-    End-to-end model using the high-performance CNN-GRU backbone and a simple FFN classifier head.
-    """
-
-    def __init__(self, sample_rate: int = 16000,
-                 feature_dim: int = 256,  # The output dimension for the embeddings
-                 hidden_dim: int = 128,
-                 dropout: float = 0.2,
-                 device: str = "auto") -> None:
-        # 1. CNN-GRU Extractor (The new, powerful backbone)
-        extractor = EndToEndCnnGruExtractor(
-            output_feature_dim=feature_dim,
-            gru_hidden_dim=feature_dim // 2,
-            device=device
-        )
-
-        # 2. Classifier Head
-        clf = FfnClassifierHead(
-            sample_rate=sample_rate,
-            device=device,
-            input_size=feature_dim,  # Must match extractor's output_feature_dim
-            hidden_dim=hidden_dim,
-            dropout=dropout
-        )
-
-        super().__init__(
-            sample_rate=sample_rate,
-            device=device,
-            feature_extractor=extractor,
-            classifier=clf
-        )
-        self.to(self.device)
