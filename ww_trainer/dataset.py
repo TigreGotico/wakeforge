@@ -53,6 +53,8 @@ class AudioDataset(Dataset):
         speed_min: Minimum speed factor (legacy mode).
         speed_max: Maximum speed factor (legacy mode).
         device: Device for voice conversion (legacy mode).
+        feature_cache: Optional ``FeatureCache`` instance for caching un-augmented
+            waveforms.  Bypassed when augmentation is applied to a sample.
     """
 
     def __init__(self, samples,
@@ -74,8 +76,10 @@ class AudioDataset(Dataset):
                  speed_max: float = 1.05,
                  device="auto",
                  validate: bool = False,
+                 feature_cache=None,
                  ):
         self.pipeline = pipeline
+        self.feature_cache = feature_cache
         self.samples = samples
         self.sample_rate = sample_rate
         self.aug_prob = aug_prob
@@ -227,6 +231,14 @@ class AudioDataset(Dataset):
     def __getitem__(self, idx):
         path, label = self.samples[idx]
 
+        will_augment = self.aug_prob > 0 and random.random() < self.aug_prob
+
+        # Check feature cache (only for un-augmented samples)
+        if not will_augment and self.feature_cache is not None:
+            cached = self.feature_cache.get(path)
+            if cached is not None:
+                return torch.from_numpy(cached).float(), int(label), path
+
         # 0. Apply Voice Conversion -> simulate a new speaker
         if label == "1" and self.vc is not None and random.random() < self.vc_prob:
             try:
@@ -250,8 +262,11 @@ class AudioDataset(Dataset):
         wav = wav.squeeze(0)
 
         # Apply on-the-fly augmentation if enabled
-        if self.aug_prob > 0 and random.random() < self.aug_prob:
+        if will_augment:
             wav = self.get_augmented(wav)
+        elif self.feature_cache is not None:
+            # Cache un-augmented waveform for future hits
+            self.feature_cache.put(path, wav.numpy() if isinstance(wav, torch.Tensor) else wav)
 
         return wav, int(label), path
 
