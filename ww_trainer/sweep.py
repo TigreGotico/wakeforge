@@ -136,6 +136,345 @@ def run_sweep(
     logger.info("Best params saved to %s", best_path)
 
 
+def _build_search_space() -> dict:
+    """Default hyperparameter search space."""
+    return {
+        "arch": ["ffn", "gru", "cnn"],
+        "hidden_dim": [64, 128, 256],
+        "lr": [1e-4, 5e-4, 1e-3, 5e-3, 1e-2],
+        "batch_size": [16, 32, 64],
+        "dropout": [0.0, 0.1, 0.2, 0.3],
+    }
+
+
+def _evaluate_config(
+    config: dict,
+    train_data: list,
+    val_data: list,
+    featurizer: Optional[str],
+    featurizer_type: str,
+    device: str,
+    epochs: int,
+    output_dir: Path,
+    trial_id: int,
+) -> float:
+    """Train one configuration and return F1 score."""
+    from ww_trainer.trainer import WakeWordTrainer
+
+    trial_dir = output_dir / f"trial_{trial_id}"
+    trial_dir.mkdir(exist_ok=True)
+
+    kwargs = dict(
+        hidden_dim=config["hidden_dim"],
+        dropout=config["dropout"],
+        featurizer_type=featurizer_type,
+    )
+    if featurizer_type == "mfcc":
+        kwargs["n_mfcc"] = 40
+
+    trainer = WakeWordTrainer(
+        arch=config["arch"],
+        featurizer=featurizer or "",
+        feature_dim=None,
+        device=device,
+        losses_cfg=[{"name": "bce", "weight": 1.0}],
+        **kwargs,
+    )
+
+    try:
+        best_f1 = trainer.train(
+            train_data=train_data,
+            test_data=val_data,
+            epochs=epochs,
+            batch_size=config["batch_size"],
+            lr=config["lr"],
+            output_dir=trial_dir,
+            save_best="f1",
+            metrics_log=str(trial_dir / "metrics.csv"),
+            tsne_every=0, pca_every=0, umap_every=0,
+        )
+        return float(best_f1) if best_f1 is not None else 0.0
+    except Exception as exc:
+        logger.warning("Trial %d failed: %s", trial_id, exc)
+        return 0.0
+
+
+def run_grid_search(
+    metadata_csv: str,
+    output_dir: str = "grid_results",
+    featurizer: Optional[str] = None,
+    featurizer_type: str = "mfcc",
+    device: str = "auto",
+    epochs_per_trial: int = 5,
+    search_space: Optional[dict] = None,
+) -> dict:
+    """Exhaustive grid search over all hyperparameter combinations.
+
+    Evaluates every combination in the search space.  Best for small
+    spaces (< 100 combinations).
+
+    Args:
+        metadata_csv: Dataset CSV path.
+        output_dir: Directory for results.
+        featurizer: ONNX extractor path.
+        featurizer_type: Extractor type.
+        device: Device.
+        epochs_per_trial: Epochs per configuration.
+        search_space: Dict mapping param names to lists of values.
+                      Defaults to a standard KWS grid.
+
+    Returns:
+        Dict with ``best_config``, ``best_score``, ``all_results``.
+    """
+    import itertools
+    import json
+    import random
+
+    space = search_space or _build_search_space()
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load data
+    with open(metadata_csv) as f:
+        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+    random.shuffle(entries)
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    split = int(len(entries) * 0.8)
+    train_data, val_data = entries[:split], entries[split:]
+
+    # Generate all combinations
+    keys = list(space.keys())
+    combos = list(itertools.product(*[space[k] for k in keys]))
+    logger.info("Grid search: %d combinations", len(combos))
+
+    results = []
+    best_score = -1.0
+    best_config = {}
+
+    for i, values in enumerate(combos):
+        config = dict(zip(keys, values))
+        logger.info("Trial %d/%d: %s", i + 1, len(combos), config)
+
+        score = _evaluate_config(
+            config, train_data, val_data, featurizer, featurizer_type,
+            device, epochs_per_trial, out_dir, i,
+        )
+        results.append({"config": config, "score": score})
+
+        if score > best_score:
+            best_score = score
+            best_config = config
+
+    out = {"best_config": best_config, "best_score": best_score, "all_results": results}
+    with open(out_dir / "grid_results.json", "w") as f:
+        json.dump(out, f, indent=2)
+
+    logger.info("Grid search complete. Best: %.4f — %s", best_score, best_config)
+    return out
+
+
+def run_random_search(
+    metadata_csv: str,
+    n_trials: int = 50,
+    output_dir: str = "random_results",
+    featurizer: Optional[str] = None,
+    featurizer_type: str = "mfcc",
+    device: str = "auto",
+    epochs_per_trial: int = 5,
+    search_space: Optional[dict] = None,
+) -> dict:
+    """Random search: sample configurations uniformly from the search space.
+
+    More efficient than grid search for high-dimensional spaces.
+    Bergstra & Bengio (2012) showed random search finds good configs
+    faster than grid search when not all hyperparameters matter equally.
+
+    Args:
+        metadata_csv: Dataset CSV path.
+        n_trials: Number of random configurations to evaluate.
+        output_dir: Directory for results.
+        featurizer: ONNX extractor path.
+        featurizer_type: Extractor type.
+        device: Device.
+        epochs_per_trial: Epochs per configuration.
+        search_space: Dict mapping param names to lists of values.
+
+    Returns:
+        Dict with ``best_config``, ``best_score``, ``all_results``.
+    """
+    import json
+    import random
+
+    space = search_space or _build_search_space()
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(metadata_csv) as f:
+        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+    random.shuffle(entries)
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    split = int(len(entries) * 0.8)
+    train_data, val_data = entries[:split], entries[split:]
+
+    results = []
+    best_score = -1.0
+    best_config = {}
+
+    for i in range(n_trials):
+        config = {k: random.choice(v) for k, v in space.items()}
+        logger.info("Trial %d/%d: %s", i + 1, n_trials, config)
+
+        score = _evaluate_config(
+            config, train_data, val_data, featurizer, featurizer_type,
+            device, epochs_per_trial, out_dir, i,
+        )
+        results.append({"config": config, "score": score})
+
+        if score > best_score:
+            best_score = score
+            best_config = config
+
+    out = {"best_config": best_config, "best_score": best_score, "all_results": results}
+    with open(out_dir / "random_results.json", "w") as f:
+        json.dump(out, f, indent=2)
+
+    logger.info("Random search complete. Best: %.4f — %s", best_score, best_config)
+    return out
+
+
+def run_genetic_search(
+    metadata_csv: str,
+    population_size: int = 20,
+    generations: int = 10,
+    output_dir: str = "genetic_results",
+    featurizer: Optional[str] = None,
+    featurizer_type: str = "mfcc",
+    device: str = "auto",
+    epochs_per_trial: int = 5,
+    search_space: Optional[dict] = None,
+    mutation_rate: float = 0.3,
+    elite_frac: float = 0.2,
+) -> dict:
+    """Genetic algorithm hyperparameter search.
+
+    Evolves a population of configurations through selection, crossover,
+    and mutation.  Good for complex search spaces where Bayesian
+    optimization struggles.
+
+    Algorithm:
+    1. Initialize random population
+    2. Evaluate fitness (F1 score)
+    3. Select elite (top performers)
+    4. Crossover: combine two parents' genes
+    5. Mutation: randomly perturb genes
+    6. Repeat for N generations
+
+    Args:
+        metadata_csv: Dataset CSV path.
+        population_size: Number of individuals per generation.
+        generations: Number of generations to evolve.
+        output_dir: Directory for results.
+        featurizer: ONNX extractor path.
+        featurizer_type: Extractor type.
+        device: Device.
+        epochs_per_trial: Epochs per configuration.
+        search_space: Dict mapping param names to lists of values.
+        mutation_rate: Probability of mutating each gene.
+        elite_frac: Fraction of population to keep as elite.
+
+    Returns:
+        Dict with ``best_config``, ``best_score``, ``history``.
+    """
+    import json
+    import random
+
+    space = search_space or _build_search_space()
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(metadata_csv) as f:
+        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+    random.shuffle(entries)
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    split = int(len(entries) * 0.8)
+    train_data, val_data = entries[:split], entries[split:]
+
+    keys = list(space.keys())
+    n_elite = max(1, int(population_size * elite_frac))
+    trial_id = 0
+
+    def _random_individual() -> dict:
+        return {k: random.choice(v) for k, v in space.items()}
+
+    def _crossover(parent1: dict, parent2: dict) -> dict:
+        """Uniform crossover: each gene from random parent."""
+        child = {}
+        for k in keys:
+            child[k] = random.choice([parent1[k], parent2[k]])
+        return child
+
+    def _mutate(individual: dict) -> dict:
+        """Randomly replace genes with probability mutation_rate."""
+        mutant = individual.copy()
+        for k in keys:
+            if random.random() < mutation_rate:
+                mutant[k] = random.choice(space[k])
+        return mutant
+
+    # Initialize population
+    population = [_random_individual() for _ in range(population_size)]
+
+    best_overall_score = -1.0
+    best_overall_config = {}
+    history = []
+
+    for gen in range(generations):
+        # Evaluate
+        scores = []
+        for ind in population:
+            score = _evaluate_config(
+                ind, train_data, val_data, featurizer, featurizer_type,
+                device, epochs_per_trial, out_dir, trial_id,
+            )
+            scores.append(score)
+            trial_id += 1
+
+            if score > best_overall_score:
+                best_overall_score = score
+                best_overall_config = ind.copy()
+
+        gen_best = max(scores)
+        gen_avg = sum(scores) / len(scores)
+        history.append({"generation": gen, "best": gen_best, "avg": gen_avg})
+        logger.info("Gen %d: best=%.4f avg=%.4f (overall best=%.4f)",
+                     gen, gen_best, gen_avg, best_overall_score)
+
+        # Selection: rank by score, keep elite
+        ranked = sorted(zip(scores, population), key=lambda x: -x[0])
+        elite = [ind for _, ind in ranked[:n_elite]]
+
+        # Build next generation
+        next_pop = list(elite)  # elitism
+        while len(next_pop) < population_size:
+            p1, p2 = random.choices(elite, k=2)
+            child = _crossover(p1, p2)
+            child = _mutate(child)
+            next_pop.append(child)
+        population = next_pop
+
+    out = {
+        "best_config": best_overall_config,
+        "best_score": best_overall_score,
+        "history": history,
+    }
+    with open(out_dir / "genetic_results.json", "w") as f:
+        json.dump(out, f, indent=2)
+
+    logger.info("Genetic search complete. Best: %.4f — %s",
+                best_overall_score, best_overall_config)
+    return out
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Optuna sweep for ww-trainer")
