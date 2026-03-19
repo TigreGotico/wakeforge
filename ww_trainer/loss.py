@@ -758,6 +758,61 @@ class MultiSimilarityLoss(nn.Module):
         return loss
 
 
+class SizeAwareLoss(nn.Module):
+    """Wraps a base loss with L1 sparsity and parameter-count penalties.
+
+    Encourages smaller models during training by adding:
+    - L1 norm of all parameters (sparsity pressure)
+    - Soft penalty proportional to param_count / param_budget
+
+    Args:
+        base_loss: The underlying loss module.
+        l1_weight: Coefficient for L1 sparsity penalty.
+        size_weight: Coefficient for the param-count penalty.
+        param_budget: Target parameter count. Penalty grows as params exceed this.
+    """
+
+    def __init__(
+        self,
+        base_loss: nn.Module,
+        l1_weight: float = 1e-5,
+        size_weight: float = 0.1,
+        param_budget: int = 1024,
+    ) -> None:
+        super().__init__()
+        self.base_loss = base_loss
+        self.l1_weight = l1_weight
+        self.size_weight = size_weight
+        self.param_budget = param_budget
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        model: nn.Module,
+    ) -> torch.Tensor:
+        """Compute base loss + sparsity penalty + size penalty.
+
+        Args:
+            logits: Model output logits ``(B,)`` or ``(B, 1)``.
+            labels: Ground truth labels ``(B,)``.
+            model: The model whose parameters are penalized.
+
+        Returns:
+            Scalar loss tensor.
+        """
+        base = self.base_loss(logits.view(-1), labels.view(-1).float())
+
+        # L1 sparsity: sum of absolute values of all parameters
+        l1 = sum(p.abs().sum() for p in model.parameters() if p.requires_grad)
+
+        # Size penalty: ratio of actual params to budget, clamped to [0, inf)
+        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        size_ratio = max(0.0, n_params / self.param_budget - 1.0)
+
+        return base + self.l1_weight * l1 + self.size_weight * size_ratio
+
+
 class LossManager:
     """Manages multiple weighted loss functions for training."""
 
@@ -850,6 +905,14 @@ class LossManager:
                     gamma=cfg.get("gamma", 0.5),
                     delta=cfg.get("delta", 0.1),
                     eta=cfg.get("eta", 0.5)
+                ).to(self.device)
+            elif name == "size_aware":
+                base = nn.BCEWithLogitsLoss().to(self.device)
+                crit = SizeAwareLoss(
+                    base_loss=base,
+                    l1_weight=cfg.get("l1_weight", 1e-5),
+                    size_weight=cfg.get("size_weight", 0.1),
+                    param_budget=cfg.get("param_budget", 1024),
                 ).to(self.device)
             else:
                 raise ValueError(f"Unknown loss: {name}")
@@ -944,6 +1007,10 @@ class LossManager:
                 labs = labels.to(self.device).view(-1)
                 if (labs == 1).any() and (labs == 0).any():
                     loss_val = crit(embeds, labs)
+
+            elif name == "size_aware":
+                # SizeAwareLoss needs the model reference
+                loss_val = crit(logits.view(-1), labels.to(self.device).float().view(-1), model)
 
             elif name == "rppl":
                 # Robust Prototype and Diversity Loss

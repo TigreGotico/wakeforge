@@ -504,6 +504,209 @@ def run_genetic_search(
     return out
 
 
+def _build_micro_search_space(tier_name: str) -> dict:
+    """Build a search space constrained to ESP32-viable architectures.
+
+    Only includes MFCC extractor with low feature counts and FFN heads
+    with small hidden dimensions that fit within the tier's param budget.
+
+    Args:
+        tier_name: One of ``esp32_nano``, ``esp32_sweet``, ``esp32_max``.
+
+    Returns:
+        Dict mapping parameter names to lists of candidate values.
+
+    Raises:
+        ValueError: If tier_name is not an ESP32 tier.
+    """
+    from ww_trainer.tiers import get_tier
+    tier = get_tier(tier_name)
+    if tier.max_params is None:
+        raise ValueError(f"Tier {tier_name!r} has no param budget — not an ESP32 tier")
+
+    # Constrained spaces per budget
+    if tier.max_size_kb is not None and tier.max_size_kb <= 1.0:
+        hidden_dims = [8, 12, 16]
+        n_mfccs = [10, 13]
+        dropouts = [0.0, 0.1]
+    elif tier.max_size_kb is not None and tier.max_size_kb <= 10.0:
+        hidden_dims = [16, 32, 48, 64]
+        n_mfccs = [13, 20]
+        dropouts = [0.0, 0.1, 0.2]
+    else:
+        hidden_dims = [32, 64, 96, 128]
+        n_mfccs = [13, 20, 26]
+        dropouts = [0.0, 0.1, 0.2, 0.3]
+
+    return {
+        "arch": ["ffn"],
+        "featurizer_type": ["mfcc"],
+        "n_features": n_mfccs,
+        "hidden_dim": hidden_dims,
+        "lr": [5e-4, 1e-3, 5e-3],
+        "batch_size": [16, 32],
+        "dropout": dropouts,
+    }
+
+
+def _estimate_ffn_params(n_mfcc: int, hidden_dim: int) -> int:
+    """Estimate parameter count for MFCC + FFN architecture.
+
+    Architecture: Linear(n_mfcc, hidden_dim) + Linear(hidden_dim, 1).
+
+    Args:
+        n_mfcc: Number of MFCC coefficients (input features).
+        hidden_dim: Hidden layer dimension.
+
+    Returns:
+        Total trainable parameter count.
+    """
+    return (n_mfcc * hidden_dim + hidden_dim) + (hidden_dim * 1 + 1)
+
+
+def run_micro_search(
+    metadata_csv: str,
+    tier_name: str = "esp32_sweet",
+    population_size: int = 16,
+    generations: int = 8,
+    output_dir: str = "micro_search_results",
+    device: str = "auto",
+    epochs_per_trial: int = 5,
+    mutation_rate: float = 0.3,
+    elite_frac: float = 0.25,
+    accuracy_weight: float = 0.7,
+    size_weight: float = 0.3,
+) -> dict:
+    """Genetic search with composite fitness for ESP32-constrained models.
+
+    Fitness = accuracy_weight * f1 + size_weight * (1 - params/budget).
+    Individuals exceeding the tier's param budget get fitness = -1 (rejected).
+
+    Args:
+        metadata_csv: Dataset CSV path.
+        tier_name: ESP32 tier name (determines param budget and search space).
+        population_size: Number of individuals per generation.
+        generations: Number of generations.
+        output_dir: Directory for results.
+        device: Torch device.
+        epochs_per_trial: Training epochs per trial.
+        mutation_rate: Probability of mutating each gene.
+        elite_frac: Fraction of population kept as elite.
+        accuracy_weight: Weight for F1 score in fitness.
+        size_weight: Weight for compactness in fitness.
+
+    Returns:
+        Dict with ``best_config``, ``best_score``, ``best_fitness``, ``history``.
+    """
+    import json
+    import random
+
+    from ww_trainer.tiers import get_tier
+
+    tier = get_tier(tier_name)
+    if tier.max_params is None:
+        raise ValueError(f"Tier {tier_name!r} has no param budget")
+
+    budget = tier.max_params
+    space = _build_micro_search_space(tier_name)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(metadata_csv) as f:
+        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+    random.shuffle(entries)
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    split = int(len(entries) * 0.8)
+    train_data, val_data = entries[:split], entries[split:]
+
+    keys = list(space.keys())
+    n_elite = max(1, int(population_size * elite_frac))
+    trial_id = 0
+
+    def _random_individual() -> dict:
+        return {k: random.choice(v) for k, v in space.items()}
+
+    def _crossover(p1: dict, p2: dict) -> dict:
+        return {k: random.choice([p1[k], p2[k]]) for k in keys}
+
+    def _mutate(ind: dict) -> dict:
+        m = ind.copy()
+        for k in keys:
+            if random.random() < mutation_rate:
+                m[k] = random.choice(space[k])
+        return m
+
+    def _fitness(config: dict, f1: float) -> float:
+        """Composite fitness: accuracy + compactness. Hard-reject over-budget."""
+        n_params = _estimate_ffn_params(config["n_features"], config["hidden_dim"])
+        if n_params > budget:
+            return -1.0
+        compactness = 1.0 - n_params / budget
+        return accuracy_weight * f1 + size_weight * compactness
+
+    population = [_random_individual() for _ in range(population_size)]
+    best_overall_fitness = -2.0
+    best_overall_config: dict = {}
+    best_overall_f1 = 0.0
+    history = []
+
+    for gen in range(generations):
+        fitnesses = []
+        for ind in population:
+            # Hard rejection: skip training if over budget
+            est = _estimate_ffn_params(ind["n_features"], ind["hidden_dim"])
+            if est > budget:
+                fitnesses.append(-1.0)
+                trial_id += 1
+                continue
+
+            f1 = _evaluate_config(
+                ind, train_data, val_data, None, "mfcc",
+                device, epochs_per_trial, out_dir, trial_id,
+            )
+            fit = _fitness(ind, f1)
+            fitnesses.append(fit)
+            trial_id += 1
+
+            if fit > best_overall_fitness:
+                best_overall_fitness = fit
+                best_overall_config = ind.copy()
+                best_overall_f1 = f1
+
+        gen_best = max(fitnesses)
+        gen_avg = sum(f for f in fitnesses if f >= 0) / max(1, sum(1 for f in fitnesses if f >= 0))
+        history.append({"generation": gen, "best_fitness": gen_best, "avg_fitness": gen_avg})
+        logger.info("Gen %d: best_fitness=%.4f avg=%.4f (overall=%.4f, f1=%.4f)",
+                     gen, gen_best, gen_avg, best_overall_fitness, best_overall_f1)
+
+        # Selection
+        ranked = sorted(zip(fitnesses, population), key=lambda x: -x[0])
+        elite = [ind for _, ind in ranked[:n_elite]]
+
+        next_pop = list(elite)
+        while len(next_pop) < population_size:
+            p1, p2 = random.choices(elite, k=2)
+            child = _crossover(p1, p2)
+            child = _mutate(child)
+            next_pop.append(child)
+        population = next_pop
+
+    out = {
+        "tier": tier_name,
+        "param_budget": budget,
+        "best_config": best_overall_config,
+        "best_f1": best_overall_f1,
+        "best_fitness": best_overall_fitness,
+        "history": history,
+    }
+    with open(out_dir / "micro_search_results.json", "w") as f:
+        json.dump(out, f, indent=2)
+
+    logger.info("Micro search complete. Best fitness=%.4f f1=%.4f config=%s",
+                best_overall_fitness, best_overall_f1, best_overall_config)
+    return out
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Optuna sweep for ww-trainer")

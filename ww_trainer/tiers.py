@@ -21,6 +21,8 @@ class TierConfig:
     description: str = ""
     approx_params: str = ""
     target_hardware: str = ""
+    max_params: Optional[int] = None       # hard param budget (None = unlimited)
+    max_size_kb: Optional[float] = None    # max int8 model size in KB
 
 
 HARDWARE_TIERS: dict[str, TierConfig] = {
@@ -100,6 +102,43 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         description="Gammatone filterbank + GRU — noise-robust front-end",
         approx_params="~200K",
         target_hardware="RPi, small SBC",
+    ),
+    # --- ESP32 tiers (520 KB RAM, 4 MB flash) ---
+    "esp32_nano": TierConfig(
+        name="esp32_nano",
+        extractor_type="mfcc",
+        head_arch="ffn",
+        hidden_dim=16,
+        n_mfcc=13,
+        description="MFCC-13 + FFN-16 — sub-1KB int8, absolute minimum",
+        approx_params="~241",
+        target_hardware="ESP32 (sub-1KB)",
+        max_params=1024,
+        max_size_kb=1.0,
+    ),
+    "esp32_sweet": TierConfig(
+        name="esp32_sweet",
+        extractor_type="mfcc",
+        head_arch="ffn",
+        hidden_dim=64,
+        n_mfcc=13,
+        description="MFCC-13 + FFN-64 — sub-10KB int8, best accuracy/size tradeoff",
+        approx_params="~1K",
+        target_hardware="ESP32 (sub-10KB)",
+        max_params=10240,
+        max_size_kb=10.0,
+    ),
+    "esp32_max": TierConfig(
+        name="esp32_max",
+        extractor_type="mfcc",
+        head_arch="ffn",
+        hidden_dim=128,
+        n_mfcc=13,
+        description="MFCC-13 + FFN-128 — sub-50KB int8, maximum ESP32 budget",
+        approx_params="~2K",
+        target_hardware="ESP32 (sub-50KB)",
+        max_params=51200,
+        max_size_kb=50.0,
     ),
 }
 
