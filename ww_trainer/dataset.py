@@ -97,13 +97,42 @@ def _collect_audio_files(base_folder):
 
 
 class AudioDataset(Dataset):
-    """
-    A PyTorch Dataset for loading audio files with optional on-the-fly augmentation.
+    """PyTorch Dataset for loading audio files with optional on-the-fly augmentation.
+
+    Supports two augmentation modes:
+
+    1. **Pipeline mode** (recommended): pass an ``AugmentationPipeline`` via
+       the ``pipeline`` parameter.  Composable, testable, and decoupled.
+    2. **Legacy mode**: pass individual folder paths (``bg_noise_folder``,
+       ``rir_folder``, etc.).  Maintained for backward compatibility.
+
+    When ``pipeline`` is provided, it takes priority over legacy kwargs.
+
+    Args:
+        samples: List of ``(audio_path, label_str)`` tuples.
+        sample_rate: Target sample rate.
+        aug_prob: Probability of applying augmentation per sample (0 disables).
+        pipeline: Optional ``AugmentationPipeline`` for composable augmentation.
+        vc_prob: Voice conversion probability (legacy mode only).
+        bg_noise_folder: Background noise folder (legacy mode).
+        music_folder: Music folder (legacy mode).
+        bg_speech_folder: Background speech folder (legacy mode).
+        mic_noise_folder: Microphone noise folder (legacy mode).
+        rir_folder: Room impulse response folder (legacy mode).
+        vc_folder: Voice conversion reference folder (legacy mode).
+        snr_min: Minimum SNR for noise mixing (legacy mode).
+        snr_max: Maximum SNR for noise mixing (legacy mode).
+        pitch_min: Minimum pitch shift in semitones (legacy mode).
+        pitch_max: Maximum pitch shift in semitones (legacy mode).
+        speed_min: Minimum speed factor (legacy mode).
+        speed_max: Maximum speed factor (legacy mode).
+        device: Device for voice conversion (legacy mode).
     """
 
     def __init__(self, samples,
                  sample_rate: int = 16000,
-                 aug_prob: float = 0.0, # set to 0 to disable
+                 aug_prob: float = 0.0,
+                 pipeline=None,
                  vc_prob: float = 0.3,
                  bg_noise_folder: str = None,
                  music_folder: str = None,
@@ -119,6 +148,7 @@ class AudioDataset(Dataset):
                  speed_max: float = 1.05,
                  device="auto"
                  ):
+        self.pipeline = pipeline
         self.samples = samples
         self.sample_rate = sample_rate
         self.aug_prob = aug_prob
@@ -169,87 +199,54 @@ class AudioDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    #@timed
     def get_augmented(self, wav: Union[numpy.ndarray, torch.Tensor]) -> torch.Tensor:
-        # --- Handle input types ---
-        input_device = None
-        requires_grad = False
+        """Apply augmentation pipeline to a single waveform.
 
+        Args:
+            wav: 1-D waveform as numpy array or torch tensor.
+
+        Returns:
+            Augmented waveform as torch.Tensor.
+        """
+        input_device = None
         if isinstance(wav, torch.Tensor):
             input_device = wav.device
-            requires_grad = wav.requires_grad
             wav_np = wav.detach().cpu().numpy().astype(np.float32)
         elif isinstance(wav, np.ndarray):
             wav_np = wav.astype(np.float32)
         else:
-            raise TypeError(f"Unsupported input type for get_augmented(): {type(wav)}")
+            raise TypeError(f"Unsupported input type: {type(wav)}")
 
-        # --- General Noise Mixing ---
-        # Apply general background noises (objects, animals, activities)
-        if self.bg_noise_files and random.random() < 0.6:
-            bg_path = random.choice(self.bg_noise_files)
-            bg_np = _load_audio_mono(bg_path, self.sample_rate)
-            snr = random.uniform(self.snr_min, self.snr_max)
-            wav_np = _mix_background(wav_np, bg_np, snr)
+        if self.pipeline is not None:
+            wav_np = self.pipeline(wav_np, sr=self.sample_rate)
+        else:
+            # Legacy augmentation path
+            if self.bg_noise_files and random.random() < 0.6:
+                bg_np = _load_audio_mono(random.choice(self.bg_noise_files), self.sample_rate)
+                wav_np = _mix_background(wav_np, bg_np, random.uniform(self.snr_min, self.snr_max))
+            if self.mic_noise_files and random.random() < 0.8:
+                mic_np = _load_audio_mono(random.choice(self.mic_noise_files), self.sample_rate)
+                wav_np = _mix_background(wav_np, mic_np, random.uniform(self.snr_min, self.snr_max))
+            if self.music_files and random.random() < 0.3:
+                music_np = _load_audio_mono(random.choice(self.music_files), self.sample_rate)
+                wav_np = _mix_background(wav_np, music_np, random.uniform(0.0, 10.0))
+            if self.bg_speech_files and random.random() < 0.5:
+                speech_np = _load_audio_mono(random.choice(self.bg_speech_files), self.sample_rate)
+                wav_np = _mix_background(wav_np, speech_np, random.uniform(10.0, 25.0))
+            if self.rir_files and random.random() < 0.3:
+                rir_np = _load_audio_mono(random.choice(self.rir_files), self.sample_rate)
+                wav_np = _apply_reverb(wav_np, rir_np)
+            if random.random() < 0.3:
+                wav_np = _pitch_shift(wav_np, self.sample_rate, random.uniform(self.pitch_min, self.pitch_max))
+            if random.random() < 0.3:
+                wav_np = _speed_perturb(wav_np, random.uniform(self.speed_min, self.speed_max))
+            peak = np.max(np.abs(wav_np))
+            if peak > 1e-9:
+                wav_np = wav_np / peak
 
-        # Apply microphone silence/noise (80% probability if available)
-        if self.mic_noise_files and random.random() < 0.8:
-            mic_path = random.choice(self.mic_noise_files)
-            mic_np = _load_audio_mono(mic_path, self.sample_rate)
-            snr = random.uniform(self.snr_min, self.snr_max)
-            wav_np = _mix_background(wav_np, mic_np, snr)
-
-        # --- Music Mixing (30% probability, louder) ---
-        if self.music_files and random.random() < 0.3:
-            music_path = random.choice(self.music_files)
-            music_np = _load_audio_mono(music_path, self.sample_rate)
-            # Music is louder: lower SNR (0.0 to 10.0 dB)
-            snr = random.uniform(0.0, 10.0)
-            wav_np = _mix_background(wav_np, music_np, snr)
-
-        # --- Background Speech Mixing (50% probability, quieter) ---
-        if self.bg_speech_files and random.random() < 0.5:
-            speech_path = random.choice(self.bg_speech_files)
-            speech_np = _load_audio_mono(speech_path, self.sample_rate)
-            # Background speech is quieter: higher SNR (10.0 to 25.0 dB)
-            snr = random.uniform(10.0, 25.0)
-            wav_np = _mix_background(wav_np, speech_np, snr)
-
-        # --- Reverb ---
-        # Apply RIR (30% probability if available)
-        if self.rir_files and random.random() < 0.3:
-            rir_path = random.choice(self.rir_files)
-            rir_np = _load_audio_mono(rir_path, self.sample_rate)
-            wav_np = _apply_reverb(wav_np, rir_np)
-
-        # --- Pitch Shift ---
-        # Apply pitch shift (30% probability)
-        if random.random() < 0.3:
-            n_steps = random.uniform(self.pitch_min, self.pitch_max)
-            wav_np = _pitch_shift(wav_np, self.sample_rate, n_steps)
-
-        # --- Speed Perturbation ---
-        # Apply speed perturb (30% probability)
-        if random.random() < 0.3:
-            f = random.uniform(self.speed_min, self.speed_max)
-            wav_np = _speed_perturb(wav_np, f)
-
-        # 3. Post-Augmentation Normalization and Conversion
-        # Re-normalize to avoid clipping
-        peak = np.max(np.abs(wav_np))
-        if peak > 1e-9:
-            wav_np = wav_np / peak
-
-        # --- Convert back to torch ---
         wav_t = torch.from_numpy(wav_np).float()
-
-        # Send back to original device
         if input_device is not None:
             wav_t = wav_t.to(input_device)
-
-        if requires_grad:
-            wav_t.requires_grad_()
-
         return wav_t
 
     @timed
