@@ -44,7 +44,7 @@ sweep = [
 ]
 
 [project.scripts]
-ww_trainer-train = "ww_trainer.trainer:train"
+ww_trainer-train = "ww_trainer.cli:train"
 ww_trainer-benchmark = "ww_trainer.benchmark:main"
 
 [project.urls]

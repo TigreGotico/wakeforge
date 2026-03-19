@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+"""Wake-word trainer core: model lifecycle, training loop, and inference."""
 import csv
 import json
 import os.path
@@ -6,65 +7,20 @@ import random
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
-import click
 import numpy as np
 import torch
 from colorama import Fore, Style
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
-)
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ww_trainer.checkpoint import save_checkpoint, load_checkpoint
 from ww_trainer.dataset import AudioDataset, collate_fn
-from ww_trainer.feats import (
-    OnnxFeatureExtractor,
-    MfccExtractor,
-    FilterbankExtractor,
-    SincNetExtractor,
-    HubertExtractor,
-    Wav2Vec2Extractor,
-    Wav2Vec2BertExtractor,
-    DeltaExtractor,
-    GammatoneExtractor,
-    LEAFExtractor,
-    PLPExtractor,
-    PNCCExtractor,
-    CQTExtractor,
-    VoiceActivityExtractor,
-    PitchExtractor,
-    SNRAwareExtractor,
-)
-from ww_trainer.tiers import HARDWARE_TIERS, get_tier, list_tiers
-
-EXTRACTOR_REGISTRY = {
-    "onnx": OnnxFeatureExtractor,
-    "mfcc": MfccExtractor,
-    "filterbank": FilterbankExtractor,
-    "sincnet": SincNetExtractor,
-    "hubert": HubertExtractor,
-    "wav2vec2": Wav2Vec2Extractor,
-    "wav2vec2bert": Wav2Vec2BertExtractor,
-    "delta_mfcc": None,           # special: MfccExtractor wrapped in DeltaExtractor
-    "gammatone": GammatoneExtractor,
-    "delta_filterbank": None,     # special: FilterbankExtractor wrapped in DeltaExtractor
-    "leaf": LEAFExtractor,
-    "plp": PLPExtractor,
-    "pncc": PNCCExtractor,
-    "cqt": CQTExtractor,
-}
+from ww_trainer.evaluation import evaluate_model, log_metrics_csv
+from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
 from ww_trainer.loss import LossManager
 from ww_trainer.mining import mine_hard_negatives, save_mining_cache, load_mining_cache
-from ww_trainer.model import (
-    FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
-    TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
-    KWTHead, ConformerHead, CRNNHead,
-    BaseWakeModel,
-)
 from ww_trainer.utils import timed
 from ww_trainer.visualization import (
-    plot_roc, plot_pr, plot_det,
     log_confidence_histogram, log_pca, log_tsne, log_umap,
     log_embeddings_stats,
 )
@@ -162,78 +118,13 @@ class WakeWordTrainer:
                      featurizer_type: str = "onnx", sample_rate: int = 16000,
                      device: str = "auto",
                      shared_extractor=None, **kwargs):
-        # --- Build extractor ---
-        if shared_extractor is not None:
-            extractor = shared_extractor
-        else:
-            n_feat = kwargs.get("n_mfcc", kwargs.get("n_mels", kwargs.get("n_filters", 40)))
-            _EXTRACTOR_BUILDERS = {
-                "onnx": lambda: OnnxFeatureExtractor(featurizer, sample_rate, device),
-                "mfcc": lambda: MfccExtractor(sr=sample_rate, n_mfcc=n_feat),
-                "filterbank": lambda: FilterbankExtractor(sr=sample_rate, n_mels=n_feat),
-                "sincnet": lambda: SincNetExtractor(sr=sample_rate, n_filters=n_feat),
-                "gammatone": lambda: GammatoneExtractor(sr=sample_rate, n_filters=n_feat),
-                "leaf": lambda: LEAFExtractor(sr=sample_rate, n_filters=n_feat),
-                "plp": lambda: PLPExtractor(sr=sample_rate, n_plp=kwargs.get("n_plp", 13)),
-                "pncc": lambda: PNCCExtractor(sr=sample_rate, n_pncc=kwargs.get("n_pncc", 13)),
-                "cqt": lambda: CQTExtractor(sr=sample_rate),
-                "hubert": lambda: HubertExtractor(featurizer, sample_rate, device),
-                "wav2vec2": lambda: Wav2Vec2Extractor(featurizer, sample_rate, device),
-                "wav2vec2bert": lambda: Wav2Vec2BertExtractor(
-                    featurizer or "facebook/w2v-bert-2.0", sample_rate, device),
-                "delta_mfcc": lambda: DeltaExtractor(MfccExtractor(sr=sample_rate, n_mfcc=n_feat)),
-                "delta_filterbank": lambda: DeltaExtractor(
-                    FilterbankExtractor(sr=sample_rate, n_mels=n_feat)),
-            }
-            builder = _EXTRACTOR_BUILDERS.get(featurizer_type)
-            if builder is None:
-                raise ValueError(
-                    f"Unknown featurizer_type: {featurizer_type!r}. "
-                    f"Choose from: {', '.join(sorted(_EXTRACTOR_BUILDERS))}"
-                )
-            extractor = builder()
-
-            # Optional enrichment wrappers
-            if kwargs.get("use_vad", False):
-                extractor = VoiceActivityExtractor(extractor)
-            if kwargs.get("use_pitch", False):
-                extractor = PitchExtractor(extractor)
-            if kwargs.get("use_snr", False):
-                extractor = SNRAwareExtractor(extractor)
-
-        if feature_dim is None:
-            feature_dim = extractor.feature_dim
-
-        # --- Build classifier head ---
-        _HEAD_REGISTRY: dict[str, tuple[type, set[str]]] = {
-            "ffn": (FfnClassifierHead, {"hidden_dim", "dropout"}),
-            "gru": (GruClassifierHead, {"hidden_dim", "dropout", "bidirectional", "gru_n_layers"}),
-            "cnn": (CnnClassifierHead, {"conv_dim", "linear_dim", "kernel_size", "stride"}),
-            "bcresnet": (BCResNetHead, {"tau"}),
-            "tcresnet": (TCResNetHead, {"variant", "channels", "kernel_size"}),
-            "dscnn": (DSCNNHead, {"size"}),
-            "matchboxnet": (MatchboxNetHead, {"B", "R", "C", "kernel_sizes"}),
-            "res15": (Res15Head, {"channels"}),
-            "kwt": (KWTHead, {"patch_len", "d_model", "n_heads", "n_layers", "dim_ff", "dropout"}),
-            "conformer": (ConformerHead, {"d_model", "n_heads", "n_layers", "conv_kernel", "dim_ff", "dropout"}),
-            "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
-        }
-        entry = _HEAD_REGISTRY.get(arch_name)
-        if entry is None:
-            raise ValueError(
-                f"Unknown classifier architecture: {arch_name!r}. "
-                f"Choose from: {', '.join(sorted(_HEAD_REGISTRY))}"
-            )
-        cls, valid_args = entry
-        inst_kwargs = {k: v for k, v in kwargs.items() if k in valid_args}
-        clf = cls(device=device, sample_rate=sample_rate, input_size=feature_dim, **inst_kwargs)
-
-        return BaseWakeModel(
-            feature_extractor=extractor,
-            classifier=clf,
-            sample_rate=sample_rate,
-            device=device
-        )
+        """Delegate to ``ww_trainer.factory.create_model``."""
+        return create_model(arch_name, featurizer, feature_dim,
+                            featurizer_type=featurizer_type,
+                            sample_rate=sample_rate,
+                            device=device,
+                            shared_extractor=shared_extractor,
+                            **kwargs)
 
     # ----------------- Evaluation & training -----------------
     @staticmethod
@@ -247,70 +138,24 @@ class WakeWordTrainer:
 
     @timed
     def _evaluate(self, dataset, batch_size=128, threshold=0.5, epoch: int = 0, output_dir: Optional[Path] = None, aug_prob=0):
-        if not dataset:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, [], []
-
-        loader = DataLoader(AudioDataset(dataset, aug_prob=aug_prob), batch_size=batch_size, shuffle=True,
-                            collate_fn=lambda b: collate_fn(b, self.device))
-
-        preds, probs, targets = [], [], []
-        paths_all = []
-        self.model.eval()
-        with torch.no_grad():
-            for wavs, labels, paths in tqdm(loader, desc="Evaluating", leave=False):
-                logits = self.model(wavs)
-                prob = torch.sigmoid(logits).cpu().numpy().flatten()
-                pred = (prob > threshold).astype(int)
-                preds.extend(pred.tolist())
-                probs.extend(prob.tolist())
-                targets.extend(labels.cpu().int().numpy().tolist())
-                paths_all.extend(paths)
-
-        acc = accuracy_score(targets, preds) if len(targets) > 0 else 0.0
-        prec = precision_score(targets, preds, zero_division=0) if len(targets) > 0 else 0.0
-        rec = recall_score(targets, preds, zero_division=0) if len(targets) > 0 else 0.0
-        f1 = f1_score(targets, preds, zero_division=0) if len(targets) > 0 else 0.0
-        try:
-            auc = roc_auc_score(targets, probs) if len(set(targets)) > 1 else 0.0
-        except Exception:
-            auc = 0.0
-
-        fp_paths = [p for p, t, pr in zip(paths_all, targets, preds) if pr == 1 and t == 0]
-        fn_paths = [p for p, t, pr in zip(paths_all, targets, preds) if pr == 0 and t == 1]
-
-        if self.mlflow:
-            try:
-                tgt_arr = np.array(targets)
-                prob_arr = np.array(probs)
-                pos_mean = np.mean(prob_arr[tgt_arr == 1]) if np.any(tgt_arr == 1) else 0
-                neg_mean = np.mean(prob_arr[tgt_arr == 0]) if np.any(tgt_arr == 0) else 0
-                separation = pos_mean - neg_mean
-                self.mlflow.log_metrics({
-                    "mean_conf_wake": pos_mean,
-                    "mean_conf_nonwake": neg_mean,
-                    "mean_conf_gap": separation,
-                }, step=epoch)
-            except Exception as e:
-                print(f"Failed to log confidence stats to MLflow: {e}")
-
-        if output_dir is not None:
-            plot_dir = Path(output_dir) / "roc_pr_det"
-            plot_dir.mkdir(parents=True, exist_ok=True)
-            plot_roc(targets, probs, epoch, plot_dir, auc, self.mlflow)
-            plot_pr(targets, probs, epoch, plot_dir, self.mlflow)
-            plot_det(targets, probs, epoch, plot_dir, self.mlflow)
-
-        return acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs
+        """Delegate to ``ww_trainer.evaluation.evaluate_model``."""
+        return evaluate_model(
+            model=self.model,
+            dataset=dataset,
+            device=self.device,
+            batch_size=batch_size,
+            threshold=threshold,
+            epoch=epoch,
+            output_dir=output_dir,
+            aug_prob=aug_prob,
+            mlflow=self.mlflow,
+        )
 
     @timed
     def _log_metrics_csv(self, path: str, epoch: int, loss: float, acc: float, prec: float, rec: float,
                          f1: float, auc: float) -> None:
-        new = not Path(path).exists()
-        with open(path, "a", newline="") as f:
-            writer = csv.writer(f)
-            if new:
-                writer.writerow(["epoch", "loss", "accuracy", "precision", "recall", "f1", "auc"])
-            writer.writerow([epoch, loss, acc, prec, rec, f1, auc])
+        """Delegate to ``ww_trainer.evaluation.log_metrics_csv``."""
+        log_metrics_csv(path, epoch, loss, acc, prec, rec, f1, auc)
 
     @timed
     def _log_embeddings_stats(self, dataset, epoch: int, batch_size: int = 128):
@@ -691,6 +536,7 @@ class WakeWordTrainer:
                                optimizer: torch.optim.Optimizer = None,
                                metrics: dict = None,
                                epoch: int = -1):
+        """Save checkpoint and optionally export to ONNX + log to MLflow."""
         onnx_path = model_file.with_suffix(".onnx")
 
         self.save_checkpoint(
@@ -717,233 +563,8 @@ class WakeWordTrainer:
 
     # --------------------- Inference API ---------------------
     def infer(self, audio_tensor: torch.Tensor) -> float:
+        """Run single-sample inference, returning wake-word probability."""
         self.model.eval()
         with torch.no_grad():
             logit = self.model([audio_tensor.to(self.device)])
             return float(torch.sigmoid(logit).item())
-
-
-# -------------------- CLI --------------------
-
-@click.command(help="""
-Train a wake-word detection model using the WakeWordTrainer.
-
-This command handles full training — data loading, loss setup, adaptive sampling,
-hard-negative mining, and evaluation — with optional MLflow tracking and ONNX export.
-""")
-# -------------------------- Hardware tier preset --------------------------
-@click.option("--tier", default=None,
-              type=click.Choice(["micro", "small", "medium", "large"]),
-              help="Hardware tier preset. Overrides --arch and --featurizer-type if set. "
-                   "Run with --list-tiers to see all options.")
-@click.option("--list-tiers", "show_tiers", is_flag=True, default=False,
-              help="Print hardware tier table and exit.")
-# -------------------------- Dataset --------------------------
-@click.option("--wake-word", required=True,
-              help="Name of the wake word (used in model naming and metadata).")
-@click.option("--metadata", required=True,
-              help="Path to CSV file containing training samples as 'path,label'.")
-@click.option("--test-metadata", default=None,
-              help="Optional CSV with test data (same format). If not provided, dataset is split.")
-@click.option("--split", default=0.8, type=float,
-              help="Train/test split ratio if --test-metadata is not provided (default: 0.8).")
-# -------------------------- Training --------------------------
-@click.option("--epochs", default=50, type=int, help="Number of training epochs.")
-@click.option("--batch-size", default=16, type=int, help="Mini-batch size.")
-@click.option("--lr", default=5e-4, type=float, help="Initial learning rate.")
-@click.option("--resume", default=None,  help="Resume training from an existing checkpoint (.pt).")
-@click.option("--output-dir", default=None, help="Directory to store checkpoints, metrics, and visualizations.")
-@click.option("--save-best", is_flag=True, help="If set, saves separate checkpoints for best precision/recall/F1/loss.")
-# -------------------------- Architecture --------------------------
-@click.option("--featurizer", type=str, help="path feature extractor .onnx model")
-@click.option("--feature-dim", type=int,  help="Number of output features from onnx featurizer.")
-@click.option("--arch", default="gru", help="Model architecture (e.g., gru, cnn, ffn).")
-@click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
-              help="'cuda', 'cpu', or 'auto' (auto-selects CUDA if available).")
-@click.option("--sample-rate", type=int, default=16000, help="Audio sample rate used for training.")
-@click.option("--export-onnx", is_flag=True,  help="If set, export checkpoints to ONNX format.")
-# -------------------------- Loss Configuration --------------------------
-@click.option("--loss-type", default="bce",
-              help="Loss type(s): 'bce', 'triplet', 'pair', 'cn2pair', 'rppl', or comma-separated combination.")
-@click.option("--loss-weight", default="1.0",
-              help="Comma-separated weights for multiple losses, e.g. '0.5,0.5'.")
-@click.option("--triplet-margin", default=1.0, type=float, help="Margin used for triplet-based losses.")
-@click.option("--mining-type", "mining_type",
-              type=click.Choice(['semihard', 'hard', 'random']), default="semihard",
-              help="Triplet mining strategy (only used with triplet-style losses).")
-# -------------------------- Hard-Negative Mining --------------------------
-@click.option("--neg-threshold", default=0.5, type=float,
-              help="Model confidence below which predictions are considered non-wake.")
-@click.option("--mine-sample", default=0.2, type=float,
-              help="Fraction of the non-wake dataset to sample for mining.")
-@click.option("--patience", default=2, type=int,
-              help="Number of epochs with no new hard negatives before early stopping.")
-@click.option("--base-hard", default=0.5, type=float,
-              help="Initial ratio of hard negatives per wake sample (early training).")
-@click.option("--max-hard", default=5.0, type=float,
-              help="Maximum ratio of hard negatives near the end of training.")
-@click.option("--base-easy", default=1.5, type=float,
-              help="Initial ratio of easy negatives to stabilize early learning.")
-@click.option("--min-easy", default=0.2, type=float,
-              help="Minimum ratio of easy negatives in late training.")
-@click.option("--base-random", default=0.1, type=float,
-              help="Baseline ratio of random negatives maintained for diversity.")
-@click.option("--total-ratio", default=5.0, type=float,
-              help="Overall target number of negatives per wake sample.")
-@click.option("--blend-ratio", default=0.7, type=float,
-              help="Blend factor between progress-based and LR-based adaptation (0-1).")
-# -------------------------- Augmentation --------------------------
-@click.option('--aug-prob', default=0.8, type=float,
-              help='Probability of applying any augmentation to each training sample.')
-@click.option('--vc-prob', default=0.1, type=float,
-              help='Probability of applying voice-cloning augmentation.')
-@click.option('--bg-noise-folder', default=None,
-              help='Folder with random noise samples for augmentation.')
-@click.option('--mic-noise-folder', default=None,
-              help='Folder with microphone or silence background clips.')
-@click.option('--music-folder', default=None,
-              help='Folder with music clips.')
-@click.option('--bg-speech-folder', default=None,
-              help='Folder with background speech clips.')
-@click.option('--rir-folder', default=None,
-              help='Folder containing Room Impulse Responses (RIRs) for reverberation simulation.')
-@click.option('--vc-folder', default=None,
-              help='Folder with multiple voices for random voice cloning.')
-@click.option('--snr-min', default=0.0, type=float, help='Minimum SNR for noise mixing.')
-@click.option('--snr-max', default=20.0, type=float, help='Maximum SNR for noise mixing.')
-@click.option('--pitch-min', default=-1.0, type=float, help='Minimum pitch shift in semitones.')
-@click.option('--pitch-max', default=1.0, type=float, help='Maximum pitch shift in semitones.')
-@click.option('--speed-min', default=0.95, type=float, help='Minimum speed perturbation factor.')
-@click.option('--speed-max', default=1.05, type=float, help='Maximum speed perturbation factor.')
-# -------------------------- Performance --------------------------
-@click.option("--amp", "use_amp", is_flag=True, default=False,
-              help="Enable mixed-precision training (requires CUDA).")
-@click.option("--accumulate-grad-batches", default=1, type=int,
-              help="Accumulate gradients over N batches before optimizer step (default: 1).")
-# -------------------------- Logging --------------------------
-@click.option("--metrics-log", default="metrics_log.csv",
-              help="Path to CSV file where per-epoch metrics will be appended.")
-@click.option("--mlflow-uri", default=None,
-              help="Optional MLflow tracking URI.")
-# -------------------------- Visualization --------------------------
-@click.option("--pca-every", default=1, type=int,
-              help="Run PCA visualization every N epochs (0 disables).")
-@click.option("--tsne-every", default=0, type=int,
-              help="Run t-SNE embedding visualization every N epochs (0 disables).")
-@click.option("--umap-every", default=0, type=int,
-              help="Run UMAP embedding visualization every N epochs (0 disables).")
-def train(**opts):
-    """Train a wake word model using WakeWordTrainer with optional ONNX export."""
-    show_tiers = opts.pop("show_tiers", False)
-    if show_tiers:
-        click.echo(list_tiers())
-        return
-
-    tier = opts.pop("tier", None)
-
-    metadata = opts.pop("metadata")
-    test_metadata = opts.pop("test_metadata")
-    ww_name = opts.get("wake_word")
-    mlflow_uri = opts.pop("mlflow_uri")
-    arch = opts.pop("arch")
-    out_dir = opts.pop("output_dir") or f"trained_models/{arch}/{ww_name}"
-    onnx_model = opts.pop("featurizer")
-    feat_dim = opts.pop("feature_dim")
-    use_amp = opts.pop("use_amp", False)
-    accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
-
-    if tier is not None:
-        tc = get_tier(tier)
-        arch = tc.head_arch
-        featurizer_type = tc.extractor_type
-        opts["hidden_dim"] = tc.hidden_dim
-        opts["bidirectional"] = tc.bidirectional
-        opts["gru_n_layers"] = tc.gru_n_layers
-        if tc.extractor_type == "mfcc":
-            opts["n_mfcc"] = tc.n_mfcc
-            feat_dim = None
-        click.secho(f"[Tier] Using preset '{tier}': {tc.description}", fg="cyan")
-
-    if opts["device"] == "auto":
-        opts["device"] = "cuda" if torch.cuda.is_available() else "cpu"
-    click.secho(f"Device: {opts['device']}", fg="green", bold=True)
-
-    if opts["mine_sample"] == 0:
-        click.secho("Hard-negative mining disabled", fg="yellow", bold=True)
-    else:
-        click.secho("Hard-negative mining enabled", fg="green", bold=True)
-
-    loss_types = [x.strip().lower() for x in opts.pop("loss_type").split(",")]
-    loss_weights = [float(x.strip()) for x in str(opts.pop("loss_weight")).split(",")]
-    if len(loss_weights) == 1 and len(loss_types) > 1:
-        loss_weights = [loss_weights[0]] * len(loss_types)
-    if len(loss_weights) != len(loss_types):
-        raise click.BadParameter("Number of loss weights must match number of loss types")
-
-    losses_cfg = []
-    for name, w in zip(loss_types, loss_weights):
-        cfg = {"name": name, "weight": w}
-        if name in ("triplet", "pair", "cn2pair"):
-            cfg["margin"] = opts.get("triplet_margin", 1.0)
-        losses_cfg.append(cfg)
-
-    with open(metadata, "r", encoding="utf-8") as f:
-        entries: List[Tuple[str, str]] = [tuple(line.strip().split(",", 1))
-                                          for line in f if line.strip()]
-    random.shuffle(entries)
-
-    if test_metadata:
-        with open(test_metadata, "r", encoding="utf-8") as f:
-            test_data = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
-        train_data = entries
-    else:
-        split_idx = int(len(entries) * opts["split"])
-        train_data, test_data = entries[:split_idx], entries[split_idx:]
-
-    train_data = [f for f in train_data if os.path.isfile(f[0])]
-    test_data = [f for f in test_data if os.path.isfile(f[0])]
-
-    click.secho(f"Training {arch} on {len(train_data)} samples", fg="blue", bold=True)
-
-    resume = opts.get("resume")
-    trainer = WakeWordTrainer(arch=arch, featurizer=onnx_model, feature_dim=feat_dim,
-                              mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
-                              use_amp=use_amp,
-                              **opts)
-    trainer.train(
-        train_data=train_data,
-        test_data=test_data,
-        epochs=opts["epochs"],
-        batch_size=opts["batch_size"],
-        lr=opts["lr"],
-        neg_threshold=opts["neg_threshold"],
-        mine_fraction=opts["mine_sample"],
-        mining_type=opts["mining_type"],
-        patience=opts["patience"],
-        save_best=opts["save_best"],
-        metrics_log=opts["metrics_log"],
-        tsne_every=opts["tsne_every"],
-        pca_every=opts["pca_every"],
-        umap_every=opts["umap_every"],
-        output_dir=out_dir,
-        base_hard=opts["base_hard"],
-        max_hard=opts["max_hard"],
-        base_easy=opts["base_easy"],
-        min_easy=opts["min_easy"],
-        base_random=opts["base_random"],
-        total_ratio=opts["total_ratio"],
-        blend_ratio=opts["blend_ratio"],
-        use_amp=use_amp,
-        accumulate_grad_batches=accumulate_grad_batches,
-        resume=resume,
-    )
-
-    meta = Path(out_dir) / f"{ww_name}_meta.json"
-    meta.parent.mkdir(parents=True, exist_ok=True)
-    with open(meta, "w") as f:
-        json.dump(opts, f, indent=2)
-    click.echo(click.style(f"Training complete. Model and config saved to {out_dir}", fg="green", bold=True))
-
-
-if __name__ == "__main__":
-    train()

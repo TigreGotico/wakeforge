@@ -83,6 +83,12 @@ from ww_trainer.metrics import (
     classification_report,
 )
 
+# --- Factory ---
+from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
+
+# --- Evaluation ---
+from ww_trainer.evaluation import evaluate_model, log_metrics_csv
+
 # --- Augmentation ---
 from ww_trainer.augment import (
     AugmentationPipeline,
