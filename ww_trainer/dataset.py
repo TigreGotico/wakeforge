@@ -72,7 +72,8 @@ class AudioDataset(Dataset):
                  pitch_max: float = 1.0,
                  speed_min: float = 0.95,
                  speed_max: float = 1.05,
-                 device="auto"
+                 device="auto",
+                 validate: bool = False,
                  ):
         self.pipeline = pipeline
         self.samples = samples
@@ -121,6 +122,36 @@ class AudioDataset(Dataset):
             unique = set(labels)
             dist = {lbl: labels.count(lbl) for lbl in sorted(unique)}
             logger.info("AudioDataset: %d samples, label distribution: %s", len(self.data), dist)
+
+            # Warn on severe class imbalance (>10:1 ratio)
+            counts = list(dist.values())
+            if len(counts) >= 2:
+                ratio = max(counts) / max(1, min(counts))
+                if ratio > 10:
+                    logger.warning(
+                        "AudioDataset: severe class imbalance (%.1f:1). "
+                        "Consider rebalancing or using focal loss.", ratio
+                    )
+
+        # Deep validation: check files are readable audio
+        if validate and self.data:
+            import soundfile as sf
+            bad_files = []
+            for path, label in self.data:
+                if not _os.path.isfile(path):
+                    continue  # already reported above
+                try:
+                    info = sf.info(path)
+                    if info.frames == 0:
+                        bad_files.append((path, "empty audio"))
+                except Exception as exc:
+                    bad_files.append((path, str(exc)))
+            if bad_files:
+                logger.warning("AudioDataset validation: %d unreadable files", len(bad_files))
+                for p, reason in bad_files[:5]:
+                    logger.warning("  Bad file: %s — %s", p, reason)
+                if len(bad_files) > 5:
+                    logger.warning("  ... and %d more", len(bad_files) - 5)
 
     def __len__(self):
         return len(self.samples)

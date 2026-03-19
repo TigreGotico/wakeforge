@@ -53,6 +53,16 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="'cuda', 'cpu', or 'auto' (auto-selects CUDA if available).")
 @click.option("--sample-rate", type=int, default=16000, help="Audio sample rate used for training.")
 @click.option("--export-onnx", is_flag=True,  help="If set, export checkpoints to ONNX format.")
+@click.option("--export-c", "export_c_path", type=click.Path(), default=None,
+              help="Export final FFN model as C header for ESP32 (e.g. model.h).")
+@click.option("--calibrate", is_flag=True, help="Fit Platt scaling on validation set after training.")
+# -------------------------- Enrichment --------------------------
+@click.option("--use-vad", is_flag=True, help="Enable heuristic energy-based VAD enrichment.")
+@click.option("--use-neural-vad", is_flag=True, help="Enable pre-trained neural VAD (Silero) enrichment.")
+@click.option("--vad-onnx", "vad_onnx_path", type=click.Path(exists=True), 
+              help="Path to pre-trained Silero VAD ONNX model (requirement for --use-neural-vad).")
+@click.option("--use-pitch", is_flag=True, help="Enable pitch-tracking enrichment.")
+@click.option("--use-snr", is_flag=True, help="Enable per-frame SNR estimation enrichment.")
 # -------------------------- Loss Configuration --------------------------
 @click.option("--loss-type", default="bce",
               help="Loss type(s): 'bce', 'triplet', 'pair', 'cn2pair', 'rppl', or comma-separated combination.")
@@ -196,8 +206,12 @@ def train(**opts: dict) -> None:
 
     click.secho(f"Training {arch} on {len(train_data)} samples", fg="blue", bold=True)
 
+    export_c_path = opts.pop("export_c_path", None)
+    calibrate = opts.pop("calibrate", False)
+
     resume = opts.get("resume")
     trainer = WakeWordTrainer(arch=arch, featurizer=onnx_model, feature_dim=feat_dim,
+                              wake_word=ww_name,
                               mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
                               use_amp=use_amp,
                               **opts)
@@ -228,6 +242,21 @@ def train(**opts: dict) -> None:
         accumulate_grad_batches=accumulate_grad_batches,
         resume=resume,
     )
+
+    # Post-training: C header export
+    if export_c_path:
+        from ww_trainer.export_c import export_to_c_header
+        try:
+            export_to_c_header(trainer.model, export_c_path, wake_word=ww_name or "wake_word")
+            click.secho(f"C header exported to {export_c_path}", fg="green")
+        except TypeError as exc:
+            click.secho(f"C export failed (FFN only): {exc}", fg="red")
+
+    # Post-training: Platt calibration
+    if calibrate:
+        from ww_trainer.calibration import calibrate_model
+        params = calibrate_model(trainer.model, test_data, out_dir, device=opts["device"])
+        click.secho(f"Calibration: coef={params['coef']:.4f}, intercept={params['intercept']:.4f}", fg="green")
 
     meta = Path(out_dir) / f"{ww_name}_meta.json"
     meta.parent.mkdir(parents=True, exist_ok=True)

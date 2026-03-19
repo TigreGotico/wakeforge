@@ -28,6 +28,7 @@ from ww_trainer.feats import (
     HubertExtractor,
     Wav2Vec2Extractor,
     Wav2Vec2BertExtractor,
+    TorchAudioHubertExtractor,
     DeltaExtractor,
     GammatoneExtractor,
     LEAFExtractor,
@@ -37,6 +38,7 @@ from ww_trainer.feats import (
     VoiceActivityExtractor,
     PitchExtractor,
     SNRAwareExtractor,
+    SileroVadWrapper,
 )
 from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
@@ -60,6 +62,7 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "plp": PLPExtractor,
     "pncc": PNCCExtractor,
     "cqt": CQTExtractor,
+    "torchaudio_hubert": TorchAudioHubertExtractor,
 }
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
@@ -210,6 +213,11 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
         # Optional enrichment wrappers
         if kwargs.get("use_vad", False):
             extractor = VoiceActivityExtractor(extractor)
+        if kwargs.get("use_neural_vad", False):
+            extractor = SileroVadWrapper(
+                extractor, 
+                onnx_path=kwargs.get("vad_onnx_path")
+            )
         if kwargs.get("use_pitch", False):
             extractor = PitchExtractor(extractor)
         if kwargs.get("use_snr", False):
