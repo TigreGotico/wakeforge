@@ -4,6 +4,24 @@
 
 ---
 
+### 2026-03-19 — Inspiration features from precise-lite-trainer
+
+**Type:** Feature
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed; plan reviewed before implementation
+**Files created:** `ww_trainer/cache.py`, `test/smoketests/test_cache_smoke.py`, `test/smoketests/test_freeze_smoke.py`, `test/smoketests/test_replacement_smoke.py`, `test/smoketests/test_fitness_smoke.py`
+**Files modified:** `ww_trainer/dataset.py`, `ww_trainer/trainer.py`, `ww_trainer/evaluation.py`, `ww_trainer/cli.py`, `docs/training.md`, `docs/api.md`, `docs/architecture.md`, `FAQ.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+- Feature vectorization cache (`FeatureCache`): MD5-based content hashing, `.npy` storage, auto-invalidation on extractor change
+- Layer freezing for transfer learning: `freeze_extractor`, `freeze_layers`, progressive unfreezing at epoch N
+- Epoch-level data replacement: `replacement_ratio` with optional balanced 50/50 pos/neg resampling
+- Composite fitness score: `compute_fitness_score()` with FP-weighted penalty + model size penalty, `best_fitness.pt` checkpoint
+- 8 new CLI options, 20 new smoke tests (all passing), 671 total tests passing
+- Full documentation update: FAQ, training guide, API reference, architecture
+
+---
+
 ### 2026-03-19 — Add comprehensive smoke test suite
 
 **Type:** Test

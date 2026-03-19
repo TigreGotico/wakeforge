@@ -65,9 +65,11 @@ CSV file: /path/audio.wav,1
      |
      v
 AudioDataset.__getitem__          dataset.py:269
+  FeatureCache.get(path)?         cache.py (if cache hit + no augment → skip load)
   torchaudio.load(path)
   resample to 16 kHz if needed    dataset.py:284-289
   optional augmentation           dataset.py:295-296
+  FeatureCache.put(path) if no augment
      |  wav: Tensor[T]  float32
      v
 collate_fn(batch, device)         dataset.py:301
@@ -271,3 +273,19 @@ This separation means you can load just the model weights without carrying a lar
 ### Adaptive hard-negative sampling
 
 The training loop does not use a fixed hard-negative ratio. Instead, it computes a `readiness` score from embedding statistics (`trainer.py:186`–`188`) and uses an exponential moving average of that score to modulate how many hard vs easy vs random negatives are sampled each epoch (`trainer.py:398`–`400`). This prevents gradient collapse from overexposure to hard examples early in training.
+
+### Feature vectorization cache
+
+`FeatureCache` (`cache.py`) stores un-augmented waveforms as `.npy` files keyed by MD5(file content + extractor class name + feature_dim + sample_rate). This avoids redundant I/O and resampling for test/validation sets across epochs. The cache is bypassed when augmentation is active for a given sample, ensuring augmented variants are always freshly computed. Integrated into `AudioDataset.__getitem__` (`dataset.py`).
+
+### Layer freezing for transfer learning
+
+`WakeWordTrainer._freeze()` / `_unfreeze()` (`trainer.py`) set `requires_grad=False` on the feature extractor and/or first N classifier parameters. Progressive unfreezing (`unfreeze_at_epoch`) recreates the optimizer at the specified epoch to include newly-thawed parameters.
+
+### Epoch-level data replacement
+
+After assembling epoch_data from wake + hard/easy/random negatives, `replacement_ratio` fraction is dropped and replaced with random samples from the full pool (`trainer.py`). Optional balanced mode ensures 50/50 pos/neg in the replaced portion. Complements hard-negative mining by introducing additional diversity.
+
+### Composite fitness score
+
+`compute_fitness_score()` (`evaluation.py`) produces a single training quality metric: `(1 - 0.8*FP_rate - 0.2*FN_rate) * size_penalty`. FP is penalized 4× more than FN. `size_penalty = max(0, 1 - 0.1 * max(0, params/budget - 1))`. When `--fitness-checkpoint` is enabled, `best_fitness.pt` is saved alongside other metric checkpoints.

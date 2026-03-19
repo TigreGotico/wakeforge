@@ -1,5 +1,25 @@
 # ww-trainer — FAQ
 
+## Inspiration Features (precise-lite-trainer)
+
+**Q: How do I cache extracted features between training runs?**
+
+Use `--feature-cache-dir .feature_cache/` (default). Un-augmented waveforms are cached as `.npy` files keyed by MD5(file content + extractor identity). Cache is bypassed when augmentation is active. Disable with `--no-feature-cache`. See `FeatureCache` — `cache.py`.
+
+**Q: How do I freeze layers for transfer learning / fine-tuning?**
+
+Use `--freeze-extractor` to freeze the entire feature extractor, and/or `--freeze-layers N` to freeze the first N classifier parameters. Add `--unfreeze-at-epoch N` for progressive unfreezing (frozen for N epochs, then all layers train). See `WakeWordTrainer._freeze` — `trainer.py`.
+
+**Q: What is epoch-level data replacement?**
+
+`--replacement-ratio 0.4` randomly drops 40% of epoch data and replaces it with fresh samples from the full pool each epoch, reducing overfitting. `--balanced-replacement` ensures 50/50 wake/nonwake in the replaced portion. Complements hard-negative mining.
+
+**Q: What is the composite fitness score?**
+
+`compute_fitness_score()` (`evaluation.py`) combines detection quality and model size into a single metric: `(1 - 0.8*FP_rate - 0.2*FN_rate) * size_penalty`. FP is penalized 4× more than FN. Enable best-fitness checkpointing with `--fitness-checkpoint`. Set `--fitness-param-budget` for the size penalty threshold.
+
+---
+
 ## New Modules (v1.2)
 
 **Q: How do I export an FFN model to C for ESP32?**

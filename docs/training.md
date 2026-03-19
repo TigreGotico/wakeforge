@@ -213,6 +213,43 @@ All options for `ww_trainer-train` (`trainer.py:668`):
 | `--speed-min` | float | `0.95` | Minimum speed perturbation factor (p=0.3) |
 | `--speed-max` | float | `1.05` | Maximum speed perturbation factor |
 
+### Feature Cache
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--feature-cache-dir` | str | `".feature_cache/"` | Directory for cached feature vectors (`.npy` files) |
+| `--no-feature-cache` | flag | `False` | Disable feature vectorization cache |
+
+`FeatureCache` (`cache.py`) stores un-augmented waveforms keyed by MD5(file content + extractor class + feature_dim + sample_rate). Cache is automatically invalidated when the extractor changes. Bypassed when augmentation is applied to a sample.
+
+### Layer Freezing (Transfer Learning)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--freeze-extractor` | flag | `False` | Freeze entire feature extractor (`requires_grad=False`) |
+| `--freeze-layers` | int | `0` | Freeze first N classifier layer parameters |
+| `--unfreeze-at-epoch` | int | `None` | Unfreeze all layers at this epoch (progressive unfreezing) |
+
+Useful for fine-tuning a pre-trained model on a new wake word. `_freeze()` and `_unfreeze()` methods on `WakeWordTrainer` (`trainer.py`).
+
+### Data Replacement (Epoch Resampling)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--replacement-ratio` | float | `0.0` | Fraction of training data to resample each epoch (0 = disabled) |
+| `--balanced-replacement` | flag | `False` | Ensure equal pos/neg in the resampled portion |
+
+Each epoch, `replacement_ratio` fraction of the epoch data is dropped and replaced with random samples from the full pool. Complements hard-negative mining. Implemented in `WakeWordTrainer.train()` (`trainer.py`).
+
+### Fitness Checkpoint
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--fitness-checkpoint` | flag | `False` | Save `best_fitness.pt` based on composite fitness score |
+| `--fitness-param-budget` | int | `100000` | Parameter budget for the size penalty component |
+
+Composite fitness: `(1 - fp_weight*FP_rate - fn_weight*FN_rate) * size_penalty`. See `compute_fitness_score()` — `evaluation.py`.
+
 ### Performance
 
 | Option | Type | Default | Description |
@@ -357,6 +394,7 @@ When `--save-best` is set, the trainer saves a separate checkpoint whenever a me
 | `best_precision.pt` + `best_precision.ts` | Highest eval precision |
 | `best_recall.pt` + `best_recall.ts` | Highest eval recall |
 | `best_f1.pt` + `best_f1.ts` | Highest eval F1 |
+| `best_fitness.pt` | Highest composite fitness score (requires `--fitness-checkpoint`) |
 
 Without `--save-best`, a checkpoint `ep{N}.pt` is saved every epoch.
 

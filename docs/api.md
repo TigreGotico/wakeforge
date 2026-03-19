@@ -1512,6 +1512,62 @@ Saves best params to `output_dir/best_params.json`.
 
 ---
 
+## `ww_trainer.cache`
+
+Source: `ww_trainer/cache.py`
+
+### `FeatureCache` — `cache.py:19`
+
+```python
+class FeatureCache(cache_dir: str, extractor_name: str, extractor_params_hash: str)
+```
+
+Disk-backed cache for extracted audio features. Stores `.npy` files keyed by MD5(file content + extractor identity).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get` | `(audio_path: str) -> Optional[np.ndarray]` | Return cached features or `None` on miss |
+| `put` | `(audio_path: str, features: np.ndarray) -> None` | Store features in cache |
+| `clear` | `() -> int` | Remove all cached entries; returns count |
+| `size` | `() -> int` | Number of cached `.npy` files |
+
+### `make_extractor_params_hash` — `cache.py:115`
+
+```python
+def make_extractor_params_hash(extractor_name: str, feature_dim: int, sample_rate: int) -> str
+```
+
+Builds a deterministic hash string from extractor configuration. Used as the `extractor_params_hash` argument to `FeatureCache`.
+
+---
+
+## `ww_trainer.evaluation` — `compute_fitness_score`
+
+### `compute_fitness_score` — `evaluation.py:118`
+
+```python
+def compute_fitness_score(
+    f1: float, fp_rate: float, fn_rate: float,
+    param_count: int, param_budget: int,
+    fp_weight: float = 0.8, fn_weight: float = 0.2,
+    size_weight: float = 0.1,
+) -> float
+```
+
+Composite training fitness score. Penalizes FP 4× more than FN, with a model-size penalty for exceeding `param_budget`.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fp_weight` | `0.8` | Weight for false positive rate penalty |
+| `fn_weight` | `0.2` | Weight for false negative rate penalty |
+| `size_weight` | `0.1` | Weight for size penalty |
+
+Formula: `(1 - fp_weight * FP_rate - fn_weight * FN_rate) * max(0, 1 - size_weight * max(0, params/budget - 1))`
+
+Returns a float in `[0, 1]`. Higher is better.
+
+---
+
 ## `ww_trainer.version`
 
 Source: `ww_trainer/version.py`

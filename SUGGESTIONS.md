@@ -105,3 +105,13 @@ Implemented in `ww_trainer/export_c.py`: `export_to_c_header` generates a self-c
 ## S-014 — BaseExtractor.device should track nn.Module.to() ✅ DONE
 
 Implemented via `_apply` override in both `BaseExtractor` (`feats.py`) and `ClassifierHead` (`model.py`). Device attribute auto-updates on `.to()`/`.cuda()`/`.cpu()`.
+
+---
+
+## S-015 — Wire FeatureCache into CLI and evaluation DataLoader
+
+**Problem:** `FeatureCache` is currently integrated into `AudioDataset.__getitem__` but the CLI does not yet construct a `FeatureCache` instance and pass it to the training/evaluation `AudioDataset`. The `--feature-cache-dir` and `--no-feature-cache` options are parsed but not wired through.
+
+**Solution:** In `cli.py`, construct `FeatureCache` from the model's extractor name/params and pass it via `augment_opts` or directly to the `AudioDataset` in the evaluation path. Also pass it to the `evaluate_model` call for test-set caching.
+
+**Impact:** Full end-to-end cache integration. Currently the cache param is only usable via the Python API.
