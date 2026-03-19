@@ -18,6 +18,16 @@ Use `--freeze-extractor` to freeze the entire feature extractor, and/or `--freez
 
 `compute_fitness_score()` (`evaluation.py`) combines detection quality and model size into a single metric: `(1 - 0.8*FP_rate - 0.2*FN_rate) * size_penalty`. FP is penalized 4× more than FN. Enable best-fitness checkpointing with `--fitness-checkpoint`. Set `--fitness-param-budget` for the size penalty threshold.
 
+**Q: Is `--feature-cache-dir` actually wired up?**
+
+Yes (as of 2026-03-19). After the trainer is created, a `FeatureCache` is instantiated from the extractor's name/feature_dim/sample_rate and stored in `trainer.augment_opts["feature_cache"]`. Every training-epoch `AudioDataset` receives it automatically via the loop. Disable with `--no-feature-cache`. See `cli.py` and `ww_trainer/cache.py`.
+
+**Q: Does `SileroVadWrapper.__init__` still download the model at construction?**
+
+No. The `torch.hub.load()` call was moved to the first `forward()` call (lazy init). Construction is now always fast and offline-safe. If you provide `onnx_path`, the ONNX session is still loaded eagerly (local file only). See `feats.py:SileroVadWrapper`.
+
+---
+
 **Q: Where does the epoch training loop live?**
 
 The full training loop was extracted from `WakeWordTrainer.train()` into `ww_trainer/loop.py:training_loop()`. `WakeWordTrainer.train()` is now a thin 4-line delegate. `trainer.py` is 246 lines. Related helpers in `loop.py`: `_build_epoch_data`, `_run_batch_loop`, `_update_best_checkpoints`, `_log_fp_fn_artifacts`.

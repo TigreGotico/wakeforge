@@ -4,6 +4,20 @@
 
 ---
 
+### 2026-03-19 — Bug fixes: FeatureCache CLI wiring, flaky HMM test, SileroVAD lazy init, scripts coverage
+
+**Type:** Fix + Test
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- S-015: Wired `FeatureCache` into CLI (`cli.py`) — `--feature-cache-dir` now functional
+- TD-008: Fixed flaky `test_hmm_fit_updates_parameters` — distinct-frequency sinusoids, relaxed assertion
+- TD-005: Made `SileroVadWrapper` torch.hub load lazy (first `forward()` call)
+- TD-006: Added 17 tests in `test/test_scripts.py` for `GraphemeAugmenter` and audio utils
+- Updated AUDIT.md (TD-005, TD-006, TD-008 resolved), FAQ.md
+**Oversight:** All 714 tests pass; human review required before push
+
+---
+
 ### 2026-03-19 — trainer.py monolith split: loop.py extraction
 
 **Type:** Refactor
