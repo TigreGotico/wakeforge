@@ -2,7 +2,7 @@
 
 Runnable demos covering every architecture in ww-trainer.
 
-## Feature Extractors × Classifier Heads
+## Feature Extractors x Classifier Heads
 
 | # | Example | Extractor | Head | Focus |
 |---|---------|-----------|------|-------|
@@ -23,6 +23,16 @@ Runnable demos covering every architecture in ww-trainer.
 | 21 | `21_crnn.py` | MFCC | CRNN | CNN + GRU hybrid |
 | 22 | `22_leaf_extractor.py` | LEAF | FFN / GRU | Learnable audio frontend (Google 2021) |
 
+## Classical & Specialized Extractors
+
+| # | Example | Extractor | Focus |
+|---|---------|-----------|-------|
+| 23 | `23_plp_pncc_cqt.py` | PLP / PNCC / CQT | Classical perceptual extractors (Hermansky 1990, Kim & Stern 2016) |
+| 24 | `24_vad_enriched.py` | MFCC + VoiceActivity | VAD-enriched features: energy, ZCR, spectral flatness, VAD prob |
+| 25 | `25_pitch_enriched.py` | MFCC + Pitch | Pitch features: F0, voicing probability, F0 delta |
+| 26 | `26_multi_resolution.py` | MultiResolution(MFCC, MFCC) | Fine + coarse temporal resolution concatenation |
+| 27 | `27_snr_aware.py` | MFCC + SNRAware | Per-frame SNR estimation for noisy environments |
+
 ## Inference & Deployment
 
 | # | Example | Focus |
@@ -34,10 +44,15 @@ Runnable demos covering every architecture in ww-trainer.
 
 | # | Example | Focus |
 |---|---------|-------|
-| 10 | `10_knowledge_distillation.py` | Compress large model → small student |
+| 10 | `10_knowledge_distillation.py` | Compress large model into small student |
 | 11 | `11_hardware_tiers.py` | Pre-configured tier presets |
 | 12 | `12_hyperparameter_sweep.py` | Optuna auto-tuning (requires `optuna`) |
 | 13 | `13_benchmark_extractors.py` | Latency and throughput comparison |
+| 28 | `28_full_architecture_search.py` | Genetic search over full architecture space: extractors + heads + losses |
+| 29 | `29_stacked_enrichment.py` | Stack all enrichment wrappers: MFCC + VAD + Pitch + SNR + Delta |
+| 30 | `30_loss_combinations.py` | LossManager multi-loss configs: BCE + Focal + SupCon |
+| 31 | `31_arcface_training.py` | ArcFace angular margin loss for embedding separation |
+| 32 | `32_full_pipeline.py` | End-to-end: build → train → ONNX export → inference → streaming |
 
 ## Quick Start
 
