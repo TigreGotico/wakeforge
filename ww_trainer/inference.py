@@ -1,8 +1,111 @@
 """ONNX-only wake word inference — no PyTorch dependency at runtime."""
 from __future__ import annotations
 
+import math
+from collections import deque
+from typing import Optional
+
 import numpy as np
 import onnxruntime as ort
+
+
+class PredictionSmoother:
+    """Smooths raw per-frame predictions for robust wake word detection.
+
+    Inspired by openWakeWord's prediction buffer + patience mechanism
+    and EfficientWord-Net's relaxation time.
+
+    Supports three smoothing methods:
+    - ``"ema"``: Exponential moving average (fast response, smooth decay).
+    - ``"mean"``: Rolling window mean (stable, uniform weighting).
+    - ``"max"``: Rolling window max (aggressive, catches peaks).
+
+    Args:
+        method: Smoothing method — ``"ema"``, ``"mean"``, or ``"max"``.
+        window_size: Number of frames in the rolling buffer (for mean/max).
+        threshold: Detection threshold for ``is_triggered()``.
+        patience: Number of consecutive above-threshold frames required.
+        debounce_sec: Minimum seconds between consecutive triggers.
+        frame_rate_hz: Approximate frame rate for debounce timing.
+        ema_alpha: Smoothing factor for EMA (default 0.3). Higher = more responsive.
+    """
+
+    def __init__(
+        self,
+        method: str = "ema",
+        window_size: int = 5,
+        threshold: float = 0.5,
+        patience: int = 3,
+        debounce_sec: float = 1.0,
+        frame_rate_hz: float = 10.0,
+        ema_alpha: float = 0.3,
+    ) -> None:
+        if method not in ("ema", "mean", "max"):
+            raise ValueError(f"Unknown smoothing method: {method!r}. Use 'ema', 'mean', or 'max'.")
+        self.method = method
+        self.window_size = window_size
+        self.threshold = threshold
+        self.patience = patience
+        self.debounce_frames = int(debounce_sec * frame_rate_hz)
+        self.ema_alpha = ema_alpha
+
+        self._buffer: deque = deque(maxlen=window_size)
+        self._ema_value: float = 0.0
+        self._consecutive_above: int = 0
+        self._frames_since_trigger: int = self.debounce_frames  # allow first trigger
+        self._smoothed: float = 0.0
+
+    def update(self, raw_prob: float) -> float:
+        """Feed a new raw prediction and return the smoothed value.
+
+        Args:
+            raw_prob: Raw sigmoid probability from model.
+
+        Returns:
+            Smoothed probability.
+        """
+        self._frames_since_trigger += 1
+
+        if self.method == "ema":
+            self._ema_value = self.ema_alpha * raw_prob + (1.0 - self.ema_alpha) * self._ema_value
+            self._smoothed = self._ema_value
+        elif self.method == "mean":
+            self._buffer.append(raw_prob)
+            self._smoothed = sum(self._buffer) / len(self._buffer)
+        elif self.method == "max":
+            self._buffer.append(raw_prob)
+            self._smoothed = max(self._buffer)
+
+        if self._smoothed >= self.threshold:
+            self._consecutive_above += 1
+        else:
+            self._consecutive_above = 0
+
+        return self._smoothed
+
+    def is_triggered(self) -> bool:
+        """Check if a detection should fire.
+
+        Returns True when smoothed probability exceeds threshold for
+        ``patience`` consecutive frames AND debounce window has elapsed.
+
+        Returns:
+            True if wake word detected.
+        """
+        if (self._consecutive_above >= self.patience
+                and self._frames_since_trigger >= self.debounce_frames):
+            self._frames_since_trigger = 0
+            self._consecutive_above = 0
+            return True
+        return False
+
+    def reset(self) -> None:
+        """Reset smoother state."""
+        self._buffer.clear()
+        self._ema_value = 0.0
+        self._consecutive_above = 0
+        self._frames_since_trigger = self.debounce_frames
+        self._smoothed = 0.0
 
 
 class OnnxWakeWordInferencer:
@@ -127,15 +230,19 @@ class OnnxWakeWordInferencer:
         return (1.0 / (1.0 + np.exp(-logits))).astype(np.float32)
 
     def infer_streaming(self, audio_chunk: np.ndarray,
-                        cache: np.ndarray | None) -> tuple[float, np.ndarray]:
+                        cache: np.ndarray | None,
+                        smoother: Optional[PredictionSmoother] = None,
+                        ) -> tuple[float, np.ndarray]:
         """Process one audio chunk with a rolling feature cache.
 
         Args:
             audio_chunk: 1-D float32 array (one chunk of audio).
             cache: Previous feature cache [T_cached, F] or None for first call.
+            smoother: Optional PredictionSmoother for temporal smoothing.
 
         Returns:
-            (probability, updated_cache)
+            (probability, updated_cache) — probability is smoothed if
+            smoother is provided, raw otherwise.
         """
         wav = audio_chunk[np.newaxis, :].astype(np.float32)  # [1, T_chunk]
         new_feats = self.extractor.run(
@@ -164,4 +271,6 @@ class OnnxWakeWordInferencer:
         )[0]
         logit_val = float(np.asarray(logit).ravel()[0])
         prob = float(1.0 / (1.0 + np.exp(-logit_val)))
+        if smoother is not None:
+            prob = smoother.update(prob)
         return prob, cache

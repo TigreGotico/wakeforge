@@ -126,21 +126,26 @@ class BaseWakeModel(nn.Module):
         torch.save(self.state_dict(), ckpt_path)
 
     def forward_streaming(self, audio_chunk: torch.Tensor,
-                          cache: "SlidingFeatureCacheTensor") -> float:
+                          cache: "SlidingFeatureCacheTensor",
+                          smoother: "Optional[PredictionSmoother]" = None) -> float:
         """Process one audio chunk with a rolling feature cache.
 
         Args:
             audio_chunk: 1-D float32 tensor (one chunk of audio at self.sample_rate).
             cache: SlidingFeatureCacheTensor instance — updated in-place.
+            smoother: Optional ``PredictionSmoother`` for temporal smoothing.
 
         Returns:
-            Sigmoid probability as a Python float.
+            Sigmoid probability as a Python float (smoothed if smoother provided).
         """
         from ww_trainer.feats import SlidingFeatureCacheTensor  # noqa: F401 (type only)
         feats = self.feature_extractor([audio_chunk])   # [1, T_new, F]
         cached = cache(feats.squeeze(0))                # [T_window, F]
         logit = self.classifier.forward(cached.unsqueeze(0))  # [1]
-        return torch.sigmoid(logit).item()
+        prob = torch.sigmoid(logit).item()
+        if smoother is not None:
+            prob = smoother.update(prob)
+        return prob
 
     def infer(self, audio: np.ndarray) -> float:
         """Single-waveform inference returning sigmoid(logit)."""
