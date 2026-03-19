@@ -73,6 +73,16 @@ from ww_trainer.tiers import HARDWARE_TIERS, TierConfig
 # --- Distillation ---
 from ww_trainer.distill import CnnLstmExtractor, KnowledgeDistillationTrainer
 
+# --- Metrics ---
+from ww_trainer.metrics import (
+    DetectionReport,
+    compute_eer,
+    compute_far_frr,
+    find_optimal_threshold,
+    det_curve,
+    classification_report,
+)
+
 # --- Augmentation ---
 from ww_trainer.augment import (
     AugmentationPipeline,
