@@ -43,7 +43,7 @@ from ww_trainer.feats import (
 from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
     TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
-    KWTHead, ConformerHead, CRNNHead,
+    KWTHead, ConformerHead, CRNNHead, MixConvHead,
     BaseWakeModel,
 )
 
@@ -77,6 +77,7 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "kwt": (KWTHead, {"patch_len", "d_model", "n_heads", "n_layers", "dim_ff", "dropout"}),
     "conformer": (ConformerHead, {"d_model", "n_heads", "n_layers", "conv_kernel", "dim_ff", "dropout"}),
     "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
+    "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
 }
 
 

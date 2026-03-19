@@ -1,6 +1,7 @@
 import abc
 import logging
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -1040,6 +1041,135 @@ class ConformerHead(ClassifierHead):
 
 
 # ---------------------- CRNN head ----------------------
+
+
+class _MixConvGroup(nn.Module):
+    """Single channel group with depthwise + pointwise convolutions."""
+
+    def __init__(self, channels: int, kernel_size: int) -> None:
+        super().__init__()
+        pad = kernel_size // 2
+        self.block = nn.Sequential(
+            nn.Conv1d(channels, channels, kernel_size, padding=pad, groups=channels, bias=False),
+            nn.Conv1d(channels, channels, 1, bias=False),
+            nn.BatchNorm1d(channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass."""
+        return self.block(x)
+
+
+class _MixConvBlock(nn.Module):
+    """Mixed depthwise convolution block with variable kernel sizes per channel group.
+
+    Splits input channels into groups, applies different temporal kernels per group,
+    concatenates, then adds a residual connection.
+    """
+
+    def __init__(self, channels: int, kernel_groups: list[list[int]]) -> None:
+        super().__init__()
+        n_groups = len(kernel_groups)
+        self.group_size = channels // n_groups
+        self.n_groups = n_groups
+        # Handle remainder channels: add to last group
+        self._last_group_extra = channels - self.group_size * n_groups
+
+        self.groups = nn.ModuleList()
+        for i, kernels in enumerate(kernel_groups):
+            g_channels = self.group_size + (self._last_group_extra if i == n_groups - 1 else 0)
+            # For each group, use the first kernel in the list
+            k = kernels[0] if kernels else 3
+            self.groups.append(_MixConvGroup(g_channels, k))
+
+        self.residual = nn.Identity() if True else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward with mixed kernel groups + residual."""
+        residual = x
+        splits = []
+        pos = 0
+        for i, group in enumerate(self.groups):
+            g_channels = self.group_size + (self._last_group_extra if i == self.n_groups - 1 else 0)
+            splits.append(group(x[:, pos:pos + g_channels, :]))
+            pos += g_channels
+        out = torch.cat(splits, dim=1)
+        return F.relu(out + residual, inplace=True)
+
+
+class MixConvHead(ClassifierHead):
+    """MixConv classifier head with mixed depthwise convolutions.
+
+    Inspired by micro-wake-word's MixedNet which uses variable kernel sizes
+    per channel group for efficient multi-scale temporal feature extraction.
+
+    Each block splits channels into N groups and applies different temporal
+    kernels per group (e.g., [3], [5,7], [9,13]), enabling multi-scale
+    pattern capture without depth overhead.
+
+    Args:
+        input_size: Feature dimension F.
+        n_blocks: Number of MixConv blocks (default 3).
+        filters: Channel width (default 64).
+        kernel_groups: Kernel sizes per channel group
+            (default ``[[3], [5, 7], [9, 13]]``).
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 40,
+        n_blocks: int = 3,
+        filters: int = 64,
+        kernel_groups: Optional[list[list[int]]] = None,
+        sample_rate: int = 16000,
+        device: str = "auto",
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        if kernel_groups is None:
+            kernel_groups = [[3], [5, 7], [9, 13]]
+
+        self.stem = nn.Sequential(
+            nn.Conv1d(input_size, filters, 3, padding=1, bias=False),
+            nn.BatchNorm1d(filters),
+            nn.ReLU(inplace=True),
+        )
+        self.blocks = nn.Sequential(*[
+            _MixConvBlock(filters, kernel_groups) for _ in range(n_blocks)
+        ])
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(filters, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        """Classify features.
+
+        Args:
+            feats: ``[B, T, F]`` feature tensor.
+
+        Returns:
+            ``[B]`` raw logits.
+        """
+        x = feats.transpose(1, 2)  # [B, F, T]
+        x = self.stem(x)
+        x = self.blocks(x)
+        x = self.pool(x).squeeze(-1)
+        return self.fc(x).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        """Extract embeddings from penultimate layer.
+
+        Args:
+            feats: ``[B, T, F]`` feature tensor.
+
+        Returns:
+            ``[B, filters]`` embedding vectors.
+        """
+        x = feats.transpose(1, 2)
+        x = self.stem(x)
+        x = self.blocks(x)
+        return self.pool(x).squeeze(-1)
 
 
 class CRNNHead(ClassifierHead):
