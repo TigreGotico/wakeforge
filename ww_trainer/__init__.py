@@ -84,7 +84,10 @@ from ww_trainer.metrics import (
 )
 
 # --- Factory ---
-from ww_trainer.factory import create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY
+from ww_trainer.factory import (
+    create_model, EXTRACTOR_REGISTRY, HEAD_REGISTRY,
+    register_extractor, register_head,
+)
 
 # --- Evaluation ---
 from ww_trainer.evaluation import evaluate_model, evaluate_detection, log_metrics_csv
