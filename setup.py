@@ -59,7 +59,7 @@ setup(
     description='',
     entry_points={
         'console_scripts': [
-            'ww_trainer-train=ww_trainer.train:train'
+            'ww_trainer-train=ww_trainer.trainer:train'
         ]
     }
 )

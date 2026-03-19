@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ww_trainer"
+version = "0.0.1a1"
+description = "Full training and research suite for wake words — MFCC to HuBERT, all exported to ONNX"
+license = {text = "Apache-2.0"}
+authors = [{name = "JarbasAi", email = "jarbasai@mailfence.com"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "onnx",
+    "onnxruntime",
+    "numpy",
+    "soundfile",
+    "click",
+    "colorama",
+    "tqdm",
+    "scikit-learn",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+transformers = [
+    "transformers",
+]
+vc = [
+    "chatterbox_onnx",
+]
+mlflow = [
+    "mlflow",
+]
+sweep = [
+    "optuna",
+]
+
+[project.scripts]
+ww_trainer-train = "ww_trainer.trainer:train"
+ww_trainer-benchmark = "ww_trainer.benchmark:main"
+
+[project.urls]
+Homepage = "https://github.com/TigreGotico/ww_trainer"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ww_trainer*"]
