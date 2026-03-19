@@ -154,6 +154,39 @@ def evaluate_detection(
     return result[-1]  # last element is the DetectionReport
 
 
+def compute_fitness_score(
+    f1: float,
+    fp_rate: float,
+    fn_rate: float,
+    param_count: int,
+    param_budget: int,
+    fp_weight: float = 0.8,
+    fn_weight: float = 0.2,
+    size_weight: float = 0.1,
+) -> float:
+    """Compute a composite training fitness score.
+
+    Penalizes false positives 4x more than false negatives (by default), with
+    a model-size penalty for exceeding ``param_budget``.
+
+    Args:
+        f1: F1 score (unused in formula but kept for API consistency).
+        fp_rate: False positive rate (0–1).
+        fn_rate: False negative rate (0–1).
+        param_count: Number of trainable model parameters.
+        param_budget: Target parameter budget.
+        fp_weight: Weight for FP penalty (default 0.8).
+        fn_weight: Weight for FN penalty (default 0.2).
+        size_weight: Weight for size penalty (default 0.1).
+
+    Returns:
+        Fitness score in range [0, 1].  Higher is better.
+    """
+    detection_score = 1.0 - fp_weight * fp_rate - fn_weight * fn_rate
+    size_penalty = max(0.0, 1.0 - size_weight * max(0.0, param_count / max(1, param_budget) - 1.0))
+    return max(0.0, detection_score * size_penalty)
+
+
 def log_metrics_csv(
     path: str,
     epoch: int,
