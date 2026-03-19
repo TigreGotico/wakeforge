@@ -28,6 +28,7 @@ def run_sweep(
     epochs_per_trial: int = 5,
     study_name: str = "ww_trainer_sweep",
     storage: Optional[str] = None,
+    full: bool = False,
 ) -> None:
     """Run an Optuna hyperparameter sweep over ww-trainer configurations.
 
@@ -36,12 +37,13 @@ def run_sweep(
         n_trials: Number of Optuna trials to run.
         output_dir: Directory to save per-trial checkpoints.
         featurizer: Path to ONNX extractor file (for featurizer_type='onnx').
-        featurizer_type: Extractor type — 'mfcc', 'onnx', 'hubert', 'wav2vec2'.
+        featurizer_type: Extractor type (ignored when ``full=True``).
         sample_rate: Audio sample rate.
         device: 'cpu', 'cuda', or 'auto'.
         epochs_per_trial: Training epochs per trial (keep short for sweep).
         study_name: Optuna study name.
         storage: Optuna storage URL (e.g. 'sqlite:///sweep.db'). None = in-memory.
+        full: If True, also search over featurizer, classifier, and loss.
     """
     try:
         import optuna
@@ -53,12 +55,9 @@ def run_sweep(
 
     import random
 
-    from ww_trainer.trainer import WakeWordTrainer
-
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data once (shared across trials)
     with open(metadata_csv, "r") as f:
         entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
     random.shuffle(entries)
@@ -66,55 +65,30 @@ def run_sweep(
     split = int(len(entries) * 0.8)
     train_data, val_data = entries[:split], entries[split:]
 
+    full_space = _build_search_space(full=True) if full else {}
+
     def objective(trial: "optuna.Trial") -> float:
-        arch = trial.suggest_categorical("arch", ["ffn", "gru", "cnn"])
-        hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
-        lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-        dropout = trial.suggest_float("dropout", 0.0, 0.4, step=0.1)
+        config: dict = {}
 
-        losses_cfg = [{"name": "bce", "weight": 1.0}]
+        if full:
+            config["featurizer_type"] = trial.suggest_categorical(
+                "featurizer_type", full_space["featurizer_type"])
+            config["arch"] = trial.suggest_categorical("arch", full_space["arch"])
+            config["loss"] = trial.suggest_categorical("loss", full_space["loss"])
+            config["n_features"] = trial.suggest_categorical(
+                "n_features", full_space["n_features"])
+        else:
+            config["arch"] = trial.suggest_categorical("arch", ["ffn", "gru", "cnn"])
 
-        trial_dir = out_dir / f"trial_{trial.number}"
-        trial_dir.mkdir(exist_ok=True)
+        config["hidden_dim"] = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+        config["lr"] = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+        config["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64])
+        config["dropout"] = trial.suggest_float("dropout", 0.0, 0.4, step=0.1)
 
-        kwargs = dict(
-            hidden_dim=hidden_dim,
-            dropout=dropout,
-            featurizer_type=featurizer_type,
+        return _evaluate_config(
+            config, train_data, val_data, featurizer,
+            featurizer_type, device, epochs_per_trial, out_dir, trial.number,
         )
-        if featurizer_type == "mfcc":
-            kwargs["n_mfcc"] = 40
-
-        trainer = WakeWordTrainer(
-            arch=arch,
-            featurizer=featurizer or "",
-            feature_dim=None,
-            device=device,
-            losses_cfg=losses_cfg,
-            **kwargs,
-        )
-
-        # Minimal train — returns best val F1
-        try:
-            best_f1 = trainer.train(
-                train_data=train_data,
-                test_data=val_data,
-                epochs=epochs_per_trial,
-                batch_size=batch_size,
-                lr=lr,
-                output_dir=trial_dir,
-                save_best="f1",
-                metrics_log=str(trial_dir / "metrics.csv"),
-                tsne_every=0,
-                pca_every=0,
-                umap_every=0,
-            )
-        except Exception as exc:
-            logger.warning("Trial %d failed: %s", trial.number, exc)
-            return 0.0
-
-        return float(best_f1) if best_f1 is not None else 0.0
 
     study = optuna.create_study(
         direction="maximize",
@@ -136,15 +110,50 @@ def run_sweep(
     logger.info("Best params saved to %s", best_path)
 
 
-def _build_search_space() -> dict:
-    """Default hyperparameter search space."""
-    return {
+def _build_search_space(full: bool = False) -> dict:
+    """Default hyperparameter search space.
+
+    Args:
+        full: If True, include featurizer_type, classifier arch, and loss
+              in the search space.  If False, only tune hyperparameters
+              (arch, hidden_dim, lr, batch_size, dropout).
+
+    Returns:
+        Dict mapping parameter names to lists of candidate values.
+    """
+    space = {
         "arch": ["ffn", "gru", "cnn"],
         "hidden_dim": [64, 128, 256],
         "lr": [1e-4, 5e-4, 1e-3, 5e-3, 1e-2],
         "batch_size": [16, 32, 64],
         "dropout": [0.0, 0.1, 0.2, 0.3],
     }
+    if full:
+        space.update({
+            "featurizer_type": [
+                "mfcc", "filterbank", "sincnet", "gammatone",
+            ],
+            "arch": [
+                "ffn", "gru", "cnn",
+                "bcresnet", "tcresnet", "dscnn", "matchboxnet",
+                "res15", "conformer", "crnn",
+            ],
+            "loss": [
+                "bce", "focal", "label_smoothing_bce",
+                "supcon", "arcface", "ntxent",
+            ],
+            "n_features": [13, 40, 64, 80],
+        })
+    return space
+
+
+# Map featurizer_type to kwargs for WakeWordTrainer
+_FEAT_KWARGS = {
+    "mfcc": lambda n: {"featurizer_type": "mfcc", "n_mfcc": n},
+    "filterbank": lambda n: {"featurizer_type": "filterbank", "n_mels": n},
+    "sincnet": lambda n: {"featurizer_type": "sincnet", "n_filters": n},
+    "gammatone": lambda n: {"featurizer_type": "gammatone", "n_filters": n},
+}
 
 
 def _evaluate_config(
@@ -158,26 +167,43 @@ def _evaluate_config(
     output_dir: Path,
     trial_id: int,
 ) -> float:
-    """Train one configuration and return F1 score."""
+    """Train one configuration and return F1 score.
+
+    Supports both simple configs (arch/hidden_dim/lr/batch_size/dropout)
+    and full configs (featurizer_type/arch/loss/n_features).
+    """
     from ww_trainer.trainer import WakeWordTrainer
 
     trial_dir = output_dir / f"trial_{trial_id}"
     trial_dir.mkdir(exist_ok=True)
 
-    kwargs = dict(
-        hidden_dim=config["hidden_dim"],
-        dropout=config["dropout"],
-        featurizer_type=featurizer_type,
-    )
-    if featurizer_type == "mfcc":
-        kwargs["n_mfcc"] = 40
+    # Determine featurizer type and kwargs
+    ft = config.get("featurizer_type", featurizer_type)
+    n_feat = config.get("n_features", 40)
+    feat_builder = _FEAT_KWARGS.get(ft)
+    if feat_builder:
+        kwargs = feat_builder(n_feat)
+    else:
+        kwargs = {"featurizer_type": ft}
+
+    kwargs["hidden_dim"] = config.get("hidden_dim", 128)
+    kwargs["dropout"] = config.get("dropout", 0.1)
+
+    # Determine loss config
+    loss_name = config.get("loss", "bce")
+    losses_cfg = [{"name": loss_name, "weight": 1.0}]
+    # Losses that need embed_dim
+    if loss_name in ("arcface", "center", "proxy_nca"):
+        losses_cfg[0]["embed_dim"] = kwargs["hidden_dim"]
+
+    arch = config.get("arch", "ffn")
 
     trainer = WakeWordTrainer(
-        arch=config["arch"],
+        arch=arch,
         featurizer=featurizer or "",
         feature_dim=None,
         device=device,
-        losses_cfg=[{"name": "bce", "weight": 1.0}],
+        losses_cfg=losses_cfg,
         **kwargs,
     )
 
@@ -186,8 +212,8 @@ def _evaluate_config(
             train_data=train_data,
             test_data=val_data,
             epochs=epochs,
-            batch_size=config["batch_size"],
-            lr=config["lr"],
+            batch_size=config.get("batch_size", 32),
+            lr=config.get("lr", 1e-3),
             output_dir=trial_dir,
             save_best="f1",
             metrics_log=str(trial_dir / "metrics.csv"),
@@ -207,6 +233,7 @@ def run_grid_search(
     device: str = "auto",
     epochs_per_trial: int = 5,
     search_space: Optional[dict] = None,
+    full: bool = False,
 ) -> dict:
     """Exhaustive grid search over all hyperparameter combinations.
 
@@ -230,7 +257,7 @@ def run_grid_search(
     import json
     import random
 
-    space = search_space or _build_search_space()
+    space = search_space or _build_search_space(full=full)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -282,6 +309,7 @@ def run_random_search(
     device: str = "auto",
     epochs_per_trial: int = 5,
     search_space: Optional[dict] = None,
+    full: bool = False,
 ) -> dict:
     """Random search: sample configurations uniformly from the search space.
 
@@ -305,7 +333,7 @@ def run_random_search(
     import json
     import random
 
-    space = search_space or _build_search_space()
+    space = search_space or _build_search_space(full=full)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -354,6 +382,7 @@ def run_genetic_search(
     search_space: Optional[dict] = None,
     mutation_rate: float = 0.3,
     elite_frac: float = 0.2,
+    full: bool = False,
 ) -> dict:
     """Genetic algorithm hyperparameter search.
 
@@ -388,7 +417,7 @@ def run_genetic_search(
     import json
     import random
 
-    space = search_space or _build_search_space()
+    space = search_space or _build_search_space(full=full)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
