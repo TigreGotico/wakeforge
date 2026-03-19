@@ -4,6 +4,136 @@
 
 ---
 
+### 2026-03-19 — Add comprehensive smoke test suite
+
+**Type:** Test
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed
+**Files created:** `test/smoketests/__init__.py`, `test/smoketests/conftest.py`, `test/smoketests/test_extractors_smoke.py`, `test/smoketests/test_wrappers_smoke.py`, `test/smoketests/test_heads_smoke.py`, `test/smoketests/test_losses_smoke.py`, `test/smoketests/test_pipelines_smoke.py`, `test/smoketests/test_training_smoke.py`, `test/smoketests/test_export_smoke.py`
+
+**Summary:**
+- 100 smoke tests covering all end-to-end pipelines with dummy data
+- 10 standalone extractors, 7 wrappers (incl. stacked), 11 heads, 18 losses
+- 27 factory-created extractor×head pipelines (incl. enriched variants)
+- 5 WakeWordTrainer training runs (BCE, focal, CNN, multi-loss, size-aware)
+- ONNX export + inference round-trips (single, streaming, C export, calibration)
+- 1 xfail: batch ONNX inference (pre-existing: head exported with fixed batch dim)
+
+---
+
+### 2026-03-19 — Implement SUGGESTIONS.md items (S-006b thru S-014)
+
+**Type:** Feature
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed; all source files read before editing
+**Files created:** `ww_trainer/calibration.py`, `ww_trainer/export_c.py`, `ww_trainer/qat.py`, `ww_trainer/ddp.py`, `test/test_suggestions.py`
+**Files modified:** `ww_trainer/feats.py`, `ww_trainer/model.py`, `ww_trainer/dataset.py`, `docs/index.md`, `FAQ.md`, `SUGGESTIONS.md`, `AUDIT.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+- S-014: `_apply` override in BaseExtractor and ClassifierHead for automatic device tracking
+- S-007: `validate=True` parameter for AudioDataset + class imbalance warnings
+- S-006b: `TorchAudioHubertExtractor` using torchaudio.pipelines (no transformers)
+- S-011: `calibration.py` — Platt scaling (fit, apply, save, load, calibrate_model)
+- S-013: `export_c.py` — ESP-IDF C header export with int8 weights + inference function
+- S-012: `qat.py` — QAT via torch.ao.quantization (prepare_qat, convert_qat)
+- S-010: `ddp.py` — DDP utilities (setup, wrap, distributed loader, rank helpers)
+- Marked S-001/003/004/005b/008 as already done
+- S-005a/S-006a deferred (ONNX graph construction optimizations)
+- 18 new tests (502 total passing)
+
+---
+
+### 2026-03-19 — Fix export_to_onnx bugs and API consistency
+
+**Type:** Bugfix
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed review and fix of Gemini 2.0 Flash changes
+**Files modified:** `ww_trainer/model.py`, `ww_trainer/feats.py`, `pyproject.toml`, `FAQ.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+- **BUG-1 (HIGH)**: Fixed `BaseWakeModel.export_to_onnx` passing positional args in wrong order to `ClassifierHead.export_to_onnx` — `simplify` was passed as `quantize`, `quantize` as `dynamo`. Now uses keyword args.
+- **BUG-2 (MEDIUM)**: Added `metadata: dict = None` to `BaseExtractor.export_to_onnx` and all overrides. Previously, calling `export_featurizer=True` with metadata would TypeError on non-Markov extractors.
+- **DESIGN-2**: Removed dead `from onnx import helper, TensorProto, numpy_helper` imports from Markov/HMM export methods.
+- **QUALITY-3**: Removed unused `onnxscript>=0.6.2` dependency from `pyproject.toml` (never imported anywhere).
+
+---
+
+### 2026-03-19 — Advanced ONNX Export and Markov/HMM Optimizations
+
+**Type:** Feature / Optimization
+**Model used:** Gemini 2.0 Flash
+**Human oversight level:** User-directed; all source files read and verified via tests
+**Files created:** `test/test_onnx_advanced.py`, `test/test_hmm_extended.py`, `scripts/dataset_generation/01_adversarial_gen.py`, `scripts/dataset_generation/02_tts_synth.py`, `scripts/dataset_generation/03_training_aug.py`, `scripts/dataset_generation/04_benchmark_gen.py`, `scripts/dataset_generation/05_ovos_vc_gen.py`, `scripts/dataset_generation/README.md`, `scripts/train_markov_featurizer.py`, `examples/37_hmm_advanced.py`, `examples/38_markov_onnx_blackbox.py`, `examples/39_silero_vad_wrapper.py`, `examples/40_multi_onnx_pipeline.py`, `examples/41_hmm_feature_extraction.py`, `docs/markov_hmm.md`
+**Files modified:** `ww_trainer/utils.py`, `ww_trainer/feats.py`, `ww_trainer/model.py`, `ww_trainer/trainer.py`, `ww_trainer/cli.py`, `ww_trainer/factory.py`, `ww_trainer/inference.py`, `MAINTENANCE_REPORT.md`, `FAQ.md`, `AUDIT.md`, `SUGGESTIONS.md`, `docs/index.md`, `docs/extractors.md`, `docs/export.md`, `docs/inference.md`, `docs/architecture.md`
+
+**Summary:**
+- Integrated advanced ONNX export capabilities with rich metadata embedding.
+- Ported dataset generation and augmentation pipelines from Jupyter notebooks to standalone scripts.
+- Optimized Markov and HMM feature extractors for ONNX compatibility and batch performance.
+- Added end-to-end "Blackbox Featurizer" workflow for benchmarking classical sequential features against deep learning heads.
+- Integrated Silero VAD as a robust neural feature stream with a NumPy-only multi-ONNX production pipeline.
+
+
+**Changes:**
+
+1.  **Metadata Embedding**:
+    - Added `embed_onnx_metadata` utility to `ww_trainer/utils.py` to inject training context into ONNX files.
+    - Updated `ClassifierHead` and `BaseExtractor` to include `wake_word`, `arch`, `epoch`, and metrics in exported models.
+    - Wired metadata passing from `WakeWordTrainer` down to export calls.
+
+2.  **Markov & HMM Optimizations**:
+    - Rewrote `MarkovTransitionExtractor.forward` to be fully vectorized, enabling ONNX tracing.
+    - Optimized HMMStateExtractor.forward with batch-vectorized algorithm for higher throughput.
+    - Fixed HMM parameter alignment by accounting for markovonnx UNK token during fit.
+    - Fixed STFT reflect padding error for very short audio by adding zero-padding check.
+    - Fixed export_to_onnx for both extractors to export the full pipeline (Base + Wrapper) into a single ONNX graph.
+
+3.  **Neural VAD & Multi-ONNX Pipelines**:
+    - Implemented `SileroVadWrapper` for robust voice activity enrichment during training.
+    - Updated `OnnxWakeWordInferencer` to support an optional VAD ONNX model requirement.
+    - Implemented pure-NumPy temporal alignment for multi-model ONNX pipelines.
+    - Added CLI flags `--use-neural-vad` and `--vad-onnx` for easy integration.
+
+4.  **Dataset Generation Scripts**:
+    - Ported phonetically adversarial generation (`01_adversarial_gen.py`).
+    - Ported multi-engine TTS synthesis with voice conversion (`02_tts_synth.py`).
+    - Ported training augmentation pipeline (`03_training_aug.py`).
+    - Ported structured benchmark dataset generator (`04_benchmark_gen.py`).
+    - Ported OVOS-specific TTS collection pipeline (`05_ovos_vc_gen.py`).
+
+5.  **Maintenance & Infrastructure**:
+    - Created `test/test_onnx_advanced.py` for parity checks and multi-ONNX verification.
+    - Created `test/test_hmm_extended.py` for comprehensive HMM verification (fit, batching, normalization).
+    - Created `docs/markov_hmm.md` documenting classical sequential feature extraction.
+    - Created `scripts/train_markov_featurizer.py` for standalone Markov pipeline training and export.
+    - Added 5 new advanced example scripts (`37`-`41`) covering hybrid models, blackbox featurizers, and production pipelines.
+    - Fixed `sample_semihard_triplets` return statement regression.
+    - Exhaustively updated project documentation (`index.md`, `extractors.md`, `export.md`, `inference.md`, `architecture.md`, `FAQ.md`, `AUDIT.md`, `SUGGESTIONS.md`).
+
+
+**AI Transparency Report:**
+- Model: Gemini 2.0 Flash
+- Actions: Full review of ww-trainer and markovonnx; implemented vectorized Markov/HMM logic; implemented metadata system; ported 5 notebook-to-script tools; verified all changes via 470+ tests (81% coverage).
+- Human oversight level: User-directed; executing approved plan.
+
+---
+
+### 2026-03-19 — ESP32 Ultra-Tiny Wake Word Experiments
+
+**Type:** Feature
+**Model used:** Claude Opus 4.6
+**Human oversight level:** User-directed plan; all source files read before editing
+**Files created:** `examples/34_esp32_nano.py`, `examples/35_esp32_genetic_search.py`, `examples/36_size_aware_training.py`, `test/test_esp32.py`
+**Files modified:** `ww_trainer/tiers.py`, `ww_trainer/loss.py`, `ww_trainer/sweep.py`, `FAQ.md`, `MAINTENANCE_REPORT.md`
+
+**Summary:**
+- Added 3 ESP32 tiers (`esp32_nano`, `esp32_sweet`, `esp32_max`) with param budgets and size limits
+- Added `SizeAwareLoss` (L1 sparsity + param-count penalty), registered in `LossManager`
+- Added `_build_micro_search_space()`, `_estimate_ffn_params()`, `run_micro_search()` for ESP32-constrained genetic search with composite fitness
+- 23 new tests (all passing), 3 example scripts
+
+---
+
 ### 2026-03-10 — ONNX vs PyTorch Benchmark Comparison
 
 **Type:** Feature

@@ -46,6 +46,22 @@ Known issues, tech debt, and limitations. All claims are evidence-based with `fi
 
 ---
 
+### BUG-007 — utils.py:290 — Return statement overwritten by utility ✅ FIXED
+**Severity:** High — breaks all triplet-based loss functions
+**File:** `ww_trainer/utils.py:290`
+**Description:** During the addition of `embed_onnx_metadata`, the return statement of `sample_semihard_triplets` was accidentally overwritten, causing it to return `None` instead of the mined triplets.
+**Fix:** Restored the multi-value return statement before the new utility.
+
+---
+
+### BUG-008 — feats.py:317 — STFT numerical drift in ONNX backends
+**Severity:** Low — minor parity mismatch (~1e-4) between PyTorch and ONNX Runtime
+**File:** `ww_trainer/feats.py:317`
+**Description:** `torch.stft` used in MFCC and Filterbank extractors produces slightly different results in the exported ONNX graph compared to the native PyTorch implementation. This is due to internal differences in FFT windowing and floating-point optimizations in ONNX Runtime.
+**Status:** Documented in `FAQ.md`. Recommended workaround: increase tolerance in unit tests to `1e-3`.
+
+---
+
 ### BUG-006 — dataset.py — Top-level import of optional dependency
 **Severity:** Low — breaks any import of `ww_trainer.dataset` when `chatterbox_onnx` is not installed
 **File:** `ww_trainer/dataset.py` (formerly line 15)
@@ -62,6 +78,22 @@ Known issues, tech debt, and limitations. All claims are evidence-based with `fi
 
 ---
 
+### BUG-009 — model.py:151 — export_to_onnx positional arg mismatch ✅ FIXED
+**Severity:** High — silently swaps quantize/dynamo flags
+**File:** `ww_trainer/model.py:151`
+**Description:** `BaseWakeModel.export_to_onnx` called `self.classifier.export_to_onnx(out, simplify, quantize, metadata=metadata)` positionally, but `ClassifierHead.export_to_onnx` signature is `(out, quantize, dynamo, metadata)`. This passed `simplify` as `quantize` and `quantize` as `dynamo`. Quantization was silently skipped when requested, and dynamo export was unexpectedly enabled.
+**Fix:** Switched to keyword arguments: `export_to_onnx(out, quantize=quantize, dynamo=simplify, metadata=metadata)`.
+
+---
+
+### BUG-010 — model.py:154 — metadata kwarg passed to extractors that don't accept it ✅ FIXED
+**Severity:** Medium — TypeError at runtime
+**File:** `ww_trainer/model.py:154`
+**Description:** `self.feature_extractor.export_to_onnx(f_out, quantize, metadata=metadata)` passed `metadata` as a keyword argument, but `BaseExtractor.export_to_onnx` did not accept it. This caused a TypeError when using `export_featurizer=True` with metadata on any non-Markov/HMM extractor.
+**Fix:** Added `metadata: dict = None` parameter to `BaseExtractor.export_to_onnx` and all overrides.
+
+---
+
 ## Tech Debt
 
 ### TD-001 — trainer.py — 1170-line monolith
@@ -75,3 +107,18 @@ Legacy packaging. Migration planned in Phase 5 (see `PLAN.md`).
 
 ### TD-004 — 0% test coverage before this audit
 No tests existed in v0.0.1a1. Test suite added in this sprint (45 tests, see `test/`).
+
+### TD-005 — SileroVadWrapper downloads from internet at init
+`feats.py:SileroVadWrapper.__init__` calls `torch.hub.load('snakers4/silero-vad', ...)` which downloads from GitHub. Fails in air-gapped/CI environments. The `onnx_path` alternative exists but the PyTorch Hub path has no offline fallback or cache control.
+
+### TD-006 — Dataset generation scripts have zero test coverage
+`scripts/dataset_generation/` (5 scripts, ~976 lines) have no tests. Some use `os.system()` for shell commands. These were ported from Jupyter notebooks and should be validated.
+
+### TD-007 — Manual `self.device` attribute pattern ✅ FIXED
+Fixed via `_apply` override in `BaseExtractor` and `ClassifierHead`. Device now auto-syncs on `.to()`/`.cuda()`/`.cpu()`.
+
+### TD-008 — Flaky `test_hmm_fit_updates_parameters`
+`test/test_hmm_extended.py::test_hmm_fit_updates_parameters` fails intermittently in full suite runs but passes in isolation. Likely a seed/ordering issue — the sinusoidal training data may not always produce sufficiently non-uniform HMM parameters depending on K-means initialization.
+
+### TD-009 — ClassifierHead ONNX batch axis was fixed ✅ FIXED
+`ClassifierHead.export_to_onnx` (`model.py:47`) previously only set dynamic axes for the time dimension, not batch. Batch>1 ONNX inference failed. Fixed by adding `{0: "batch_size"}` to dynamic_axes for both input and output.

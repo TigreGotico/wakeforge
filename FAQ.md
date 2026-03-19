@@ -1,5 +1,63 @@
 # ww-trainer — FAQ
 
+## New Modules (v1.2)
+
+**Q: How do I export an FFN model to C for ESP32?**
+
+Use `ww_trainer.export_c.export_to_c_header(model, "model.h")`. Generates a self-contained `.h` with int8 weights and a `ww_model_infer()` function. Only supports FFN heads.
+
+**Q: How do I calibrate model probabilities?**
+
+Use `ww_trainer.calibration.calibrate_model(model, val_data, output_dir)` after training. Fits Platt scaling on validation logits and saves `calibration.json`. Apply with `apply_platt_scaling(logits, params)`.
+
+**Q: How do I use QAT (quantization-aware training)?**
+
+`from ww_trainer.qat import prepare_qat, convert_qat`. Call `prepare_qat(model)` before training and `convert_qat(model)` after. Note: `torch.ao.quantization` is deprecated in PyTorch 2.10+; migration to `torchao` is planned.
+
+**Q: How do I use multi-GPU training?**
+
+Use `ww_trainer.ddp` utilities and launch with `torchrun --nproc_per_node=N`. Call `setup_ddp()`, `wrap_model_ddp(model, local_rank)`, `create_distributed_loader(dataset, batch_size)`.
+
+**Q: How do I use HuBERT without the transformers library?**
+
+Use `TorchAudioHubertExtractor(bundle_name="HUBERT_BASE")` from `ww_trainer.feats`. Only requires `torchaudio`.
+
+**Q: How do I validate my dataset before training?**
+
+Pass `validate=True` to `AudioDataset(samples, validate=True)`. Checks all files are readable audio. Class imbalance warnings (>10:1 ratio) are always active.
+
+---
+
+**Q: How do I run the smoke tests?**
+
+```bash
+.venv/bin/python -m pytest test/smoketests/ -v
+```
+
+100 tests covering all extractor×head×loss pipelines with dummy data. Runs in ~25 seconds.
+
+---
+
+## ESP32 / Ultra-Tiny Models
+
+**Q: What are the ESP32 tiers?**
+
+Three tiers targeting ESP32 (520 KB RAM, 4 MB flash): `esp32_nano` (sub-1KB, ≤1024 params), `esp32_sweet` (sub-10KB, ≤10240 params), `esp32_max` (sub-50KB, ≤51200 params). All use MFCC + FFN. See `tiers.py`.
+
+**Q: What is the smallest possible model?**
+
+MFCC-13 + FFN-8 = 97 params = 0.1 KB int8. The MFCC-13 + FFN-16 = 241 params (0.2 KB) is the nano tier default.
+
+**Q: What is SizeAwareLoss?**
+
+A loss wrapper (`loss.py:SizeAwareLoss`) that adds L1 sparsity + param-count penalties to any base loss. Use `{"name": "size_aware", "param_budget": 1024}` in `losses_cfg`.
+
+**Q: How does the micro genetic search work?**
+
+`sweep.run_micro_search()` uses composite fitness = `accuracy_weight * f1 + size_weight * (1 - params/budget)`. Models exceeding the tier's param budget are hard-rejected. Search space is auto-constrained per tier.
+
+---
+
 ## Installation
 
 **Q: How do I install ww-trainer?**
@@ -25,7 +83,53 @@ CUDA 11.8+ is recommended. The code auto-selects CUDA if available; falls back t
 
 ---
 
-## Dataset Format
+## ONNX Export & Metadata
+
+**Q: How do I export my model to ONNX?**
+
+Use the `--export-onnx` flag during training. The trainer will automatically export the best model (F1, Loss, etc.) and the final model to `.onnx` files in your output directory. You can also manually call `model.export_to_onnx("model.onnx")`. All `export_to_onnx` methods accept an optional `metadata: dict` parameter to embed key-value pairs into the ONNX file.
+
+**Q: What metadata is embedded in the ONNX files?**
+
+All exported models now contain training context in their `metadata_props`:
+- `wake_word`: The target keyword name.
+- `arch`: Head architecture (GRU, CNN, FFN).
+- `epoch`: Save checkpoint epoch.
+- `featurizer`: Class name of the feature extractor.
+- `metric_*`: Performance metrics (F1, Precision, Recall, Loss) at save time.
+
+Use `onnx.load("model.onnx").metadata_props` to inspect.
+
+**Q: Are Markov and HMM extractors ONNX-compatible?**
+
+Yes. `MarkovTransitionExtractor` uses a vectorized state lookup that traces correctly to ONNX. `HMMStateExtractor` also supports ONNX export. Both export the entire pipeline (Base Extractor + Markov/HMM Wrapper) as a single symbolic graph.
+
+**Q: Why is there a small numerical difference between PyTorch and ONNX?**
+
+The STFT implementation in PyTorch and its ONNX equivalent may have minor precision differences (~1e-4 absolute) due to internal windowing and FFT algorithms. This is normal and rarely affects wake-word detection accuracy.
+
+---
+
+## Blackbox ONNX Featurizers
+
+**Q: Can I use a pre-trained ONNX model as a feature extractor?**
+
+Yes. Use the `OnnxFeatureExtractor` class or the `--featurizer-type onnx` CLI flag. This treats the ONNX model as a "blackbox" that takes raw audio and outputs features.
+
+**Q: How do I create a Markov blackbox featurizer?**
+
+Use the provided script:
+```bash
+python scripts/train_markov_featurizer.py --wake-folder ./my_wakes --out markov.onnx
+```
+Then use it for training different heads:
+```bash
+ww_trainer-train --featurizer markov.onnx --featurizer-type onnx --model-type gru ...
+```
+
+---
+
+## Dataset Generation
 
 **Q: What format does `AudioDataset` expect?**
 

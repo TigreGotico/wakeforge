@@ -11,12 +11,12 @@ Version: `0.0.1a1` -- `ww_trainer/version.py`
 | Category | Count | Source |
 |----------|-------|--------|
 | Feature extractors (standalone) | 12 | `feats.py` |
-| Feature enrichment wrappers | 5 | `feats.py:1318-1700` |
+| Feature enrichment wrappers | 7 | `feats.py:1318-2100` |
 | Classifier heads | 11 | `model.py` |
 | Loss functions | 17 | `loss.py` |
-| Search strategies | 4 | `sweep.py` |
-| Hardware tier presets | 8 | `tiers.py` |
-| Examples | 28 | `examples/` |
+| Search strategies | 5 | `sweep.py` |
+| Hardware tier presets | 11 | `tiers.py` |
+| Examples | 41 | `examples/` |
 
 ---
 
@@ -38,6 +38,8 @@ Version: `0.0.1a1` -- `ww_trainer/version.py`
 | [classifiers.md](classifiers.md) | All 11 classifier heads: architecture details, param counts, hardware recommendations |
 | [losses.md](losses.md) | All 17 loss functions: classification, metric, contrastive, composite. Recommended combinations |
 | [enrichment.md](enrichment.md) | Feature enrichment wrappers: VAD, Pitch, MultiResolution, SNRAware. Stacking patterns |
+| [markov_hmm.md](markov_hmm.md) | Classical sequential modeling: Markov and HMM feature extractors |
+| [esp32.md](esp32.md) | ESP32 tiers, SizeAwareLoss, micro genetic search |
 
 ### Training & Deployment
 
