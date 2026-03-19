@@ -281,6 +281,16 @@ def train(**opts: dict) -> None:
                               freeze_layers=freeze_layers,
                               unfreeze_at_epoch=unfreeze_at_epoch,
                               **opts)
+    # Wire FeatureCache into trainer.augment_opts so AudioDataset can use it
+    if not no_feature_cache:
+        from ww_trainer.cache import FeatureCache
+        ext = trainer.model.feature_extractor
+        ext_hash = f"{ext.feature_dim}_{ext.sample_rate}"
+        trainer.augment_opts["feature_cache"] = FeatureCache(
+            feature_cache_dir, type(ext).__name__, ext_hash
+        )
+        click.secho(f"[FeatureCache] dir={feature_cache_dir}", fg="cyan")
+
     if training_stages:
         from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
         stages = parse_stage_spec(training_stages)
