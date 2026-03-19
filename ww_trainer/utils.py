@@ -3,7 +3,7 @@ import logging
 import os
 import random
 import time
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import torch
 import torch.nn.functional as F
@@ -295,3 +295,31 @@ def sample_semihard_triplets(labels: torch.Tensor, embeds: torch.Tensor, margin:
     a_idx, p_idx, n_idx = zip(*triplets)
     return torch.tensor(a_idx, device=device), torch.tensor(p_idx, device=device), torch.tensor(n_idx,
                                                                                                 device=device), violation_frac
+
+def embed_onnx_metadata(onnx_path: str, metadata: Dict[str, str]) -> None:
+    """Embed key-value metadata into an ONNX model file.
+
+    Args:
+        onnx_path: Path to the .onnx file.
+        metadata: Dictionary of metadata to embed.
+    """
+    try:
+        import onnx
+    except ImportError:
+        logger.warning("onnx not installed — skipping metadata embedding.")
+        return
+
+    model = onnx.load(onnx_path)
+    # Clear existing metadata with the same keys
+    keys_to_add = set(metadata.keys())
+    new_props = [p for p in model.metadata_props if p.key not in keys_to_add]
+    model.metadata_props.clear()
+    model.metadata_props.extend(new_props)
+
+    for k, v in metadata.items():
+        prop = model.metadata_props.add()
+        prop.key = str(k)
+        prop.value = str(v)
+
+    onnx.save(model, onnx_path)
+    logger.debug("Embedded metadata into %s: %s", onnx_path, list(metadata.keys()))

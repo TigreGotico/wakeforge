@@ -13,12 +13,37 @@ This matters for deployment targets (RPi Zero, embedded Linux, Raspberry Pi) whe
 **What you need:**
 1. `extractor.onnx` — exported feature extractor. Input: `[B, T]` float32. Output: `[B, T_frames, F]` float32.
 2. `head.onnx` — exported classifier head. Input: `[B, T_frames, F]` float32. Output: scalar logit.
+3. `vad.onnx` (Optional) — e.g. Silero VAD. Input: `[B, 512]` float32. Output: `[B, 1]` probability.
 
 See [export.md](export.md) for how to produce these files.
 
 ---
 
-## 2. Single Inference
+## 2. Multi-ONNX Pipeline (VAD Requirement)
+
+If your model was trained with `SileroVadWrapper`, the classifier head expects an extra input channel for the VAD probability. The `OnnxWakeWordInferencer` handles this by running a second ONNX session for the VAD and concatenating the result to the features.
+
+```python
+from ww_trainer.inference import OnnxWakeWordInferencer
+
+inferencer = OnnxWakeWordInferencer(
+    extractor_path="mfcc.onnx",
+    head_path="head.onnx",
+    vad_path="silero_vad.onnx",  # Optional VAD model
+    sample_rate=16000
+)
+
+# Inference works the same way; alignment and concatenation are internal
+prob = inferencer.infer(audio)
+```
+
+**Implementation Details:**
+- **Alignment**: Neural VADs often operate on fixed-size chunks (e.g. 512 samples). The inferencer automatically pads the audio, runs batch inference, and uses `numpy.interp` to linearly align the probabilities with the extractor's timeframe.
+- **Dependency-Free**: This multi-model pipeline uses only `numpy` and `onnxruntime`.
+
+---
+
+## 3. Single Inference
 
 `OnnxWakeWordInferencer.infer` — `inference.py:36`
 

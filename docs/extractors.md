@@ -32,8 +32,10 @@ Wrappers decorate a base extractor, adding extra feature channels.
 | Pitch | `PitchExtractor` | `feats.py:1443` | 3 | Normalized F0, voicing probability, F0 delta |
 | MultiResolution | `MultiResolutionExtractor` | `feats.py:1577` | `coarse_dim` | Concatenates fine + coarse extractor outputs |
 | SNRAware | `SNRAwareExtractor` | `feats.py:1630` | 2 | Per-frame SNR estimate, noise floor estimate |
+| Markov | `MarkovTransitionExtractor` | `feats.py:1757` | `n_codes` | Transition probabilities from trained Markov chain |
+| HMM | `HMMStateExtractor` | `feats.py:1953` | `n_states` | Latent state posterior probabilities (Forward algorithm) |
 
-Wrappers cannot be ONNX-exported directly; export the base extractor separately.
+Note: Unlike other wrappers, Markov and HMM extractors **do** support direct ONNX export of the full pipeline (Base + Wrapper).
 
 ---
 
@@ -256,6 +258,48 @@ Appends 2 SNR features: per-frame SNR estimate and noise floor estimate (`feats.
 **When to use:** Noisy deployment. Lets the classifier weight clean frames more heavily.
 
 **When NOT to use:** Clean environments.
+
+---
+
+### MarkovTransitionExtractor -- `feats.py:1757`
+
+Classical sequential modeling using a Markov chain on top of quantized features. Captures the probability of acoustic patterns following one another.
+
+**Parameters:** `n_codes` (64), `order` (2).
+
+**When to use:** To add classical temporal context to a "bag of features" baseline. Extremely efficient for secondary validation. Best on top of MFCC or Filterbank.
+
+**When NOT to use:** High-order models ($O>3$) with large vocabularies can result in massive transition matrices.
+
+**Hardware fit:** Microcontrollers (ESP32) and above. Inference is a single integer lookup.
+
+---
+
+### HMMStateExtractor -- `feats.py:1953`
+
+Hidden Markov Model state posterior extraction. Models the wake word as a sequence of latent acoustic units (like phonemes).
+
+**Parameters:** `n_states` (8), `n_codes` (32).
+
+**When to use:** Hybrid architectures. Provides "Sound Probability" channels that help deep learning heads focus on temporal progression. Excellent for reducing false positives.
+
+**When NOT to use:** When you have a massive neural extractor (HuBERT) which already models temporal context deeply.
+
+**Hardware fit:** Microcontrollers and above. Vectorized forward algorithm is very fast.
+
+---
+
+### SileroVadWrapper -- `feats.py:1321`
+
+Neural VAD enrichment stream using the pre-trained `snakers4/silero-vad`. Appends a robust speech probability channel to every frame.
+
+**Parameters:** `onnx_path` (optional).
+
+**When to use:** Real-world noisy environments where heuristic energy-based VAD fails. Essential for production-grade wake-word models.
+
+**When NOT to use:** When you cannot afford the extra compute of a secondary neural network (Silero VAD) at runtime.
+
+**Hardware fit:** RPi Zero and above. 
 
 ---
 

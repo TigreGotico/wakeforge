@@ -4,6 +4,51 @@ How to export trained models to ONNX for deployment.
 
 ---
 
+## 4. Metadata Embedding
+
+Exported models automatically include rich metadata describing the training run. This allows deployment tools to identify the model and its expected performance without external config files.
+
+Embedded keys include:
+- `wake_word`: Name of the keyword (e.g. "hey_mycroft")
+- `arch`: Head architecture (GRU, CNN, etc.)
+- `epoch`: Training epoch
+- `featurizer`: Featurizer class name
+- `metric_f1`: Best F1 score achieved
+
+To inspect metadata:
+```python
+import onnx
+model = onnx.load("model.onnx")
+for prop in model.metadata_props:
+    print(f"{prop.key}: {prop.value}")
+```
+
+Implementation details:
+- `embed_onnx_metadata` utility in `utils.py:295`.
+- Integrated into `ClassifierHead.export_to_onnx` (`model.py:40`).
+- Integrated into `BaseExtractor.export_to_onnx` (`feats.py:80`).
+
+---
+
+## 5. Hybrid Pipeline Export (Markov/HMM)
+
+`MarkovTransitionExtractor` and `HMMStateExtractor` support "Hybrid Export" — they export the entire chain from raw audio to features into a single ONNX file.
+
+```python
+from ww_trainer.feats import MfccExtractor, MarkovTransitionExtractor
+
+base = MfccExtractor()
+markov = MarkovTransitionExtractor(base, n_codes=16)
+# Train the extractor
+markov.fit(audio_samples)
+# Export the full pipeline
+markov.export_to_onnx("markov_pipeline.onnx")
+```
+
+The exported graph takes raw waveforms (`input_values`) and outputs enriched features (`features`). The transition matrices and VQ codebooks are baked into the ONNX graph as constants.
+
+---
+
 ## 1. Why ONNX
 
 Wake word detection typically runs on embedded or constrained hardware where installing PyTorch is impractical (RPi Zero, MCUs, home assistants). ONNX Runtime is a lightweight, cross-platform inference engine with C, Python, and .NET bindings.

@@ -40,6 +40,22 @@ Combines one extractor and one head. Holds no learnable parameters directly; the
 
 ---
 
+## Hybrid & Multi-ONNX Pipelines
+
+While the standard architecture uses a single feature extractor and a single head, `ww-trainer` supports two advanced patterns for robust edge deployment:
+
+### 1. Hybrid Pipeline Export (Markov/HMM)
+For classical sequential extractors like `MarkovTransitionExtractor` or `HMMStateExtractor`, the entire processing chain—from raw waveforms to enriched features—is symbolic and can be traced into a single ONNX graph. This includes the base featurizer (e.g., MFCC), the vector quantization (VQ) codebook, and the Markov/HMM logic.
+
+### 2. Multi-ONNX Pipeline (VAD Requirement)
+When using pre-trained neural models like **Silero VAD**, the system transitions from a single-graph model to a multi-model pipeline.
+- **Training**: Silero VAD is treated as a parallel feature stream that is interpolated and concatenated to the base features.
+- **Inference**: The `OnnxWakeWordInferencer` manages separate ONNX sessions for the base featurizer, the VAD model, and the classifier head. It performs the necessary temporal alignment and stream fusion at runtime using only NumPy.
+
+This modularity allows for "Best-of-Breed" component swapping (e.g., swapping a TinyVAD for Silero) without retraining the core primary classifier head.
+
+---
+
 ## Data Flow Diagram
 
 ### Training path (audio → loss)

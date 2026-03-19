@@ -48,6 +48,7 @@ class WakeWordTrainer:
     def __init__(self,
                  arch: str,
                  featurizer: str,
+                 wake_word: str = "hey_mycroft",
                  feature_dim: int = None,
                  device: str = "auto",
                  mlflow_uri: Optional[str] = None,
@@ -64,6 +65,7 @@ class WakeWordTrainer:
             set_seed(seed)
 
         self.losses_cfg = losses_cfg
+        self.wake_word = wake_word
 
         device_str: str = device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(device_str)
@@ -554,7 +556,15 @@ class WakeWordTrainer:
 
         if self.export_onnx:
             logger.info("Exporting model to onnx: %s", onnx_path)
-            self.model.export_to_onnx(onnx_path)
+            metadata = {
+                "wake_word": self.wake_word,
+                "arch": self.arch,
+                "epoch": epoch,
+                "featurizer": self.model.feature_extractor.__class__.__name__
+            }
+            if metrics:
+                metadata.update({f"metric_{k}": str(v) for k, v in metrics.items()})
+            self.model.export_to_onnx(onnx_path, metadata=metadata)
 
         if self.mlflow:
             if self.export_onnx:
