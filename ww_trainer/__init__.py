@@ -72,3 +72,18 @@ from ww_trainer.tiers import HARDWARE_TIERS, TierConfig
 
 # --- Distillation ---
 from ww_trainer.distill import CnnLstmExtractor, KnowledgeDistillationTrainer
+
+# --- Augmentation ---
+from ww_trainer.augment import (
+    AugmentationPipeline,
+    AudioTransform,
+    MixBackground,
+    ApplyReverb,
+    PitchShift,
+    SpeedPerturb,
+    GaussianNoise,
+    VolumePerturb,
+    TimeShift,
+    SpecAugment,
+    Normalize,
+)
