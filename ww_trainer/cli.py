@@ -127,6 +127,9 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option('--pitch-max', default=1.0, type=float, help='Maximum pitch shift in semitones.')
 @click.option('--speed-min', default=0.95, type=float, help='Minimum speed perturbation factor.')
 @click.option('--speed-max', default=1.05, type=float, help='Maximum speed perturbation factor.')
+# -------------------------- Multi-Stage Training --------------------------
+@click.option("--training-stages", default=None, type=str,
+              help="Multi-stage training spec: 'epochs:lr,epochs:lr,...' (e.g. '30:1e-4,5:1e-5,5:1e-6').")
 # -------------------------- Spectrogram Augmentation --------------------------
 @click.option("--spec-augment", is_flag=True, default=False,
               help="Enable SpecAugment frequency+time masking on extracted features.")
@@ -171,6 +174,7 @@ def train(**opts: dict) -> None:
     use_amp = opts.pop("use_amp", False)
     accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
     ambient_dir = opts.pop("ambient_dir", None)
+    training_stages = opts.pop("training_stages", None)
     spec_augment = opts.pop("spec_augment", False)
     spec_n_time_masks = opts.pop("spec_n_time_masks", 2)
     spec_max_time_width = opts.pop("spec_max_time_width", 10)
@@ -242,44 +246,60 @@ def train(**opts: dict) -> None:
                               mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
                               use_amp=use_amp,
                               **opts)
-    trainer.train(
-        train_data=train_data,
-        test_data=test_data,
-        epochs=opts["epochs"],
-        batch_size=opts["batch_size"],
-        lr=opts["lr"],
-        neg_threshold=opts["neg_threshold"],
-        mine_fraction=opts["mine_sample"],
-        mining_type=opts["mining_type"],
-        patience=opts["patience"],
-        save_best=opts["save_best"],
-        metrics_log=opts["metrics_log"],
-        tsne_every=opts["tsne_every"],
-        pca_every=opts["pca_every"],
-        umap_every=opts["umap_every"],
-        output_dir=out_dir,
-        base_hard=opts["base_hard"],
-        max_hard=opts["max_hard"],
-        base_easy=opts["base_easy"],
-        min_easy=opts["min_easy"],
-        base_random=opts["base_random"],
-        total_ratio=opts["total_ratio"],
-        blend_ratio=opts["blend_ratio"],
-        use_amp=use_amp,
-        accumulate_grad_batches=accumulate_grad_batches,
-        resume=resume,
-        neg_weight_schedule=neg_weight_schedule,
-        max_neg_weight=max_neg_weight,
-        target_fpr=target_fpr,
-        ambient_dir=ambient_dir,
-        spec_augment=spec_augment,
-        spec_augment_kwargs={
-            "n_time_masks": spec_n_time_masks,
-            "max_time_width": spec_max_time_width,
-            "n_freq_masks": spec_n_freq_masks,
-            "max_freq_width": spec_max_freq_width,
-        } if spec_augment else None,
-    )
+    if training_stages:
+        from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
+        stages = parse_stage_spec(training_stages)
+        run_multi_stage_training(
+            trainer, stages, train_data, test_data, out_dir,
+            batch_size=opts["batch_size"],
+            neg_threshold=opts["neg_threshold"],
+            mine_fraction=opts["mine_sample"],
+            mining_type=opts["mining_type"],
+            patience=opts["patience"],
+            save_best=opts["save_best"],
+            metrics_log=opts["metrics_log"],
+            neg_weight_schedule=neg_weight_schedule,
+            max_neg_weight=max_neg_weight,
+        )
+    else:
+        trainer.train(
+            train_data=train_data,
+            test_data=test_data,
+            epochs=opts["epochs"],
+            batch_size=opts["batch_size"],
+            lr=opts["lr"],
+            neg_threshold=opts["neg_threshold"],
+            mine_fraction=opts["mine_sample"],
+            mining_type=opts["mining_type"],
+            patience=opts["patience"],
+            save_best=opts["save_best"],
+            metrics_log=opts["metrics_log"],
+            tsne_every=opts["tsne_every"],
+            pca_every=opts["pca_every"],
+            umap_every=opts["umap_every"],
+            output_dir=out_dir,
+            base_hard=opts["base_hard"],
+            max_hard=opts["max_hard"],
+            base_easy=opts["base_easy"],
+            min_easy=opts["min_easy"],
+            base_random=opts["base_random"],
+            total_ratio=opts["total_ratio"],
+            blend_ratio=opts["blend_ratio"],
+            use_amp=use_amp,
+            accumulate_grad_batches=accumulate_grad_batches,
+            resume=resume,
+            neg_weight_schedule=neg_weight_schedule,
+            max_neg_weight=max_neg_weight,
+            target_fpr=target_fpr,
+            ambient_dir=ambient_dir,
+            spec_augment=spec_augment,
+            spec_augment_kwargs={
+                "n_time_masks": spec_n_time_masks,
+                "max_time_width": spec_max_time_width,
+                "n_freq_masks": spec_n_freq_masks,
+                "max_freq_width": spec_max_freq_width,
+            } if spec_augment else None,
+        )
 
     # Post-training: C header export
     if export_c_path:
