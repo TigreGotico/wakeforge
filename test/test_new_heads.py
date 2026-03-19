@@ -159,6 +159,31 @@ class TestKWTHead:
         out.sum().backward()
         assert feats.grad is not None
 
+    def test_export_onnx(self, tmp_path):
+        head = KWTHead(input_size=40, patch_len=5, d_model=32,
+                       n_heads=4, n_layers=2, device="cpu")
+        head.eval()
+        head.export_to_onnx(str(tmp_path / "kwt.onnx"))
+        assert (tmp_path / "kwt.onnx").exists()
+
+    def test_onnx_inference(self, tmp_path):
+        """ONNX inference must use same sequence length as export (attention is shape-fixed)."""
+        import numpy as np
+        import onnxruntime as ort
+        head = KWTHead(input_size=40, patch_len=5, d_model=32,
+                       n_heads=4, n_layers=2, device="cpu")
+        head.eval()
+        path = str(tmp_path / "kwt.onnx")
+        # Export with T=200 (ClassifierHead.export_to_onnx uses [1, 200, F])
+        head.export_to_onnx(path)
+        # Inference must use same T=200 since attention shapes are fixed at trace time
+        feats = torch.randn(1, 200, 40)
+        with torch.no_grad():
+            pt_out = head(feats).numpy()
+        sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
+        np.testing.assert_allclose(pt_out, ort_out, atol=1e-4)
+
 
 # ---------- ConformerHead ----------
 
@@ -183,6 +208,30 @@ class TestConformerHead:
         out = head(feats)
         out.sum().backward()
         assert feats.grad is not None
+
+    def test_export_onnx(self, tmp_path):
+        head = ConformerHead(input_size=40, d_model=32, n_heads=4,
+                             n_layers=2, conv_kernel=7, device="cpu")
+        head.eval()
+        head.export_to_onnx(str(tmp_path / "conformer.onnx"))
+        assert (tmp_path / "conformer.onnx").exists()
+
+    def test_onnx_inference(self, tmp_path):
+        """ONNX inference must use same sequence length as export (attention is shape-fixed)."""
+        import numpy as np
+        import onnxruntime as ort
+        head = ConformerHead(input_size=40, d_model=32, n_heads=4,
+                             n_layers=2, conv_kernel=7, device="cpu")
+        head.eval()
+        path = str(tmp_path / "conformer.onnx")
+        head.export_to_onnx(path)
+        # Use T=200 matching the export dummy input
+        feats = torch.randn(1, 200, 40)
+        with torch.no_grad():
+            pt_out = head(feats).numpy()
+        sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
+        np.testing.assert_allclose(pt_out, ort_out, atol=1e-4)
 
 
 # ---------- CRNNHead ----------
