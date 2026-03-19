@@ -392,6 +392,372 @@ class RobustProtoDiversityLoss(nn.Module):
         return loss
 
 
+class FocalLoss(nn.Module):
+    """Focal Loss (Lin et al., ICCV 2017).
+
+    Down-weights easy examples and focuses training on hard ones.
+    Critical for imbalanced wake word datasets where negatives dominate.
+
+    ``FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)``
+
+    Args:
+        alpha: Balancing factor for positive class (default 0.25).
+        gamma: Focusing parameter — higher values focus more on hard examples.
+        reduction: ``"mean"`` or ``"sum"``.
+    """
+
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
+                 reduction: str = "mean") -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute focal loss.
+
+        Args:
+            logits: Raw logits ``[B]`` or ``[B, 1]``.
+            labels: Binary labels ``[B]`` (float).
+
+        Returns:
+            Scalar loss.
+        """
+        logits = logits.view(-1)
+        labels = labels.view(-1).float()
+        p = torch.sigmoid(logits)
+        ce = F.binary_cross_entropy_with_logits(logits, labels, reduction="none")
+
+        p_t = p * labels + (1 - p) * (1 - labels)
+        alpha_t = self.alpha * labels + (1 - self.alpha) * (1 - labels)
+        focal_weight = alpha_t * (1 - p_t) ** self.gamma
+
+        loss = focal_weight * ce
+        if self.reduction == "mean":
+            return loss.mean()
+        return loss.sum()
+
+
+class LabelSmoothingBCE(nn.Module):
+    """Binary Cross-Entropy with label smoothing (Szegedy et al. 2016).
+
+    Replaces hard labels {0, 1} with soft labels {smoothing, 1 - smoothing}.
+    Prevents overconfident predictions and improves generalization.
+
+    Args:
+        smoothing: Label smoothing factor (default 0.1).
+    """
+
+    def __init__(self, smoothing: float = 0.1) -> None:
+        super().__init__()
+        self.smoothing = smoothing
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute label-smoothed BCE.
+
+        Args:
+            logits: Raw logits ``[B]`` or ``[B, 1]``.
+            labels: Binary labels ``[B]`` (float).
+
+        Returns:
+            Scalar loss.
+        """
+        logits = logits.view(-1)
+        labels = labels.view(-1).float()
+        smooth = labels * (1.0 - self.smoothing) + (1.0 - labels) * self.smoothing
+        return F.binary_cross_entropy_with_logits(logits, smooth)
+
+
+class ArcFaceLoss(nn.Module):
+    """Additive Angular Margin Loss / ArcFace (Deng et al., CVPR 2019).
+
+    Adds an angular margin penalty in cosine space to enforce inter-class
+    separability.  Gold standard for face/speaker verification, increasingly
+    used for KWS.
+
+    For binary wake word detection, uses 2 class centers (wake / not-wake).
+
+    Args:
+        embed_dim: Embedding dimension.
+        margin: Angular margin in radians (default 0.5 ≈ 28.6°).
+        scale: Cosine scaling factor (default 30.0).
+    """
+
+    def __init__(self, embed_dim: int, margin: float = 0.5,
+                 scale: float = 30.0) -> None:
+        super().__init__()
+        self.margin = margin
+        self.scale = scale
+        self.weight = nn.Parameter(torch.randn(2, embed_dim))
+        nn.init.xavier_normal_(self.weight)
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute ArcFace loss.
+
+        Args:
+            embeds: Normalized embeddings ``[B, D]``.
+            labels: Binary labels ``[B]`` (long).
+
+        Returns:
+            Scalar loss.
+        """
+        embeds = F.normalize(embeds, p=2, dim=1)
+        w = F.normalize(self.weight, p=2, dim=1)
+        cosine = torch.matmul(embeds, w.t())  # [B, 2]
+
+        # Add angular margin to the target class
+        labels = labels.view(-1).long()
+        theta = torch.acos(cosine.clamp(-1 + 1e-7, 1 - 1e-7))
+        target_theta = theta[torch.arange(len(labels)), labels] + self.margin
+        target_cos = torch.cos(target_theta.clamp(0, torch.pi))
+
+        logits = cosine.clone()
+        logits[torch.arange(len(labels)), labels] = target_cos
+        logits = logits * self.scale
+
+        return F.cross_entropy(logits, labels)
+
+
+class CenterLoss(nn.Module):
+    """Center Loss (Wen et al., ECCV 2016).
+
+    Learns a center for each class and penalizes distance from embeddings
+    to their corresponding class center.  Reduces intra-class variation.
+
+    Args:
+        embed_dim: Embedding dimension.
+        num_classes: Number of classes (default 2 for wake word).
+    """
+
+    def __init__(self, embed_dim: int, num_classes: int = 2) -> None:
+        super().__init__()
+        self.centers = nn.Parameter(torch.randn(num_classes, embed_dim))
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute center loss.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]`` (long).
+
+        Returns:
+            Scalar loss.
+        """
+        labels = labels.view(-1).long()
+        centers_batch = self.centers[labels]  # [B, D]
+        return ((embeds - centers_batch) ** 2).sum(dim=1).mean() / 2.0
+
+
+class NTXentLoss(nn.Module):
+    """Normalized Temperature-scaled Cross-Entropy / SimCLR loss (Chen et al. 2020).
+
+    Contrastive loss that treats each sample's positive pair against all
+    other samples as negatives.  For supervised use, positive pairs are
+    samples sharing the same label.
+
+    Args:
+        temperature: Softmax temperature (default 0.07).
+    """
+
+    def __init__(self, temperature: float = 0.07) -> None:
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute NT-Xent loss.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]``.
+
+        Returns:
+            Scalar loss.
+        """
+        embeds = F.normalize(embeds, p=2, dim=1)
+        B = embeds.size(0)
+        sim = torch.matmul(embeds, embeds.t()) / self.temperature  # [B, B]
+
+        # Mask: same label = positive, different = negative
+        labels = labels.view(-1)
+        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1))
+        pos_mask.fill_diagonal_(False)
+
+        # For numerical stability
+        sim.fill_diagonal_(-1e9)
+
+        # For each anchor, compute log-softmax over all others
+        log_prob = sim - torch.logsumexp(sim, dim=1, keepdim=True)
+
+        # Mean of log-prob over positive pairs
+        n_pos = pos_mask.sum(dim=1).clamp(min=1)
+        loss = -(log_prob * pos_mask.float()).sum(dim=1) / n_pos
+        return loss.mean()
+
+
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Loss (Khosla et al., NeurIPS 2020).
+
+    Extension of SimCLR to the supervised setting.  All samples of the
+    same class form positive pairs; all others are negatives.  More
+    stable and effective than triplet loss.
+
+    Args:
+        temperature: Softmax temperature (default 0.07).
+    """
+
+    def __init__(self, temperature: float = 0.07) -> None:
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute supervised contrastive loss.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]``.
+
+        Returns:
+            Scalar loss.
+        """
+        embeds = F.normalize(embeds, p=2, dim=1)
+        B = embeds.size(0)
+        labels = labels.view(-1)
+
+        sim = torch.matmul(embeds, embeds.t()) / self.temperature
+        # Mask out self-similarity
+        self_mask = ~torch.eye(B, dtype=torch.bool, device=embeds.device)
+        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & self_mask
+
+        # Log-softmax over non-self entries
+        sim_masked = sim.masked_fill(~self_mask, -1e9)
+        log_prob = sim_masked - torch.logsumexp(sim_masked, dim=1, keepdim=True)
+
+        n_pos = pos_mask.sum(dim=1).clamp(min=1).float()
+        loss = -(log_prob * pos_mask.float()).sum(dim=1) / n_pos
+
+        # Only compute for anchors that have at least one positive
+        valid = pos_mask.sum(dim=1) > 0
+        if valid.any():
+            return loss[valid].mean()
+        return torch.tensor(0.0, device=embeds.device, requires_grad=True)
+
+
+class ProxyNCALoss(nn.Module):
+    """Proxy-NCA Loss (Movshovitz-Attias et al., ICCV 2017).
+
+    Uses learnable proxies (one per class) instead of mining pairs/triplets.
+    Each sample is compared to all class proxies via softmax.  Converges
+    faster than triplet loss with less hyperparameter sensitivity.
+
+    Args:
+        embed_dim: Embedding dimension.
+        num_classes: Number of classes (default 2).
+        scale: Distance scaling factor.
+    """
+
+    def __init__(self, embed_dim: int, num_classes: int = 2,
+                 scale: float = 8.0) -> None:
+        super().__init__()
+        self.proxies = nn.Parameter(torch.randn(num_classes, embed_dim))
+        nn.init.xavier_normal_(self.proxies)
+        self.scale = scale
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute Proxy-NCA loss.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]`` (long).
+
+        Returns:
+            Scalar loss.
+        """
+        embeds = F.normalize(embeds, p=2, dim=1)
+        proxies = F.normalize(self.proxies, p=2, dim=1)
+        labels = labels.view(-1).long()
+
+        # Negative squared L2 distance (similarity)
+        dist = torch.cdist(embeds, proxies, p=2) ** 2  # [B, num_classes]
+        logits = -self.scale * dist
+
+        return F.cross_entropy(logits, labels)
+
+
+class MultiSimilarityLoss(nn.Module):
+    """Multi-Similarity Loss (Wang et al., CVPR 2019).
+
+    Mines informative pairs using three similarities: self-similarity,
+    relative similarity (positive), and negative similarity.  More
+    effective pair mining than triplet or contrastive approaches.
+
+    Args:
+        alpha: Positive pair weighting (default 2.0).
+        beta: Negative pair weighting (default 50.0).
+        base: Margin base (default 0.5).
+    """
+
+    def __init__(self, alpha: float = 2.0, beta: float = 50.0,
+                 base: float = 0.5) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.base = base
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute multi-similarity loss.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]``.
+
+        Returns:
+            Scalar loss.
+        """
+        embeds = F.normalize(embeds, p=2, dim=1)
+        B = embeds.size(0)
+        labels = labels.view(-1)
+
+        sim = torch.matmul(embeds, embeds.t())  # [B, B]
+        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1))
+        pos_mask.fill_diagonal_(False)
+        neg_mask = ~(labels.unsqueeze(0) == labels.unsqueeze(1))
+
+        loss = torch.tensor(0.0, device=embeds.device, requires_grad=True)
+        n_valid = 0
+
+        for i in range(B):
+            pos_sim = sim[i][pos_mask[i]]
+            neg_sim = sim[i][neg_mask[i]]
+
+            if pos_sim.numel() == 0 or neg_sim.numel() == 0:
+                continue
+
+            # Positive pair mining: harder than hardest negative + margin
+            pos_thresh = neg_sim.max() + self.base
+            hard_pos = pos_sim[pos_sim < pos_thresh]
+
+            # Negative pair mining: harder than easiest positive - margin
+            neg_thresh = pos_sim.min() - self.base
+            hard_neg = neg_sim[neg_sim > neg_thresh]
+
+            if hard_pos.numel() == 0 or hard_neg.numel() == 0:
+                continue
+
+            pos_term = (1.0 / self.alpha) * torch.logsumexp(
+                -self.alpha * (hard_pos - self.base), dim=0
+            )
+            neg_term = (1.0 / self.beta) * torch.logsumexp(
+                self.beta * (hard_neg - self.base), dim=0
+            )
+
+            loss = loss + pos_term + neg_term
+            n_valid += 1
+
+        if n_valid > 0:
+            loss = loss / n_valid
+        return loss
+
+
 class LossManager:
     """Manages multiple weighted loss functions for training."""
 
@@ -435,6 +801,46 @@ class LossManager:
                 crit = ContrastiveLoss(margin=cfg.get("margin", 1.0)).to(self.device)
             elif name == "angular":
                 crit = AngularLoss(margin=cfg.get("margin", 0.5)).to(self.device)
+            elif name == "focal":
+                crit = FocalLoss(
+                    alpha=cfg.get("alpha", 0.25),
+                    gamma=cfg.get("gamma", 2.0),
+                ).to(self.device)
+            elif name == "label_smoothing_bce":
+                crit = LabelSmoothingBCE(
+                    smoothing=cfg.get("smoothing", 0.1),
+                ).to(self.device)
+            elif name == "arcface":
+                crit = ArcFaceLoss(
+                    embed_dim=cfg.get("embed_dim", 128),
+                    margin=cfg.get("margin", 0.5),
+                    scale=cfg.get("scale", 30.0),
+                ).to(self.device)
+            elif name == "center":
+                crit = CenterLoss(
+                    embed_dim=cfg.get("embed_dim", 128),
+                    num_classes=cfg.get("num_classes", 2),
+                ).to(self.device)
+            elif name == "ntxent":
+                crit = NTXentLoss(
+                    temperature=cfg.get("temperature", 0.07),
+                ).to(self.device)
+            elif name == "supcon":
+                crit = SupConLoss(
+                    temperature=cfg.get("temperature", 0.07),
+                ).to(self.device)
+            elif name == "proxy_nca":
+                crit = ProxyNCALoss(
+                    embed_dim=cfg.get("embed_dim", 128),
+                    num_classes=cfg.get("num_classes", 2),
+                    scale=cfg.get("scale", 8.0),
+                ).to(self.device)
+            elif name == "multi_similarity":
+                crit = MultiSimilarityLoss(
+                    alpha=cfg.get("alpha", 2.0),
+                    beta=cfg.get("beta", 50.0),
+                    base=cfg.get("base", 0.5),
+                ).to(self.device)
             elif name == "rppl":
                 crit = RobustProtoDiversityLoss(
                     tau=cfg.get("tau", 0.1),
@@ -522,8 +928,24 @@ class LossManager:
                     anchor, positive = pos[idx[:-1]], pos[idx[1:]]
                     loss_val = crit(anchor, positive, neg)
 
-            elif name == "rppl":
+            elif name in ("focal", "label_smoothing_bce"):
+                loss_val = crit(logits.view(-1), labels.to(self.device).float().view(-1))
 
+            elif name in ("arcface", "center", "proxy_nca"):
+                loss_val = crit(embeds, labels.to(self.device).view(-1))
+
+            elif name in ("ntxent", "supcon", "multi_similarity"):
+                # Need at least 1 pos and 1 neg in batch
+                labs = labels.to(self.device).view(-1)
+                if (labs == 1).any() and (labs == 0).any():
+                    loss_val = crit(embeds, labs)
+
+            elif name in ("lse", "contrastive", "angular"):
+                labs = labels.to(self.device).view(-1)
+                if (labs == 1).any() and (labs == 0).any():
+                    loss_val = crit(embeds, labs)
+
+            elif name == "rppl":
                 # Robust Prototype and Diversity Loss
                 aug_embeds = None
                 # Check if the dataset/dataloader supports fetching augmented waveforms
