@@ -19,7 +19,7 @@ Every concrete extractor must:
 
 The split between extractor and head exists so that a heavy neural extractor (HuBERT, ~90M parameters) can be:
 - Exported to ONNX **once** and reused across many training runs without re-exporting.
-- Shared by multiple heads simultaneously via the `shared_extractor` argument to `WakeWordTrainer` (`trainer.py:67`).
+- Shared by multiple heads simultaneously via the `shared_extractor` argument to `WakeWordTrainer` (`trainer.py:67` (shared_extractor kwarg)).
 - Replaced at inference time without changing the head.
 
 ### `ClassifierHead` — `ww_trainer/model.py:13`
@@ -272,7 +272,7 @@ This separation means you can load just the model weights without carrying a lar
 
 ### Adaptive hard-negative sampling
 
-The training loop does not use a fixed hard-negative ratio. Instead, it computes a `readiness` score from embedding statistics (`trainer.py:186`–`188`) and uses an exponential moving average of that score to modulate how many hard vs easy vs random negatives are sampled each epoch (`trainer.py:398`–`400`). This prevents gradient collapse from overexposure to hard examples early in training.
+The training loop does not use a fixed hard-negative ratio. Instead, it computes a `readiness` score from embedding statistics via `compute_readiness()` (`evaluation.py`) and uses an exponential moving average of that score to modulate how many hard vs easy vs random negatives are sampled each epoch via `_build_epoch_data()` (`loop.py`). This prevents gradient collapse from overexposure to hard examples early in training.
 
 ### Feature vectorization cache
 
@@ -284,7 +284,7 @@ The training loop does not use a fixed hard-negative ratio. Instead, it computes
 
 ### Epoch-level data replacement
 
-After assembling epoch_data from wake + hard/easy/random negatives, `replacement_ratio` fraction is dropped and replaced with random samples from the full pool (`trainer.py`). Optional balanced mode ensures 50/50 pos/neg in the replaced portion. Complements hard-negative mining by introducing additional diversity.
+After assembling epoch_data from wake + hard/easy/random negatives, `replacement_ratio` fraction is dropped and replaced with random samples from the full pool. Implemented in `_build_epoch_data()` — `loop.py`. Optional balanced mode ensures 50/50 pos/neg in the replaced portion. Complements hard-negative mining by introducing additional diversity.
 
 ### Composite fitness score
 

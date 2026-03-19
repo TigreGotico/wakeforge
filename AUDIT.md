@@ -96,14 +96,14 @@ Known issues, tech debt, and limitations. All claims are evidence-based with `fi
 
 ## Tech Debt
 
-### TD-001 — trainer.py — 1170-line monolith
-`ww_trainer/trainer.py` handles training loop, checkpointing, hard-negative mining, embedding visualization, MLflow logging, and CLI — six distinct responsibilities in one file. Planned refactor in Phase 3 (see `PLAN.md`).
+### TD-001 — trainer.py monolith ✅ RESOLVED
+`trainer.py` reduced from 1170 → 246 lines. Training loop extracted to `ww_trainer/loop.py:training_loop()`. `compute_readiness()` moved to `evaluation.py`. `save_intermediate_checkpoint()` moved to `checkpoint.py`.
 
 ### TD-002 — No streaming inference wired up
 `SlidingFeatureCacheTensor` (`feats.py:27-53`) exists and is now tested, but `BaseWakeModel.forward_streaming` is not yet implemented. Required for edge deployment.
 
-### TD-003 — setup.py instead of pyproject.toml
-Legacy packaging. Migration planned in Phase 5 (see `PLAN.md`).
+### TD-003 — setup.py instead of pyproject.toml ✅ RESOLVED
+Migrated to `pyproject.toml` with optional dependency groups: `dev`, `transformers`, `vc`, `mlflow`, `sweep`, `markov`, `datagen`.
 
 ### TD-004 — 0% test coverage before this audit
 No tests existed in v0.0.1a1. Test suite added in this sprint (45 tests, see `test/`).

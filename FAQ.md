@@ -18,6 +18,18 @@ Use `--freeze-extractor` to freeze the entire feature extractor, and/or `--freez
 
 `compute_fitness_score()` (`evaluation.py`) combines detection quality and model size into a single metric: `(1 - 0.8*FP_rate - 0.2*FN_rate) * size_penalty`. FP is penalized 4× more than FN. Enable best-fitness checkpointing with `--fitness-checkpoint`. Set `--fitness-param-budget` for the size penalty threshold.
 
+**Q: Where does the epoch training loop live?**
+
+The full training loop was extracted from `WakeWordTrainer.train()` into `ww_trainer/loop.py:training_loop()`. `WakeWordTrainer.train()` is now a thin 4-line delegate. `trainer.py` is 246 lines. Related helpers in `loop.py`: `_build_epoch_data`, `_run_batch_loop`, `_update_best_checkpoints`, `_log_fp_fn_artifacts`.
+
+**Q: Where is `compute_readiness` (hard-negative readiness score)?**
+
+Moved to `ww_trainer/evaluation.py:compute_readiness()`. Previously it was a private method on `WakeWordTrainer`.
+
+**Q: Where is `save_intermediate_checkpoint`?**
+
+Moved to `ww_trainer/checkpoint.py:save_intermediate_checkpoint()`. `WakeWordTrainer.save_intermediate_ckpt()` is now a thin wrapper for backwards compatibility.
+
 ---
 
 ## New Modules (v1.2)

@@ -4,6 +4,21 @@
 
 ---
 
+### 2026-03-19 — trainer.py monolith split: loop.py extraction
+
+**Type:** Refactor
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Created `ww_trainer/loop.py` containing `training_loop()`, `_build_epoch_data()`, `_run_batch_loop()`, `_update_best_checkpoints()`, `_log_fp_fn_artifacts()`
+- Added `save_intermediate_checkpoint()` to `ww_trainer/checkpoint.py`
+- Added `compute_readiness()` to `ww_trainer/evaluation.py`
+- Reduced `ww_trainer/trainer.py` from 709 → 246 lines; `train()` delegates to `loop.training_loop()`
+- Resolved TD-001 and TD-003 from AUDIT.md
+- Updated FAQ.md, AUDIT.md, docs/architecture.md
+**Oversight:** All 697 tests pass; human review required before push
+
+---
+
 ### 2026-03-19 — Datagen v2: OPM plugin discovery + OVOS VAD
 
 **Type:** Refactor
