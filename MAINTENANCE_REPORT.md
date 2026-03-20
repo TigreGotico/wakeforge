@@ -4,6 +4,18 @@
 
 ---
 
+### 2026-03-20 — README and docs/index.md rewrite
+
+**Type:** Documentation
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Rewrote `README.md`: added quickstart (Python + CLI), genetic search parameter table with source citations, notebook env var summary, expanded feature list with `sweep.py` line citations, full docs table linking all 20 docs files.
+- Rewrote `docs/index.md`: navigation hub with module reference table (20 modules), notebook env var summary, key classes/functions table with `file:line` citations for all public search and inference entry points, full docs section linking all 20 docs files.
+- `docs/sweep.md` and `docs/quickstart.md` were already complete (updated in prior 2026-03-20 sprint); no changes needed.
+**Oversight:** Human review required before merge
+
+---
+
 ### 2026-03-20 — S-016 deme migration, S-017 adaptive mutation, S-018 progress callback
 
 **Type:** Feature
