@@ -4,6 +4,25 @@
 
 ---
 
+### 2026-03-20 — Simplify Cell 4 + CI smoke test + notebooks dep group
+
+**Type:** Refactor + CI
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Extracted all dataset logic from Cell 4 into `notebooks/nb_dataset.py`
+  (`load_byo`, `load_generated`, `apply_local_overrides`, helpers)
+- Cell 4 reduced to ~20 lines of dispatch code
+- Added `notebooks/` optional dep group to `pyproject.toml`
+  (jupyter, nbconvert, ipykernel + datagen stack)
+- Added `.github/workflows/notebook-smoke.yml`: executes notebook headlessly
+  with minimal settings (N_POSITIVE=20, GENERATIONS=2, EPOCHS=2, tier=micro),
+  verifies evolution.png + tier_comparison.png + model checkpoint exist,
+  uploads executed notebook as artifact on failure
+  Triggers only on changes to notebooks/ or ww_trainer/
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-20 — Notebook: per-category augmentation and negative dataset overrides
 
 **Type:** Enhancement

@@ -1,0 +1,66 @@
+name: Notebook Smoke Test
+
+on:
+  push:
+    branches: [main, master, dev]
+    paths:
+      - "notebooks/**"
+      - "ww_trainer/**"
+      - ".github/workflows/notebook-smoke.yml"
+  pull_request:
+    branches: [main, master, dev]
+    paths:
+      - "notebooks/**"
+      - "ww_trainer/**"
+      - ".github/workflows/notebook-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install package + notebook deps
+        run: uv pip install --system -e ".[notebooks]"
+
+      - name: Execute genetic_search notebook (minimal settings)
+        env:
+          WAKE_WORD: "hey test"
+          OUTPUT_DIR: "/tmp/ww_smoke"
+          N_POSITIVE: "20"
+          ADVERSARIAL: "false"
+          DOWNLOAD_AUGMENT: "false"
+          POPULATION: "3"
+          GENERATIONS: "2"
+          EPOCHS_PER_TRIAL: "1"
+          TIERS_TO_TRAIN: "micro"
+          FINAL_EPOCHS: "2"
+          EXPORT_ONNX: "false"
+          DEVICE: "cpu"
+        run: |
+          jupyter nbconvert \
+            --to notebook \
+            --execute notebooks/genetic_search.ipynb \
+            --ExecutePreprocessor.timeout=600 \
+            --output /tmp/executed.ipynb
+
+      - name: Verify key outputs exist
+        run: |
+          test -f /tmp/ww_smoke/evolution.png
+          test -f /tmp/ww_smoke/tier_comparison.png
+          ls /tmp/ww_smoke/model_micro/
+
+      - name: Upload executed notebook on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: executed-notebook
+          path: /tmp/executed.ipynb

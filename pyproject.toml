@@ -29,6 +29,15 @@ dev = [
     "pytest",
     "pytest-cov",
 ]
+notebooks = [
+    "jupyter",
+    "nbconvert",
+    "ipykernel",
+    "datasets",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",
+    "ovos-vad-plugin-silero",
+]
 transformers = [
     "transformers",
 ]
