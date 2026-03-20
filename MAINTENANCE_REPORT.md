@@ -4,6 +4,21 @@
 
 ---
 
+### 2026-03-20 — Fix AUDIT.md issues LIM-002, LIM-003, LIM-004 in sweep.py
+
+**Type:** Bug Fix / Test
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Added `_validate_ga_params()` (`sweep.py:24-55`) called at the top of `run_genetic_search`: raises `ValueError` for unknown `fitness_fn` (LIM-002) and out-of-range `elite_frac`/`mutation_rate` (LIM-003).
+- Fixed deme output dir collision (LIM-004): each deme now receives `output_dir=out_dir / f"deme_{deme_id}"` (`sweep.py:670-675`).
+- LIM-001 (no deme migration): documented as architectural limitation deferred to S-016; no code change made.
+- Updated `test/test_sweep_extensions.py`: added `TestInputValidation` (6 tests) and `TestDemeOutputDirIsolation` (1 test); updated `test_unknown_fitness_fn_falls_back_to_identity` docstring to clarify it tests the internal helper, not the public API.
+- Updated `AUDIT.md`: marked LIM-002/LIM-003/LIM-004 as fixed; annotated LIM-001 decision.
+- Updated `FAQ.md`: corrected `fitness_fn` description to reflect ValueError on unknown values; corrected deme output dir description.
+**Oversight:** Human review required before merge
+
+---
+
 ### 2026-03-20 — Sweep coverage expansion + documentation update
 
 **Type:** Test / Documentation

@@ -108,6 +108,12 @@ Migrated to `pyproject.toml` with optional dependency groups: `dev`, `transforme
 ### TD-004 — 0% test coverage before this audit
 No tests existed in v0.0.1a1. Test suite added in this sprint (45 tests, see `test/`).
 
+### TD-010 — pytest-cov crashes with numpy double-import on Python 3.13 (pre-existing)
+**Severity:** Low — affects `--cov` flag only; tests pass without it
+**File:** `test/conftest.py:6` (`import numpy as np`)
+**Description:** `uv run pytest --cov=ww_trainer` raises `ImportError: cannot load module more than once per process` from `numpy._core`. This is a known CPython 3.13 + numpy + coverage interaction when coverage instruments the numpy C extension at import time. The bug pre-dates all changes in this sprint (confirmed by reproducing on the unmodified branch).
+**Workaround:** Run `uv run pytest test/` without `--cov` for normal test runs. For coverage reporting use `uv run pytest test/ --cov=ww_trainer --no-cov-on-fail` or downgrade to Python 3.11/3.12.
+
 ### TD-005 — SileroVadWrapper downloads from internet at init ✅ RESOLVED
 `torch.hub.load()` moved to first `forward()` call. `__init__` no longer touches the network. `onnx_path` path unchanged (local file, no download). See `feats.py:SileroVadWrapper`.
 
@@ -130,22 +136,26 @@ Root cause: identical-frequency sinusoids → trivial K-means → near-uniform H
 
 ## Genetic / Island Model Limitations (sweep.py)
 
-### LIM-001 — No migration between demes — `sweep.py:630-652`
+### LIM-001 — No migration between demes — `sweep.py:630-652` (architectural limitation, deferred)
 **Severity:** Low — suboptimal convergence on long runs
 **File:** `ww_trainer/sweep.py:630-652`
 **Description:** `run_genetic_search` with `n_demes > 1` runs each deme in an isolated `ProcessPoolExecutor` worker. There is no periodic exchange of elite individuals between demes (island migration). Each island evolves independently until completion; only the winning deme's result is returned. This prevents cross-deme gene flow and can lead to premature convergence on individual islands.
+**Decision (2026-03-20):** True inter-generation migration requires generational synchronisation across processes (multiprocessing.Queue or barrier). This is a significant architectural change deferred to S-016. The limitation is now documented honestly here; no silent failure occurs.
 
-### LIM-002 — No input validation on `fitness_fn` — `sweep.py:23-38`
+### LIM-002 — No input validation on `fitness_fn` — `sweep.py:23-38` ✅ FIXED 2026-03-20
 **Severity:** Low — silently uses identity when given an unknown value
 **File:** `ww_trainer/sweep.py:23-38`
 **Description:** `_apply_fitness_fn` falls through to the identity (`f1`) branch for any unrecognised `fitness_fn` string. No `ValueError` or warning is raised. A typo like `"expf1"` silently uses the identity without alerting the user.
+**Fix:** Added `_validate_ga_params()` — `sweep.py:24-55` — called at the top of `run_genetic_search`. Raises `ValueError` with message listing valid values. Tests: `TestInputValidation::test_invalid_fitness_fn_raises`.
 
-### LIM-003 — No input validation on `elite_frac` / `mutation_rate` — `sweep.py:543-659`
+### LIM-003 — No input validation on `elite_frac` / `mutation_rate` — `sweep.py:543-659` ✅ FIXED 2026-03-20
 **Severity:** Low — degenerate behaviour with out-of-range values
 **File:** `ww_trainer/sweep.py:394-540` (`_run_deme`)
 **Description:** Neither `elite_frac` nor `mutation_rate` are validated to be in `[0, 1]`. `elite_frac=0.0` sets `n_elite = max(1, 0)` = 1 (safe), but `elite_frac > 1.0` would keep the whole population as elite, eliminating selection pressure. `mutation_rate > 1.0` always mutates every gene.
+**Fix:** Handled by `_validate_ga_params()` — validates `0 < elite_frac < 1` and `0 <= mutation_rate <= 1`. Tests: `TestInputValidation::test_invalid_elite_frac_raises`, `test_invalid_mutation_rate_raises`.
 
-### LIM-004 — Thread-safety: `Path.mkdir` called from worker processes — `sweep.py:441`
+### LIM-004 — Thread-safety: `Path.mkdir` called from worker processes — `sweep.py:441` ✅ FIXED 2026-03-20
 **Severity:** Low — race condition when two demes target the same `output_dir` subdirectory
 **File:** `ww_trainer/sweep.py:441`
 **Description:** Each `_run_deme` call creates `output_dir / f"trial_{trial_id}"`. Trial IDs start at 0 in every deme (`trial_id = 0` — `sweep.py:453`), so deme 0 and deme 1 will both try to create `trial_0/`, `trial_1/`, etc. The `exist_ok=True` flag on `mkdir` prevents a crash, but trial result files (`metrics.csv`, checkpoints) from different demes will overwrite each other in the same directory.
+**Fix:** Each deme now receives `output_dir=out_dir / f"deme_{deme_id}"` — `sweep.py:670-675`. Trial dirs are isolated per deme. Tests: `TestDemeOutputDirIsolation::test_deme_output_dirs_separate`.

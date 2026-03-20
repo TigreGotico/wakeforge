@@ -76,7 +76,7 @@ class TestFitnessTransforms:
         assert _apply_fitness_fn(0.0, "double_exp_f1") == pytest.approx(expected)
 
     def test_unknown_fitness_fn_falls_back_to_identity(self):
-        """Unknown fitness_fn name must fall through to the identity (f1) branch."""
+        """Unknown fitness_fn in _apply_fitness_fn falls through to identity (internal helper — no validation)."""
         from ww_trainer.sweep import _apply_fitness_fn
         assert _apply_fitness_fn(0.75, "not_a_real_fn") == 0.75
 
@@ -312,3 +312,122 @@ class TestDemes:
         assert "best_config" in result
         assert "best_score" in result
         assert isinstance(result["best_score"], float)
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests (LIM-002, LIM-003)
+# ---------------------------------------------------------------------------
+
+class TestInputValidation:
+    """Tests for _validate_ga_params enforced via run_genetic_search."""
+
+    def test_invalid_fitness_fn_raises(self) -> None:
+        """run_genetic_search with unknown fitness_fn must raise ValueError (LIM-002)."""
+        with pytest.raises(ValueError, match="fitness_fn"):
+            _run_genetic(population_size=2, generations=1, fitness_fn="bad_fn")
+
+    def test_invalid_elite_frac_raises(self) -> None:
+        """elite_frac outside (0, 1) must raise ValueError (LIM-003)."""
+        with pytest.raises(ValueError, match="elite_frac"):
+            _run_genetic(population_size=2, generations=1, elite_frac=1.5)
+
+    def test_invalid_mutation_rate_raises(self) -> None:
+        """mutation_rate outside [0, 1] must raise ValueError (LIM-003)."""
+        with pytest.raises(ValueError, match="mutation_rate"):
+            _run_genetic(population_size=2, generations=1, mutation_rate=-0.1)
+
+    def test_elite_frac_zero_raises(self) -> None:
+        """elite_frac=0.0 is outside (0, 1) and must raise ValueError."""
+        with pytest.raises(ValueError, match="elite_frac"):
+            _run_genetic(population_size=2, generations=1, elite_frac=0.0)
+
+    def test_mutation_rate_exactly_one_is_valid(self) -> None:
+        """mutation_rate=1.0 is within [0, 1] and must not raise."""
+        result = _run_genetic(population_size=2, generations=1, mutation_rate=1.0)
+        assert "best_config" in result
+
+    def test_validate_ga_params_directly(self) -> None:
+        """_validate_ga_params raises ValueError for each invalid input."""
+        from ww_trainer.sweep import _validate_ga_params
+        with pytest.raises(ValueError, match="fitness_fn"):
+            _validate_ga_params("typo_fn", 0.2, 0.3)
+        with pytest.raises(ValueError, match="elite_frac"):
+            _validate_ga_params("f1", 1.5, 0.3)
+        with pytest.raises(ValueError, match="mutation_rate"):
+            _validate_ga_params("f1", 0.2, -0.1)
+
+
+# ---------------------------------------------------------------------------
+# Deme output dir isolation tests (LIM-004)
+# ---------------------------------------------------------------------------
+
+class TestDemeOutputDirIsolation:
+    """Verify each deme writes to a separate subdirectory (LIM-004)."""
+
+    def test_deme_output_dirs_separate(self) -> None:
+        """With n_demes=2, run_genetic_search passes deme_0 and deme_1 output dirs.
+
+        Inspects the kwargs passed to executor.submit so no pickling of mocks occurs.
+        """
+        from pathlib import Path
+        import concurrent.futures
+
+        submitted_kwargs: list[dict] = []
+        _DEME_RESULT = {
+            "best_config": {},
+            "best_score": 0.5,
+            "all_results": [],
+            "history": [],
+        }
+
+        class FakeFuture:
+            """Minimal concurrent.futures.Future stand-in."""
+            def result(self) -> dict:
+                return _DEME_RESULT
+
+        class FakeExecutor:
+            """Captures submit calls without spawning real processes."""
+            def __enter__(self) -> "FakeExecutor":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                pass
+
+            def submit(self, fn: object, **kwargs: object) -> FakeFuture:
+                submitted_kwargs.append(dict(kwargs))
+                return FakeFuture()
+
+        fake_futures: dict[FakeFuture, int] = {}
+
+        original_as_completed = concurrent.futures.as_completed
+
+        def fake_as_completed(fs: object) -> list:
+            # fs is a dict {future: deme_id} in run_genetic_search
+            return list(fs.keys()) if isinstance(fs, dict) else list(fs)
+
+        # Import before patching builtins.open to avoid interfering with
+        # matplotlib's matplotlibrc lookup during lazy module import.
+        from ww_trainer.sweep import run_genetic_search  # noqa: PLC0415
+
+        with patch("builtins.open", mock_open(read_data=_FAKE_CSV)):
+            with patch("os.path.isfile", return_value=True):
+                with patch("ww_trainer.sweep.Path.mkdir"):
+                    with patch(
+                        "ww_trainer.sweep.concurrent.futures.ProcessPoolExecutor",
+                        return_value=FakeExecutor(),
+                    ):
+                        with patch(
+                            "ww_trainer.sweep.concurrent.futures.as_completed",
+                            side_effect=fake_as_completed,
+                        ):
+                            run_genetic_search(
+                                metadata_csv="dummy.csv",
+                                population_size=2,
+                                generations=1,
+                                n_demes=2,
+                                output_dir="/tmp/deme_isolation_test",
+                            )
+
+        assert len(submitted_kwargs) == 2, f"Expected 2 submit calls, got {len(submitted_kwargs)}"
+        dir_names = {Path(kw["output_dir"]).name for kw in submitted_kwargs}
+        assert dir_names == {"deme_0", "deme_1"}, f"Got dir names: {dir_names}"

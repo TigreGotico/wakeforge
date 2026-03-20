@@ -19,6 +19,38 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_VALID_FITNESS_FNS = frozenset({"f1", "exp_f1", "double_exp_f1"})
+
+
+def _validate_ga_params(
+    fitness_fn: str,
+    elite_frac: float,
+    mutation_rate: float,
+) -> None:
+    """Validate genetic algorithm parameters, raising ValueError on bad inputs.
+
+    Args:
+        fitness_fn: Selection pressure transform name.
+        elite_frac: Fraction of population kept as elite; must be in (0, 1).
+        mutation_rate: Per-gene mutation probability; must be in [0, 1].
+
+    Raises:
+        ValueError: If any parameter is invalid.
+    """
+    if fitness_fn not in _VALID_FITNESS_FNS:
+        raise ValueError(
+            f"Unknown fitness_fn {fitness_fn!r}. "
+            f"Valid values: {sorted(_VALID_FITNESS_FNS)}"
+        )
+    if not (0.0 < elite_frac < 1.0):
+        raise ValueError(
+            f"elite_frac must be in (0, 1), got {elite_frac!r}"
+        )
+    if not (0.0 <= mutation_rate <= 1.0):
+        raise ValueError(
+            f"mutation_rate must be in [0, 1], got {mutation_rate!r}"
+        )
+
 
 def _apply_fitness_fn(f1: float, fitness_fn: str) -> float:
     """Apply fitness transform for selection pressure. Reported scores remain raw F1.
@@ -600,6 +632,8 @@ def run_genetic_search(
         Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
         ``history``.
     """
+    _validate_ga_params(fitness_fn, elite_frac, mutation_rate)
+
     import json
 
     space = search_space or _build_search_space(full=full)
@@ -633,7 +667,11 @@ def run_genetic_search(
         futures_results = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_demes) as executor:
             futs = {
-                executor.submit(_run_deme, seed=base_seed ^ deme_id, **deme_kwargs): deme_id
+                executor.submit(
+                    _run_deme,
+                    seed=base_seed ^ deme_id,
+                    **{**deme_kwargs, "output_dir": out_dir / f"deme_{deme_id}"},
+                ): deme_id
                 for deme_id in range(n_demes)
             }
             for fut in concurrent.futures.as_completed(futs):
