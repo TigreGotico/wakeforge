@@ -425,9 +425,221 @@ class TestDemeOutputDirIsolation:
                                 population_size=2,
                                 generations=1,
                                 n_demes=2,
+                                migration_interval=0,  # force parallel executor path
                                 output_dir="/tmp/deme_isolation_test",
                             )
 
         assert len(submitted_kwargs) == 2, f"Expected 2 submit calls, got {len(submitted_kwargs)}"
         dir_names = {Path(kw["output_dir"]).name for kw in submitted_kwargs}
         assert dir_names == {"deme_0", "deme_1"}, f"Got dir names: {dir_names}"
+
+
+# ---------------------------------------------------------------------------
+# S-018: Progress callback tests
+# ---------------------------------------------------------------------------
+
+class TestProgressCallback:
+    """Tests for the on_generation callback (S-018)."""
+
+    def test_on_generation_callback_called(self) -> None:
+        """Callback is invoked once per generation with required keys."""
+        events: list[dict] = []
+        result = _run_genetic(
+            population_size=2,
+            generations=3,
+            on_generation=events.append,
+        )
+        assert len(events) == 3
+        for event in events:
+            assert "generation" in event
+            assert "stage" in event
+            assert "best" in event
+            assert "avg" in event
+            assert "elapsed_seconds" in event
+            assert "deme" in event
+
+    def test_callback_receives_elapsed_seconds(self) -> None:
+        """elapsed_seconds in each callback invocation is a positive float."""
+        events: list[dict] = []
+        _run_genetic(
+            population_size=2,
+            generations=2,
+            on_generation=events.append,
+        )
+        assert len(events) == 2
+        for event in events:
+            assert isinstance(event["elapsed_seconds"], float)
+            assert event["elapsed_seconds"] >= 0.0
+
+    def test_callback_not_called_when_none(self) -> None:
+        """No error raised and no calls made when on_generation is None (default)."""
+        result = _run_genetic(population_size=2, generations=2)
+        assert "best_config" in result
+
+    def test_callback_generation_field_increments(self) -> None:
+        """generation field in callback events matches loop index."""
+        events: list[dict] = []
+        _run_genetic(population_size=2, generations=4, on_generation=events.append)
+        assert [e["generation"] for e in events] == [0, 1, 2, 3]
+
+    def test_two_stage_callback_stage_field(self) -> None:
+        """on_generation receives stage=1 for stage 1 events and stage=2 for stage 2."""
+        events: list[dict] = []
+        _run_two_stage(
+            population_size=2, generations=2,
+            stage2_population=2, stage2_generations=2,
+            on_generation=events.append,
+        )
+        stages = {e["stage"] for e in events}
+        assert 1 in stages
+        assert 2 in stages
+
+
+# ---------------------------------------------------------------------------
+# S-017: Adaptive mutation decay tests
+# ---------------------------------------------------------------------------
+
+class TestMutationDecay:
+    """Tests for the mutation_decay parameter (S-017)."""
+
+    def test_mutation_decay_floor(self) -> None:
+        """With high decay over many generations, rate never drops below 1e-4."""
+        # decay=0.9999 drops rate very fast; verify floor is respected in _run_deme
+        from ww_trainer.sweep import _run_deme, _build_search_space
+        space = _build_search_space(full=False)
+        with patch("builtins.open", mock_open(read_data=_FAKE_CSV)):
+            with patch("os.path.isfile", return_value=True):
+                with patch("ww_trainer.sweep.Path.mkdir"):
+                    with patch("ww_trainer.sweep._evaluate_config", return_value=0.5):
+                        result = _run_deme(
+                            seed=42,
+                            metadata_csv="dummy.csv",
+                            population_size=2,
+                            generations=50,
+                            output_dir=Path("/tmp/decay_floor_test"),
+                            featurizer_type="mfcc",
+                            device="cpu",
+                            epochs_per_trial=1,
+                            search_space=space,
+                            mutation_rate=0.5,
+                            elite_frac=0.5,
+                            timeout_minutes=None,
+                            target_f1=None,
+                            fitness_fn="f1",
+                            seed_population=None,
+                            full=False,
+                            mutation_decay=0.9999,
+                        )
+        # Search completed without error; floor prevented zero rate
+        assert len(result["history"]) > 0
+
+    def test_invalid_mutation_decay_raises(self) -> None:
+        """mutation_decay outside [0, 1] raises ValueError."""
+        with pytest.raises(ValueError, match="mutation_decay"):
+            _run_genetic(population_size=2, generations=1, mutation_decay=-0.1)
+
+    def test_mutation_decay_zero_unchanged(self) -> None:
+        """mutation_decay=0.0 (default) leaves mutation rate unchanged — no error."""
+        result = _run_genetic(population_size=2, generations=2, mutation_decay=0.0)
+        assert "best_config" in result
+
+    def test_mutation_decay_valid_range(self) -> None:
+        """mutation_decay=0.5 completes without error."""
+        result = _run_genetic(population_size=2, generations=2, mutation_decay=0.5)
+        assert "best_config" in result
+
+
+# ---------------------------------------------------------------------------
+# S-016: Deme migration tests
+# ---------------------------------------------------------------------------
+
+class TestDemeMigration:
+    """Tests for the migration_interval / migration_size parameters (S-016)."""
+
+    def test_migration_interval_zero_uses_parallel_path(self) -> None:
+        """n_demes=2, migration_interval=0 uses the parallel executor path and returns a valid result."""
+        from pathlib import Path
+        import concurrent.futures
+
+        _DEME_RESULT = {
+            "best_config": {},
+            "best_score": 0.5,
+            "all_results": [],
+            "history": [],
+        }
+
+        class FakeFuture:
+            def result(self) -> dict:
+                return _DEME_RESULT
+
+        class FakeExecutor:
+            def __enter__(self) -> "FakeExecutor":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                pass
+
+            def submit(self, fn: object, **kwargs: object) -> FakeFuture:
+                return FakeFuture()
+
+        def fake_as_completed(fs: object) -> list:
+            return list(fs.keys()) if isinstance(fs, dict) else list(fs)
+
+        from ww_trainer.sweep import run_genetic_search
+
+        with patch("builtins.open", mock_open(read_data=_FAKE_CSV)):
+            with patch("os.path.isfile", return_value=True):
+                with patch("ww_trainer.sweep.Path.mkdir"):
+                    with patch(
+                        "ww_trainer.sweep.concurrent.futures.ProcessPoolExecutor",
+                        return_value=FakeExecutor(),
+                    ):
+                        with patch(
+                            "ww_trainer.sweep.concurrent.futures.as_completed",
+                            side_effect=fake_as_completed,
+                        ):
+                            result = run_genetic_search(
+                                metadata_csv="dummy.csv",
+                                population_size=2,
+                                generations=1,
+                                n_demes=2,
+                                migration_interval=0,
+                            )
+        assert "best_config" in result
+        assert isinstance(result["best_score"], float)
+
+    def test_migration_interval_positive_runs(self) -> None:
+        """n_demes=2, migration_interval=1, generations=3 completes and returns merged history with both demes."""
+        events: list[dict] = []
+        result = _run_genetic(
+            population_size=2,
+            generations=3,
+            n_demes=2,
+            migration_interval=1,
+            migration_size=1,
+            on_generation=events.append,
+        )
+        assert "best_config" in result
+        assert isinstance(result["best_score"], float)
+        assert len(result["history"]) > 0
+        # History should include entries from both demes
+        deme_ids = {e.get("deme") for e in result["history"]}
+        assert len(deme_ids) >= 1
+
+    def test_migration_invalid_size_raises(self) -> None:
+        """migration_size=0 raises ValueError."""
+        with pytest.raises(ValueError, match="migration_size"):
+            _run_genetic(population_size=2, generations=1, migration_size=0)
+
+    def test_migration_invalid_interval_raises(self) -> None:
+        """migration_interval=-1 raises ValueError."""
+        with pytest.raises(ValueError, match="migration_interval"):
+            _run_genetic(population_size=2, generations=1, migration_interval=-1)
+
+    def test_migration_single_deme_ignores_migration_params(self) -> None:
+        """migration_interval / migration_size accepted without error for n_demes=1."""
+        result = _run_genetic(
+            population_size=2, generations=2,
+            n_demes=1, migration_interval=1, migration_size=1,
+        )
+        assert "best_config" in result

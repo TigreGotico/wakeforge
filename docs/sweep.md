@@ -169,6 +169,10 @@ Algorithm per generation (`sweep.py:484-533` in `_run_deme`):
 | `target_f1` | `float\|None` | `None` | Stop once best raw F1 >= this value |
 | `fitness_fn` | `str` | `"f1"` | Selection pressure: `"f1"`, `"exp_f1"`, `"double_exp_f1"` |
 | `seed_population` | `list\|None` | `None` | Pre-built configs to seed the initial population |
+| `mutation_decay` | `float` | `0.0` | Per-generation multiplicative decay: `rate *= (1 - decay)`, floor `1e-4`. `0.0` = disabled — `sweep.py:530` |
+| `on_generation` | `callable\|None` | `None` | Called after each generation with `{generation, stage, best, avg, elapsed_seconds, deme}` — `sweep.py:551` |
+| `migration_interval` | `int` | `5` | Exchange individuals between demes every N generations (ring topology). `0` = disabled (original parallel path) — `sweep.py:620` |
+| `migration_size` | `int` | `1` | Individuals exchanged per migration event — `sweep.py:620` |
 
 **Returns:** `dict` with `best_config`, `best_score` (raw F1), `all_results`, `history`.
 Each `history` entry: `{"generation": int, "best": float, "avg": float, "elapsed_seconds": float}`.
@@ -230,6 +234,10 @@ Stage 1 runs a broad GA to find promising regions. Stage 2 seeds a tighter GA wi
 | `timeout_minutes` | `float\|None` | `None` | Wall-clock timeout per stage |
 | `target_f1` | `float\|None` | `None` | Early-stop F1 target per stage |
 | `fitness_fn` | `str` | `"f1"` | Selection pressure transform for both stages |
+| `mutation_decay` | `float` | `0.0` | Per-generation mutation rate decay forwarded to both stages |
+| `on_generation` | `callable\|None` | `None` | Per-generation callback; `stage` key is 1 or 2 — `sweep.py:804` |
+| `migration_interval` | `int` | `5` | Deme migration interval forwarded to both stages |
+| `migration_size` | `int` | `1` | Deme migration size forwarded to both stages |
 
 **Returns:** `dict` with `best_config`, `best_score` (raw F1), `stage1`, `stage2`, `history`.
 Each `history` entry carries a `stage` key (1 or 2) — `sweep.py:774-778`.
@@ -251,6 +259,7 @@ Internal helper; applied only for GA selection comparisons. **Reported `best_sco
 | `"double_exp_f1"` | `exp(exp(f1) - 1)` | Extreme pressure near the optimum |
 
 Unknown `fitness_fn` values fall through to the identity branch (same as `"f1"`).
+`_validate_ga_params` raises `ValueError` for unknown values when called via the public API — `sweep.py:25`.
 
 ---
 

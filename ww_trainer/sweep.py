@@ -26,6 +26,9 @@ def _validate_ga_params(
     fitness_fn: str,
     elite_frac: float,
     mutation_rate: float,
+    mutation_decay: float = 0.0,
+    migration_interval: int = 5,
+    migration_size: int = 1,
 ) -> None:
     """Validate genetic algorithm parameters, raising ValueError on bad inputs.
 
@@ -33,6 +36,9 @@ def _validate_ga_params(
         fitness_fn: Selection pressure transform name.
         elite_frac: Fraction of population kept as elite; must be in (0, 1).
         mutation_rate: Per-gene mutation probability; must be in [0, 1].
+        mutation_decay: Per-generation multiplicative decay for mutation rate; must be in [0, 1].
+        migration_interval: Generations between deme migrations; must be >= 0.
+        migration_size: Individuals exchanged per migration event; must be >= 1.
 
     Raises:
         ValueError: If any parameter is invalid.
@@ -49,6 +55,18 @@ def _validate_ga_params(
     if not (0.0 <= mutation_rate <= 1.0):
         raise ValueError(
             f"mutation_rate must be in [0, 1], got {mutation_rate!r}"
+        )
+    if not (0.0 <= mutation_decay <= 1.0):
+        raise ValueError(
+            f"mutation_decay must be in [0, 1], got {mutation_decay!r}"
+        )
+    if migration_interval < 0:
+        raise ValueError(
+            f"migration_interval must be >= 0, got {migration_interval!r}"
+        )
+    if migration_size < 1:
+        raise ValueError(
+            f"migration_size must be >= 1, got {migration_size!r}"
         )
 
 
@@ -440,6 +458,10 @@ def _run_deme(
     fitness_fn: str,
     seed_population: Optional[list],
     full: bool,
+    mutation_decay: float = 0.0,
+    on_generation: Optional[callable] = None,
+    stage: int = 1,
+    deme_id: int = 0,
 ) -> dict:
     """Run one GA deme (island).  Top-level so it is picklable for multiprocessing.
 
@@ -453,20 +475,26 @@ def _run_deme(
         device: Torch device.
         epochs_per_trial: Training epochs per candidate.
         search_space: Dict mapping param names to lists of values.
-        mutation_rate: Probability of mutating each gene.
+        mutation_rate: Initial probability of mutating each gene.
         elite_frac: Fraction of population kept as elite.
         timeout_minutes: Stop after this many minutes if not None.
         target_f1: Stop once raw F1 >= this value if not None.
         fitness_fn: Fitness transform — ``"f1"``, ``"exp_f1"``, or ``"double_exp_f1"``.
         seed_population: Optional pre-seeded list of configs (for stage 2).
         full: Whether this is a full-space search (used for logging only).
+        mutation_decay: Multiplicative decay applied to mutation rate after each
+            generation (``current *= 1 - decay``; floor at 1e-4). ``0.0`` disables decay.
+        on_generation: Optional callable invoked after each generation with a dict
+            containing ``generation``, ``stage``, ``best``, ``avg``,
+            ``elapsed_seconds``, ``deme``.
+        stage: Stage index (1 or 2) forwarded to ``on_generation`` callback.
+        deme_id: 0-based deme index forwarded to ``on_generation`` callback.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
         ``history`` (list of dicts with ``generation``, ``best``, ``avg``,
         ``elapsed_seconds``).
     """
-    import json
     import random
 
     random.seed(seed)
@@ -484,6 +512,7 @@ def _run_deme(
     n_elite = max(1, int(population_size * elite_frac))
     trial_id = 0
     start_time = time.monotonic()
+    current_mutation_rate = mutation_rate
 
     def _random_individual() -> dict:
         return {k: random.choice(v) for k, v in search_space.items()}
@@ -493,10 +522,10 @@ def _run_deme(
         return {k: random.choice([parent1[k], parent2[k]]) for k in keys}
 
     def _mutate(individual: dict) -> dict:
-        """Randomly replace genes with probability mutation_rate."""
+        """Randomly replace genes with probability current_mutation_rate."""
         mutant = individual.copy()
         for k in keys:
-            if random.random() < mutation_rate:
+            if random.random() < current_mutation_rate:
                 mutant[k] = random.choice(search_space[k])
         return mutant
 
@@ -544,6 +573,16 @@ def _run_deme(
         logger.info("Gen %d: best=%.4f avg=%.4f elapsed=%.1fs",
                     gen, gen_best_raw, gen_avg_raw, elapsed)
 
+        if on_generation is not None:
+            on_generation({
+                "generation": gen,
+                "stage": stage,
+                "best": gen_best_raw,
+                "avg": gen_avg_raw,
+                "elapsed_seconds": elapsed,
+                "deme": deme_id,
+            })
+
         # Early-stop checks
         if timeout_minutes is not None and elapsed > timeout_minutes * 60:
             logger.info("Timeout reached after gen %d (%.1fs)", gen, elapsed)
@@ -555,6 +594,11 @@ def _run_deme(
         # Selection by transformed fitness
         ranked = sorted(zip(fit_scores, population), key=lambda x: -x[0])
         elite = [ind for _, ind in ranked[:n_elite]]
+
+        # Adaptive mutation rate decay (S-017)
+        if mutation_decay > 0.0:
+            current_mutation_rate *= (1.0 - mutation_decay)
+            current_mutation_rate = max(current_mutation_rate, 1e-4)
 
         next_pop = list(elite)
         while len(next_pop) < population_size:
@@ -570,6 +614,131 @@ def _run_deme(
         "all_results": all_results,
         "history": history,
     }
+
+
+def _init_population(
+    search_space: dict,
+    population_size: int,
+    seed: int,
+    seed_population: Optional[list],
+) -> list:
+    """Initialise a GA population from a search space.
+
+    Args:
+        search_space: Dict mapping parameter names to lists of candidate values.
+        population_size: Desired number of individuals.
+        seed: Random seed.
+        seed_population: Optional pre-built configs to fill the population from.
+            Padded with random individuals when shorter than ``population_size``.
+
+    Returns:
+        List of config dicts of length ``population_size``.
+    """
+    import random
+    random.seed(seed)
+
+    def _random_individual() -> dict:
+        return {k: random.choice(v) for k, v in search_space.items()}
+
+    if seed_population:
+        population = list(seed_population[:population_size])
+        while len(population) < population_size:
+            population.append(_random_individual())
+    else:
+        population = [_random_individual() for _ in range(population_size)]
+    return population
+
+
+def _run_generation(
+    population: list,
+    search_space: dict,
+    train_data: list,
+    val_data: list,
+    featurizer_type: str,
+    device: str,
+    epochs_per_trial: int,
+    out_dir: Path,
+    trial_id_offset: int,
+    elite_frac: float,
+    current_mutation_rate: float,
+    fitness_fn: str,
+    mutation_decay: float,
+) -> tuple:
+    """Run a single GA generation and return updated state.
+
+    Args:
+        population: Current list of config dicts.
+        search_space: Dict mapping parameter names to lists of candidate values.
+        train_data: Training data entries (path, label).
+        val_data: Validation data entries.
+        featurizer_type: Extractor type string.
+        device: Torch device string.
+        epochs_per_trial: Training epochs per candidate.
+        out_dir: Directory for per-trial checkpoints.
+        trial_id_offset: Starting trial index for checkpoint naming.
+        elite_frac: Fraction of population retained as elite.
+        current_mutation_rate: Mutation probability for this generation.
+        fitness_fn: Fitness transform name.
+        mutation_decay: Multiplicative decay applied to mutation rate after selection.
+
+    Returns:
+        Tuple of ``(new_population, new_trial_id_offset, raw_scores,
+        new_mutation_rate, all_results_entries)``.  ``raw_scores`` is a list
+        of floats aligned with ``population``.
+    """
+    import random
+
+    keys = list(search_space.keys())
+    n_elite = max(1, int(len(population) * elite_frac))
+    raw_scores: list[float] = []
+    fit_scores: list[float] = []
+    all_results_entries: list[dict] = []
+    trial_id = trial_id_offset
+    best_score_local = -1.0
+    best_config_local: dict = {}
+
+    for ind in population:
+        raw = _evaluate_config(
+            ind, train_data, val_data, None, featurizer_type,
+            device, epochs_per_trial, out_dir, trial_id,
+        )
+        fit = _apply_fitness_fn(raw, fitness_fn)
+        raw_scores.append(raw)
+        fit_scores.append(fit)
+        all_results_entries.append({"config": ind, "score": raw})
+        trial_id += 1
+        if raw > best_score_local:
+            best_score_local = raw
+            best_config_local = ind.copy()
+
+    # Selection
+    ranked = sorted(zip(fit_scores, population), key=lambda x: -x[0])
+    elite = [ind for _, ind in ranked[:n_elite]]
+
+    # Mutation rate decay after selection
+    new_mutation_rate = current_mutation_rate
+    if mutation_decay > 0.0:
+        new_mutation_rate *= (1.0 - mutation_decay)
+        new_mutation_rate = max(new_mutation_rate, 1e-4)
+
+    def _crossover(p1: dict, p2: dict) -> dict:
+        return {k: random.choice([p1[k], p2[k]]) for k in keys}
+
+    def _mutate(individual: dict) -> dict:
+        mutant = individual.copy()
+        for k in keys:
+            if random.random() < new_mutation_rate:
+                mutant[k] = random.choice(search_space[k])
+        return mutant
+
+    next_pop = list(elite)
+    while len(next_pop) < len(population):
+        p1, p2 = random.choices(elite, k=2)
+        child = _crossover(p1, p2)
+        child = _mutate(child)
+        next_pop.append(child)
+
+    return next_pop, trial_id, raw_scores, new_mutation_rate, all_results_entries
 
 
 def run_genetic_search(
@@ -590,21 +759,31 @@ def run_genetic_search(
     target_f1: Optional[float] = None,
     fitness_fn: str = "f1",
     seed_population: Optional[list] = None,
+    mutation_decay: float = 0.0,
+    on_generation: Optional[callable] = None,
+    migration_interval: int = 5,
+    migration_size: int = 1,
+    _stage: int = 1,
 ) -> dict:
     """Genetic algorithm hyperparameter search.
 
     Evolves a population of configurations through selection, crossover,
     and mutation.  Supports island-model parallelism (``n_demes > 1``),
-    early stopping (``timeout_minutes``, ``target_f1``), and configurable
-    selection pressure via ``fitness_fn``.
+    early stopping (``timeout_minutes``, ``target_f1``), configurable
+    selection pressure via ``fitness_fn``, adaptive mutation rate decay
+    (``mutation_decay``), deme migration (``migration_interval``), and a
+    per-generation progress callback (``on_generation``).
 
     Algorithm:
     1. Initialise random population (or use ``seed_population``).
     2. Evaluate fitness (F1 score); apply ``fitness_fn`` transform for selection.
     3. Select elite (top performers by transformed fitness).
-    4. Crossover: combine two parents' genes.
-    5. Mutation: randomly perturb genes.
-    6. Repeat for ``generations`` or until an early-stop condition triggers.
+    4. Optionally decay mutation rate by ``mutation_decay``.
+    5. Crossover: combine two parents' genes.
+    6. Mutation: randomly perturb genes.
+    7. (Multi-deme with migration) Exchange top individuals between demes every
+       ``migration_interval`` generations using ring topology.
+    8. Repeat for ``generations`` or until an early-stop condition triggers.
 
     Args:
         metadata_csv: Dataset CSV path.
@@ -616,31 +795,50 @@ def run_genetic_search(
         device: Device.
         epochs_per_trial: Epochs per configuration.
         search_space: Dict mapping param names to lists of values.
-        mutation_rate: Probability of mutating each gene.
+        mutation_rate: Initial probability of mutating each gene.
         elite_frac: Fraction of population to keep as elite.
         full: Expand search space to include featurizer/arch/loss.
-        n_demes: Number of independent parallel island populations.  Each
-                 deme runs in its own process.  The best result is returned.
+        n_demes: Number of parallel island populations.  When
+            ``migration_interval > 0``, demes run synchronously with
+            ring-topology migration; otherwise each deme runs in its own
+            ``ProcessPoolExecutor`` worker.
         timeout_minutes: Stop after this many wall-clock minutes if not None.
         target_f1: Stop once best raw F1 >= this value if not None.
         fitness_fn: Selection pressure transform.  One of ``"f1"``
-                    (identity), ``"exp_f1"``, or ``"double_exp_f1"``.
+            (identity), ``"exp_f1"``, or ``"double_exp_f1"``.
         seed_population: Optional list of pre-built configs to seed the
-                         initial population (used by two-stage search).
+            initial population (used by two-stage search).
+        mutation_decay: Multiplicative decay applied to the mutation rate
+            after each generation: ``rate *= (1 - decay)``, floored at
+            ``1e-4``.  ``0.0`` disables decay (fixed rate).
+        on_generation: Optional callable invoked after each generation.
+            Receives a dict with keys ``generation``, ``stage``, ``best``
+            (raw F1), ``avg`` (raw F1), ``elapsed_seconds``, ``deme``.
+        migration_interval: Exchange individuals between demes every N
+            generations using ring topology.  ``0`` disables migration and
+            preserves the original parallel-process execution path.
+        migration_size: Number of top individuals exchanged per migration
+            event.  Must be >= 1.
+        _stage: Internal stage index (1 or 2) forwarded to ``on_generation``.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
         ``history``.
     """
-    _validate_ga_params(fitness_fn, elite_frac, mutation_rate)
+    _validate_ga_params(
+        fitness_fn, elite_frac, mutation_rate,
+        mutation_decay=mutation_decay,
+        migration_interval=migration_interval,
+        migration_size=migration_size,
+    )
 
     import json
+    import random
 
     space = search_space or _build_search_space(full=full)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    import random
     base_seed = random.randint(0, 2**31)
 
     deme_kwargs = dict(
@@ -659,10 +857,140 @@ def run_genetic_search(
         fitness_fn=fitness_fn,
         seed_population=seed_population,
         full=full,
+        mutation_decay=mutation_decay,
+        on_generation=on_generation,
+        stage=_stage,
     )
 
+    # ------------------------------------------------------------------ #
+    # Single-deme path                                                     #
+    # ------------------------------------------------------------------ #
     if n_demes <= 1:
-        result = _run_deme(seed=base_seed, **deme_kwargs)
+        result = _run_deme(seed=base_seed, deme_id=0, **deme_kwargs)
+
+    # ------------------------------------------------------------------ #
+    # Multi-deme: synchronised migration path (migration_interval > 0)   #
+    # ------------------------------------------------------------------ #
+    elif migration_interval > 0:
+        # Load data once here for the synchronised path
+        with open(metadata_csv) as f:
+            entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+        random.shuffle(entries)
+        entries = [e for e in entries if os.path.isfile(e[0])]
+        split = int(len(entries) * 0.8)
+        train_data, val_data = entries[:split], entries[split:]
+
+        deme_dirs = [out_dir / f"deme_{i}" for i in range(n_demes)]
+        for d in deme_dirs:
+            d.mkdir(parents=True, exist_ok=True)
+
+        populations = [
+            _init_population(space, population_size, base_seed ^ i, seed_population)
+            for i in range(n_demes)
+        ]
+        histories: list[list] = [[] for _ in range(n_demes)]
+        all_results_per_deme: list[list] = [[] for _ in range(n_demes)]
+        best_scores = [-1.0] * n_demes
+        best_configs: list[dict] = [{} for _ in range(n_demes)]
+        trial_offsets = [0] * n_demes
+        current_mutation_rates = [mutation_rate] * n_demes
+        start_time = time.monotonic()
+
+        for gen in range(generations):
+            # Run one generation per deme (synchronous)
+            for deme_idx in range(n_demes):
+                new_pop, new_trial_id, raw_scores, new_rate, entries_batch = _run_generation(
+                    population=populations[deme_idx],
+                    search_space=space,
+                    train_data=train_data,
+                    val_data=val_data,
+                    featurizer_type=featurizer_type,
+                    device=device,
+                    epochs_per_trial=epochs_per_trial,
+                    out_dir=deme_dirs[deme_idx],
+                    trial_id_offset=trial_offsets[deme_idx],
+                    elite_frac=elite_frac,
+                    current_mutation_rate=current_mutation_rates[deme_idx],
+                    fitness_fn=fitness_fn,
+                    mutation_decay=mutation_decay,
+                )
+                populations[deme_idx] = new_pop
+                trial_offsets[deme_idx] = new_trial_id
+                current_mutation_rates[deme_idx] = new_rate
+                all_results_per_deme[deme_idx].extend(entries_batch)
+
+                gen_best = max(raw_scores)
+                gen_avg = sum(raw_scores) / len(raw_scores)
+                elapsed = time.monotonic() - start_time
+
+                histories[deme_idx].append({
+                    "generation": gen,
+                    "best": gen_best,
+                    "avg": gen_avg,
+                    "elapsed_seconds": elapsed,
+                    "deme": deme_idx,
+                })
+
+                if gen_best > best_scores[deme_idx]:
+                    best_scores[deme_idx] = gen_best
+                    top_ind = max(entries_batch, key=lambda e: e["score"])
+                    best_configs[deme_idx] = top_ind["config"].copy()
+
+                if on_generation is not None:
+                    on_generation({
+                        "generation": gen,
+                        "stage": _stage,
+                        "best": gen_best,
+                        "avg": gen_avg,
+                        "elapsed_seconds": elapsed,
+                        "deme": deme_idx,
+                    })
+
+            # Ring-topology migration
+            if (gen + 1) % migration_interval == 0:
+                for i in range(n_demes):
+                    donor_idx = (i + 1) % n_demes
+                    donor_pop = populations[donor_idx]
+                    top_migrants = sorted(
+                        donor_pop, key=lambda c: c.get("score", 0.0), reverse=True
+                    )[:migration_size]
+                    # Replace worst individuals in recipient population
+                    recipient = sorted(
+                        populations[i],
+                        key=lambda c: c.get("score", 0.0),
+                        reverse=True,
+                    )
+                    if len(recipient) >= migration_size:
+                        recipient[-migration_size:] = top_migrants
+                    populations[i] = recipient
+
+            # Global early-stop checks
+            global_best = max(best_scores)
+            elapsed = time.monotonic() - start_time
+            if timeout_minutes is not None and elapsed > timeout_minutes * 60:
+                logger.info("Timeout reached after gen %d (%.1fs)", gen, elapsed)
+                break
+            if target_f1 is not None and global_best >= target_f1:
+                logger.info("Target F1 %.4f reached after gen %d", target_f1, gen)
+                break
+
+        # Pick winning deme
+        winning_deme = int(max(range(n_demes), key=lambda i: best_scores[i]))
+        merged_history = sorted(
+            [entry for h in histories for entry in h],
+            key=lambda e: (e.get("deme", 0), e["generation"]),
+        )
+        all_results = [e for batch in all_results_per_deme for e in batch]
+        result = {
+            "best_config": best_configs[winning_deme],
+            "best_score": best_scores[winning_deme],
+            "all_results": all_results,
+            "history": merged_history,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Multi-deme: original parallel path (migration_interval == 0)        #
+    # ------------------------------------------------------------------ #
     else:
         futures_results = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_demes) as executor:
@@ -670,6 +998,7 @@ def run_genetic_search(
                 executor.submit(
                     _run_deme,
                     seed=base_seed ^ deme_id,
+                    deme_id=deme_id,
                     **{**deme_kwargs, "output_dir": out_dir / f"deme_{deme_id}"},
                 ): deme_id
                 for deme_id in range(n_demes)
@@ -716,6 +1045,10 @@ def run_two_stage_genetic_search(
     timeout_minutes: Optional[float] = None,
     target_f1: Optional[float] = None,
     fitness_fn: str = "f1",
+    mutation_decay: float = 0.0,
+    on_generation: Optional[callable] = None,
+    migration_interval: int = 5,
+    migration_size: int = 1,
 ) -> dict:
     """Two-stage genetic search: broad exploration then focused refinement.
 
@@ -743,6 +1076,13 @@ def run_two_stage_genetic_search(
         timeout_minutes: Wall-clock timeout (applied per stage).
         target_f1: Early-stop F1 target (applied per stage).
         fitness_fn: Selection pressure transform for both stages.
+        mutation_decay: Per-generation multiplicative mutation rate decay
+            (applied in both stages); see ``run_genetic_search``.
+        on_generation: Optional per-generation callback forwarded to both stages.
+            The ``stage`` key in the callback dict will be 1 for stage 1 and 2
+            for stage 2.
+        migration_interval: Deme migration interval forwarded to both stages.
+        migration_size: Deme migration size forwarded to both stages.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``stage1``,
@@ -765,6 +1105,10 @@ def run_two_stage_genetic_search(
         timeout_minutes=timeout_minutes,
         target_f1=target_f1,
         fitness_fn=fitness_fn,
+        mutation_decay=mutation_decay,
+        on_generation=on_generation,
+        migration_interval=migration_interval,
+        migration_size=migration_size,
     )
 
     # Stage 1 — broad search
@@ -772,6 +1116,7 @@ def run_two_stage_genetic_search(
         population_size=population_size,
         generations=generations,
         output_dir=str(out_dir / "stage1"),
+        _stage=1,
         **common,
     )
 
@@ -805,6 +1150,7 @@ def run_two_stage_genetic_search(
         elite_frac=stage2_elite_frac,
         mutation_rate=stage2_mutation_rate,
         seed_population=seeded,
+        _stage=2,
         **common,
     )
 

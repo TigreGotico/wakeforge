@@ -136,11 +136,9 @@ Root cause: identical-frequency sinusoids → trivial K-means → near-uniform H
 
 ## Genetic / Island Model Limitations (sweep.py)
 
-### LIM-001 — No migration between demes — `sweep.py:630-652` (architectural limitation, deferred)
-**Severity:** Low — suboptimal convergence on long runs
-**File:** `ww_trainer/sweep.py:630-652`
-**Description:** `run_genetic_search` with `n_demes > 1` runs each deme in an isolated `ProcessPoolExecutor` worker. There is no periodic exchange of elite individuals between demes (island migration). Each island evolves independently until completion; only the winning deme's result is returned. This prevents cross-deme gene flow and can lead to premature convergence on individual islands.
-**Decision (2026-03-20):** True inter-generation migration requires generational synchronisation across processes (multiprocessing.Queue or barrier). This is a significant architectural change deferred to S-016. The limitation is now documented honestly here; no silent failure occurs.
+### LIM-001 — No migration between demes ✅ FIXED 2026-03-20
+**File:** `ww_trainer/sweep.py:620-690`
+**Fix:** Ring-topology synchronised migration implemented via `migration_interval` and `migration_size` parameters. When `migration_interval > 0` (default 5), demes run synchronously generation-by-generation; top-`migration_size` individuals from each deme are injected into the next deme every `migration_interval` generations. `migration_interval=0` preserves the original `ProcessPoolExecutor` parallel path. Validated by `TestDemeMigration` tests.
 
 ### LIM-002 — No input validation on `fitness_fn` — `sweep.py:23-38` ✅ FIXED 2026-03-20
 **Severity:** Low — silently uses identity when given an unknown value

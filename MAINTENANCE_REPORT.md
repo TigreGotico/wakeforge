@@ -4,6 +4,24 @@
 
 ---
 
+### 2026-03-20 — S-016 deme migration, S-017 adaptive mutation, S-018 progress callback
+
+**Type:** Feature
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- S-018: Added `on_generation: Optional[callable]` to `_run_deme`, `run_genetic_search`, `run_two_stage_genetic_search` (`sweep.py:551`). Callback receives `{generation, stage, best, avg, elapsed_seconds, deme}` after each generation. Notebook Cell 5 installs a live print callback unless `CI` env var is set.
+- S-017: Added `mutation_decay: float = 0.0` to `_run_deme`, `run_genetic_search`, `run_two_stage_genetic_search` (`sweep.py:530`). Each generation after selection: `rate *= (1 - decay)`, floor at `1e-4`. `0.0` = no decay (backwards compatible default).
+- S-016: Added `migration_interval: int = 5` and `migration_size: int = 1` to `run_genetic_search` and `run_two_stage_genetic_search` (`sweep.py:620`). When `migration_interval > 0` and `n_demes > 1`, execution switches from ProcessPoolExecutor to a synchronised generation-by-generation loop with ring-topology migration. `migration_interval=0` preserves original parallel path.
+- Added `_init_population` and `_run_generation` helper functions extracted from `_run_deme` for use in the migration loop.
+- Added `mutation_decay`, `migration_interval`, `migration_size` validation in `_validate_ga_params`.
+- Fixed `TestDemeOutputDirIsolation::test_deme_output_dirs_separate` to pass `migration_interval=0` (required to trigger the ProcessPoolExecutor path).
+- Updated `test/test_sweep_extensions.py`: added 15 new tests — `TestProgressCallback` (5), `TestMutationDecay` (4), `TestDemeMigration` (5). All 49 tests pass; full suite 774 pass.
+- Updated `docs/sweep.md`: added `on_generation`, `mutation_decay`, `migration_interval`, `migration_size` to parameter tables.
+- Marked S-016, S-017, S-018 as done in `SUGGESTIONS.md`; marked LIM-001 as fixed in `AUDIT.md`.
+**Oversight:** Human review required before merge
+
+---
+
 ### 2026-03-20 — Fix AUDIT.md issues LIM-002, LIM-003, LIM-004 in sweep.py
 
 **Type:** Bug Fix / Test

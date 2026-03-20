@@ -118,33 +118,25 @@ Implemented via `_apply` override in both `BaseExtractor` (`feats.py`) and `Clas
 
 ---
 
-## S-016 — Deme migration (island model gene flow) — `sweep.py:630-652`
+## S-016 — Deme migration (island model gene flow) ✅ DONE 2026-03-20
 
-**Problem:** `n_demes > 1` runs fully isolated islands. Without migration, demes converge independently, limiting diversity and missing the main benefit of the island model.
-
-**Solution:** After every N generations, serialize the top-K elite configs from each deme and broadcast them to all other demes via a `multiprocessing.Queue`. Each receiving deme replaces its K worst individuals. Migration interval and K should be configurable parameters.
-
-**Impact:** Improved final F1 on multi-modal search spaces; standard in EA literature (e.g., Cantu-Paz 1998).
+Implemented ring-topology synchronised migration in `run_genetic_search` — `sweep.py:620-690`.
+`migration_interval` (default 5) and `migration_size` (default 1) control cadence and volume.
+`migration_interval=0` preserves original parallel `ProcessPoolExecutor` path.
 
 ---
 
-## S-017 — Adaptive mutation rate — `sweep.py:463-469`
+## S-017 — Adaptive mutation rate ✅ DONE 2026-03-20
 
-**Problem:** `mutation_rate` is fixed throughout the run. Early generations benefit from high mutation (exploration); late generations need low mutation (exploitation).
-
-**Solution:** Decay `mutation_rate` as `max(min_rate, mutation_rate * decay^gen)`. Expose `mutation_decay` (default 0.95) and `min_mutation_rate` (default 0.05) as parameters to `run_genetic_search` and `_run_deme`.
-
-**Impact:** Faster convergence without sacrificing early exploration. Zero breaking changes (existing callers get the fixed-rate behaviour by setting `mutation_decay=1.0`).
+`mutation_decay: float = 0.0` added to `_run_deme`, `run_genetic_search`, `run_two_stage_genetic_search` — `sweep.py:530`.
+After each generation: `rate *= (1 - decay)`, floor `1e-4`. `0.0` = no decay (default, backwards compatible).
 
 ---
 
-## S-018 — Progress callback / hook for notebook live updates — `sweep.py:484-533`
+## S-018 — Progress callback ✅ DONE 2026-03-20
 
-**Problem:** Long genetic searches have no way to stream per-generation results to a notebook or logging system without polling the output JSON.
-
-**Solution:** Add an optional `on_generation(gen: int, best: float, avg: float, elapsed: float) -> None` callback parameter to `run_genetic_search` and `_run_deme`. The callback is invoked at the end of each generation inside `_run_deme` after the `history.append(...)` call (`sweep.py:506`). For notebook use, the callback can update a `tqdm` progress bar or append to a live plot.
-
-**Impact:** Zero performance overhead when callback is `None` (default). Enables Kaggle/Colab progress display without subprocess polling.
+`on_generation: Optional[callable] = None` added to `_run_deme`, `run_genetic_search`, `run_two_stage_genetic_search` — `sweep.py:551`.
+Payload: `{generation, stage, best, avg, elapsed_seconds, deme}`. Notebook Cell 5 installs a print callback unless `CI` env var is set.
 
 ---
 
