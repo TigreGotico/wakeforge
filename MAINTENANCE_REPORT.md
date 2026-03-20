@@ -4,6 +4,20 @@
 
 ---
 
+### 2026-03-20 — Notebook: per-category augmentation and negative dataset overrides
+
+**Type:** Enhancement
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Added 8 new env vars: `NEGATIVES_DIR`, `EXTRA_NEGATIVES_HF`, `BG_NOISE_DIR`, `EXTRA_BG_NOISE_HF`, `MUSIC_DIR`, `EXTRA_MUSIC_HF`, `RIR_DIR`, `EXTRA_RIR_HF`
+- Cell 4 patches `NEGATIVE_DATASETS` via `unittest.mock` for HF extras (no library changes)
+- Local-path overrides applied post-datagen to `DatagenResult` fields
+- Extra HF aug repos fetched manually when `DOWNLOAD_AUGMENT=false` but extras requested
+- Updated Cell 1 table, Cell 2 config, Cell 11 next steps; FAQ +4 Q&A
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-20 — Notebook: configurable datasets, resume safety, HF support
 
 **Type:** Enhancement

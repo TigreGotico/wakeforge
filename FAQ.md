@@ -28,6 +28,18 @@ Set `CUSTOM_TRAIN_CSV=/absolute/path/to/metadata.csv` (format: `path,label`, no 
 
 Set `HF_DATASET=org/repo-name` (e.g. `HF_DATASET=OpenVoiceOS/hey-jarvis-dataset`). This overrides `find_positive_dataset` auto-detection and downloads positives from the specified repo. Negatives and augmentation proceed normally.
 
+**Q: How do I supply my own negative (not-wake-word) audio?**
+
+Set `NEGATIVES_DIR=/path/to/neg_audio/`. The directory is used directly as the negatives source — no HF download for general negatives occurs. Works in all three dataset modes.
+
+**Q: How do I add extra HF repos to the negatives without replacing the built-ins?**
+
+Set `EXTRA_NEGATIVES_HF=org/repo1,org/repo2`. The listed repos are appended to `NEGATIVE_DATASETS["general"]` before datagen runs, so built-in repos are preserved. The same pattern applies to augmentation categories: `EXTRA_BG_NOISE_HF`, `EXTRA_MUSIC_HF`, `EXTRA_RIR_HF`.
+
+**Q: How do I use local audio for bg-noise / music / RIR augmentation?**
+
+Set one or more of `BG_NOISE_DIR`, `MUSIC_DIR`, `RIR_DIR` to local directory paths. After datagen, the corresponding fields on `DatagenResult` are overridden to point at those directories. HF downloads for that category are skipped. The trainer then picks up the local files for augmentation. You can mix: e.g. local `BG_NOISE_DIR` with HF `EXTRA_MUSIC_HF`.
+
 ## Inspiration Features (precise-lite-trainer)
 
 **Q: How do I cache extracted features between training runs?**
