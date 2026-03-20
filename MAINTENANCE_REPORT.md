@@ -4,6 +4,20 @@
 
 ---
 
+### 2026-03-20 — Notebook: comprehensive user documentation
+
+**Type:** Documentation
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Expanded Cell 1 into a full user guide: quick start, all config tables,
+  tier catalogue, resume-safety explanation, output tree, platform notes
+- Added explanatory markdown cell before every code cell (20 cells total, was 11)
+- Each markdown cell explains what the step does, what to tune, and what to expect
+- Cell 7 comment clarifies why download_augmentation=False is correct there
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-20 — Simplify Cell 4 + CI smoke test + notebooks dep group
 
 **Type:** Refactor + CI
