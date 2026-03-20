@@ -4,6 +4,21 @@
 
 ---
 
+### 2026-03-20 — wakegp-inspired sweep extensions
+
+**Type:** Feature
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Added `_apply_fitness_fn` helper (`sweep.py`) — `f1` (identity), `exp_f1`, `double_exp_f1` transforms for selection pressure
+- Extracted GA generational loop into top-level picklable `_run_deme` with `timeout_minutes`, `target_f1`, `fitness_fn`, `seed_population` support
+- Updated `run_genetic_search` to dispatch single-deme or multi-deme (`concurrent.futures.ProcessPoolExecutor`) runs
+- Added `run_two_stage_genetic_search` — coarse stage 1 then focused stage 2 seeded with top-K elites
+- Updated `notebooks/genetic_search.ipynb` Cell 2 (config vars), Cell 5 (two-stage dispatch), Cell 6 (stage-boundary line), Cell 1 (docs table)
+- Added `test/test_sweep_extensions.py` — 9 unit tests (fitness transforms, timeout, target_f1, two-stage structure, n_demes)
+**Oversight:** Human review required before merge
+
+---
+
 ### 2026-03-20 — Notebook: comprehensive user documentation
 
 **Type:** Documentation

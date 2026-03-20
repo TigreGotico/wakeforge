@@ -9,12 +9,33 @@ Or from CLI:
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import math
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_fitness_fn(f1: float, fitness_fn: str) -> float:
+    """Apply fitness transform for selection pressure. Reported scores remain raw F1.
+
+    Args:
+        f1: Raw F1 score in [0, 1].
+        fitness_fn: Transform name — ``"f1"`` (identity), ``"exp_f1"``,
+                    or ``"double_exp_f1"``.
+
+    Returns:
+        Transformed fitness value used only for GA selection comparisons.
+    """
+    if fitness_fn == "exp_f1":
+        return math.exp(f1)
+    if fitness_fn == "double_exp_f1":
+        return math.exp(math.exp(f1) - 1)
+    return f1  # "f1" identity
 
 
 def run_sweep(
@@ -370,6 +391,155 @@ def run_random_search(
     return out
 
 
+def _run_deme(
+    seed: int,
+    metadata_csv: str,
+    population_size: int,
+    generations: int,
+    output_dir: Path,
+    featurizer_type: str,
+    device: str,
+    epochs_per_trial: int,
+    search_space: dict,
+    mutation_rate: float,
+    elite_frac: float,
+    timeout_minutes: Optional[float],
+    target_f1: Optional[float],
+    fitness_fn: str,
+    seed_population: Optional[list],
+    full: bool,
+) -> dict:
+    """Run one GA deme (island).  Top-level so it is picklable for multiprocessing.
+
+    Args:
+        seed: Random seed for this deme.
+        metadata_csv: Dataset CSV path.
+        population_size: Number of individuals per generation.
+        generations: Maximum number of generations.
+        output_dir: Directory for per-trial results.
+        featurizer_type: Extractor type.
+        device: Torch device.
+        epochs_per_trial: Training epochs per candidate.
+        search_space: Dict mapping param names to lists of values.
+        mutation_rate: Probability of mutating each gene.
+        elite_frac: Fraction of population kept as elite.
+        timeout_minutes: Stop after this many minutes if not None.
+        target_f1: Stop once raw F1 >= this value if not None.
+        fitness_fn: Fitness transform — ``"f1"``, ``"exp_f1"``, or ``"double_exp_f1"``.
+        seed_population: Optional pre-seeded list of configs (for stage 2).
+        full: Whether this is a full-space search (used for logging only).
+
+    Returns:
+        Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
+        ``history`` (list of dicts with ``generation``, ``best``, ``avg``,
+        ``elapsed_seconds``).
+    """
+    import json
+    import random
+
+    random.seed(seed)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(metadata_csv) as f:
+        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+    random.shuffle(entries)
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    split = int(len(entries) * 0.8)
+    train_data, val_data = entries[:split], entries[split:]
+
+    keys = list(search_space.keys())
+    n_elite = max(1, int(population_size * elite_frac))
+    trial_id = 0
+    start_time = time.monotonic()
+
+    def _random_individual() -> dict:
+        return {k: random.choice(v) for k, v in search_space.items()}
+
+    def _crossover(parent1: dict, parent2: dict) -> dict:
+        """Uniform crossover: each gene from random parent."""
+        return {k: random.choice([parent1[k], parent2[k]]) for k in keys}
+
+    def _mutate(individual: dict) -> dict:
+        """Randomly replace genes with probability mutation_rate."""
+        mutant = individual.copy()
+        for k in keys:
+            if random.random() < mutation_rate:
+                mutant[k] = random.choice(search_space[k])
+        return mutant
+
+    # Initialise population
+    if seed_population:
+        population = list(seed_population[:population_size])
+        while len(population) < population_size:
+            population.append(_random_individual())
+    else:
+        population = [_random_individual() for _ in range(population_size)]
+
+    best_score = -1.0
+    best_config: dict = {}
+    history: list = []
+    all_results: list = []
+
+    for gen in range(generations):
+        raw_scores: list[float] = []
+        fit_scores: list[float] = []
+
+        for ind in population:
+            raw = _evaluate_config(
+                ind, train_data, val_data, None, featurizer_type,
+                device, epochs_per_trial, out_dir, trial_id,
+            )
+            fit = _apply_fitness_fn(raw, fitness_fn)
+            raw_scores.append(raw)
+            fit_scores.append(fit)
+            all_results.append({"config": ind, "score": raw})
+            trial_id += 1
+
+            if raw > best_score:
+                best_score = raw
+                best_config = ind.copy()
+
+        elapsed = time.monotonic() - start_time
+        gen_best_raw = max(raw_scores)
+        gen_avg_raw = sum(raw_scores) / len(raw_scores)
+        history.append({
+            "generation": gen,
+            "best": gen_best_raw,
+            "avg": gen_avg_raw,
+            "elapsed_seconds": elapsed,
+        })
+        logger.info("Gen %d: best=%.4f avg=%.4f elapsed=%.1fs",
+                    gen, gen_best_raw, gen_avg_raw, elapsed)
+
+        # Early-stop checks
+        if timeout_minutes is not None and elapsed > timeout_minutes * 60:
+            logger.info("Timeout reached after gen %d (%.1fs)", gen, elapsed)
+            break
+        if target_f1 is not None and best_score >= target_f1:
+            logger.info("Target F1 %.4f reached after gen %d", target_f1, gen)
+            break
+
+        # Selection by transformed fitness
+        ranked = sorted(zip(fit_scores, population), key=lambda x: -x[0])
+        elite = [ind for _, ind in ranked[:n_elite]]
+
+        next_pop = list(elite)
+        while len(next_pop) < population_size:
+            p1, p2 = random.choices(elite, k=2)
+            child = _crossover(p1, p2)
+            child = _mutate(child)
+            next_pop.append(child)
+        population = next_pop
+
+    return {
+        "best_config": best_config,
+        "best_score": best_score,
+        "all_results": all_results,
+        "history": history,
+    }
+
+
 def run_genetic_search(
     metadata_csv: str,
     population_size: int = 20,
@@ -383,125 +553,250 @@ def run_genetic_search(
     mutation_rate: float = 0.3,
     elite_frac: float = 0.2,
     full: bool = False,
+    n_demes: int = 1,
+    timeout_minutes: Optional[float] = None,
+    target_f1: Optional[float] = None,
+    fitness_fn: str = "f1",
+    seed_population: Optional[list] = None,
 ) -> dict:
     """Genetic algorithm hyperparameter search.
 
     Evolves a population of configurations through selection, crossover,
-    and mutation.  Good for complex search spaces where Bayesian
-    optimization struggles.
+    and mutation.  Supports island-model parallelism (``n_demes > 1``),
+    early stopping (``timeout_minutes``, ``target_f1``), and configurable
+    selection pressure via ``fitness_fn``.
 
     Algorithm:
-    1. Initialize random population
-    2. Evaluate fitness (F1 score)
-    3. Select elite (top performers)
-    4. Crossover: combine two parents' genes
-    5. Mutation: randomly perturb genes
-    6. Repeat for N generations
+    1. Initialise random population (or use ``seed_population``).
+    2. Evaluate fitness (F1 score); apply ``fitness_fn`` transform for selection.
+    3. Select elite (top performers by transformed fitness).
+    4. Crossover: combine two parents' genes.
+    5. Mutation: randomly perturb genes.
+    6. Repeat for ``generations`` or until an early-stop condition triggers.
 
     Args:
         metadata_csv: Dataset CSV path.
         population_size: Number of individuals per generation.
-        generations: Number of generations to evolve.
+        generations: Maximum number of generations.
         output_dir: Directory for results.
-        featurizer: ONNX extractor path.
+        featurizer: ONNX extractor path (unused when ``featurizer_type`` is set).
         featurizer_type: Extractor type.
         device: Device.
         epochs_per_trial: Epochs per configuration.
         search_space: Dict mapping param names to lists of values.
         mutation_rate: Probability of mutating each gene.
         elite_frac: Fraction of population to keep as elite.
+        full: Expand search space to include featurizer/arch/loss.
+        n_demes: Number of independent parallel island populations.  Each
+                 deme runs in its own process.  The best result is returned.
+        timeout_minutes: Stop after this many wall-clock minutes if not None.
+        target_f1: Stop once best raw F1 >= this value if not None.
+        fitness_fn: Selection pressure transform.  One of ``"f1"``
+                    (identity), ``"exp_f1"``, or ``"double_exp_f1"``.
+        seed_population: Optional list of pre-built configs to seed the
+                         initial population (used by two-stage search).
 
     Returns:
-        Dict with ``best_config``, ``best_score``, ``history``.
+        Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
+        ``history``.
     """
     import json
-    import random
 
     space = search_space or _build_search_space(full=full)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(metadata_csv) as f:
-        entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
-    random.shuffle(entries)
-    entries = [e for e in entries if os.path.isfile(e[0])]
-    split = int(len(entries) * 0.8)
-    train_data, val_data = entries[:split], entries[split:]
+    import random
+    base_seed = random.randint(0, 2**31)
 
+    deme_kwargs = dict(
+        metadata_csv=metadata_csv,
+        population_size=population_size,
+        generations=generations,
+        output_dir=out_dir,
+        featurizer_type=featurizer_type,
+        device=device,
+        epochs_per_trial=epochs_per_trial,
+        search_space=space,
+        mutation_rate=mutation_rate,
+        elite_frac=elite_frac,
+        timeout_minutes=timeout_minutes,
+        target_f1=target_f1,
+        fitness_fn=fitness_fn,
+        seed_population=seed_population,
+        full=full,
+    )
+
+    if n_demes <= 1:
+        result = _run_deme(seed=base_seed, **deme_kwargs)
+    else:
+        futures_results = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_demes) as executor:
+            futs = {
+                executor.submit(_run_deme, seed=base_seed ^ deme_id, **deme_kwargs): deme_id
+                for deme_id in range(n_demes)
+            }
+            for fut in concurrent.futures.as_completed(futs):
+                deme_id = futs[fut]
+                deme_result = fut.result()
+                # Tag history entries with deme index
+                for entry in deme_result["history"]:
+                    entry["deme"] = deme_id
+                futures_results.append(deme_result)
+
+        # Pick the winning deme
+        result = max(futures_results, key=lambda r: r["best_score"])
+        result["history"] = sorted(
+            [entry for r in futures_results for entry in r["history"]],
+            key=lambda e: (e.get("deme", 0), e["generation"]),
+        )
+
+    with open(out_dir / "genetic_results.json", "w") as f:
+        json.dump(result, f, indent=2)
+
+    logger.info("Genetic search complete. Best: %.4f — %s",
+                result["best_score"], result["best_config"])
+    return result
+
+
+def run_two_stage_genetic_search(
+    metadata_csv: str,
+    population_size: int = 20,
+    generations: int = 10,
+    stage2_population: int = 10,
+    stage2_generations: int = 5,
+    stage2_elite_frac: float = 0.5,
+    stage2_mutation_rate: float = 0.05,
+    top_k_seed: int = 5,
+    output_dir: str = "sweep_results",
+    featurizer: Optional[str] = None,
+    featurizer_type: str = "mfcc",
+    device: str = "auto",
+    epochs_per_trial: int = 5,
+    full: bool = False,
+    n_demes: int = 1,
+    timeout_minutes: Optional[float] = None,
+    target_f1: Optional[float] = None,
+    fitness_fn: str = "f1",
+) -> dict:
+    """Two-stage genetic search: broad exploration then focused refinement.
+
+    Stage 1 runs a standard GA over the full search space to find promising
+    regions.  Stage 2 seeds a smaller, tighter GA with the top-K configs
+    from stage 1 and uses lower mutation rate and higher elite fraction to
+    converge on the best region found.
+
+    Args:
+        metadata_csv: Dataset CSV path.
+        population_size: Stage 1 population size.
+        generations: Stage 1 generation count.
+        stage2_population: Stage 2 population size.
+        stage2_generations: Stage 2 generation count.
+        stage2_elite_frac: Elite fraction for stage 2.
+        stage2_mutation_rate: Mutation rate for stage 2 (lower = more focused).
+        top_k_seed: Number of best stage-1 configs used to seed stage 2.
+        output_dir: Base output directory.
+        featurizer: ONNX extractor path.
+        featurizer_type: Extractor type.
+        device: Torch device.
+        epochs_per_trial: Training epochs per candidate.
+        full: Expand search space.
+        n_demes: Parallel island count (applied to both stages).
+        timeout_minutes: Wall-clock timeout (applied per stage).
+        target_f1: Early-stop F1 target (applied per stage).
+        fitness_fn: Selection pressure transform for both stages.
+
+    Returns:
+        Dict with ``best_config``, ``best_score`` (raw F1), ``stage1``,
+        ``stage2``, ``history`` (merged; each entry has a ``stage`` field).
+    """
+    import json
+    from pathlib import Path
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    common = dict(
+        metadata_csv=metadata_csv,
+        featurizer=featurizer,
+        featurizer_type=featurizer_type,
+        device=device,
+        epochs_per_trial=epochs_per_trial,
+        full=full,
+        n_demes=n_demes,
+        timeout_minutes=timeout_minutes,
+        target_f1=target_f1,
+        fitness_fn=fitness_fn,
+    )
+
+    # Stage 1 — broad search
+    stage1 = run_genetic_search(
+        population_size=population_size,
+        generations=generations,
+        output_dir=str(out_dir / "stage1"),
+        **common,
+    )
+
+    # Extract top-K elites from stage 1
+    sorted_results = sorted(stage1["all_results"], key=lambda r: r["score"], reverse=True)
+    top_k = [r["config"] for r in sorted_results[:top_k_seed]]
+
+    # Seed stage 2: top-K + mutated variants fill to stage2_population
+    import random
+    space = _build_search_space(full=full)
     keys = list(space.keys())
-    n_elite = max(1, int(population_size * elite_frac))
-    trial_id = 0
 
-    def _random_individual() -> dict:
-        return {k: random.choice(v) for k, v in space.items()}
-
-    def _crossover(parent1: dict, parent2: dict) -> dict:
-        """Uniform crossover: each gene from random parent."""
-        child = {}
+    def _mutate_stage2(cfg: dict) -> dict:
+        """Mutate a config using stage2_mutation_rate."""
+        mutant = cfg.copy()
         for k in keys:
-            child[k] = random.choice([parent1[k], parent2[k]])
-        return child
-
-    def _mutate(individual: dict) -> dict:
-        """Randomly replace genes with probability mutation_rate."""
-        mutant = individual.copy()
-        for k in keys:
-            if random.random() < mutation_rate:
+            if random.random() < stage2_mutation_rate:
                 mutant[k] = random.choice(space[k])
         return mutant
 
-    # Initialize population
-    population = [_random_individual() for _ in range(population_size)]
+    seeded: list = list(top_k)
+    while len(seeded) < stage2_population:
+        parent = random.choice(top_k)
+        seeded.append(_mutate_stage2(parent))
 
-    best_overall_score = -1.0
-    best_overall_config = {}
-    history = []
+    # Stage 2 — focused refinement
+    stage2 = run_genetic_search(
+        population_size=stage2_population,
+        generations=stage2_generations,
+        output_dir=str(out_dir / "stage2"),
+        elite_frac=stage2_elite_frac,
+        mutation_rate=stage2_mutation_rate,
+        seed_population=seeded,
+        **common,
+    )
 
-    for gen in range(generations):
-        # Evaluate
-        scores = []
-        for ind in population:
-            score = _evaluate_config(
-                ind, train_data, val_data, featurizer, featurizer_type,
-                device, epochs_per_trial, out_dir, trial_id,
-            )
-            scores.append(score)
-            trial_id += 1
+    # Merge histories with stage tags
+    merged_history = []
+    for entry in stage1["history"]:
+        merged_history.append({**entry, "stage": 1})
+    for entry in stage2["history"]:
+        merged_history.append({**entry, "stage": 2})
 
-            if score > best_overall_score:
-                best_overall_score = score
-                best_overall_config = ind.copy()
+    # Best overall
+    if stage2["best_score"] >= stage1["best_score"]:
+        best_config = stage2["best_config"]
+        best_score = stage2["best_score"]
+    else:
+        best_config = stage1["best_config"]
+        best_score = stage1["best_score"]
 
-        gen_best = max(scores)
-        gen_avg = sum(scores) / len(scores)
-        history.append({"generation": gen, "best": gen_best, "avg": gen_avg})
-        logger.info("Gen %d: best=%.4f avg=%.4f (overall best=%.4f)",
-                     gen, gen_best, gen_avg, best_overall_score)
-
-        # Selection: rank by score, keep elite
-        ranked = sorted(zip(scores, population), key=lambda x: -x[0])
-        elite = [ind for _, ind in ranked[:n_elite]]
-
-        # Build next generation
-        next_pop = list(elite)  # elitism
-        while len(next_pop) < population_size:
-            p1, p2 = random.choices(elite, k=2)
-            child = _crossover(p1, p2)
-            child = _mutate(child)
-            next_pop.append(child)
-        population = next_pop
-
-    out = {
-        "best_config": best_overall_config,
-        "best_score": best_overall_score,
-        "history": history,
+    result = {
+        "best_config": best_config,
+        "best_score": best_score,
+        "stage1": stage1,
+        "stage2": stage2,
+        "history": merged_history,
     }
-    with open(out_dir / "genetic_results.json", "w") as f:
-        json.dump(out, f, indent=2)
+    with open(out_dir / "two_stage_results.json", "w") as f:
+        json.dump(result, f, indent=2)
 
-    logger.info("Genetic search complete. Best: %.4f — %s",
-                best_overall_score, best_overall_config)
-    return out
+    logger.info("Two-stage search complete. Best: %.4f — %s", best_score, best_config)
+    return result
 
 
 def _build_micro_search_space(tier_name: str) -> dict:
