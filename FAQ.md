@@ -14,9 +14,19 @@
 
 See the configuration table in `notebooks/genetic_search.ipynb` cell 1, or `docs/index.md`. Key vars: `WAKE_WORD`, `POPULATION`, `GENERATIONS`, `TIERS_TO_TRAIN`, `FINAL_EPOCHS`. All have safe defaults so the notebook runs without any env vars set.
 
-**Q: How do I skip dataset regeneration on repeated runs?**
+**Q: How do I skip dataset regeneration on repeated runs (resume safety)?**
 
-The Config cell sets `reuse_dataset=True` by default in `_run_or_load_datagen`. If `dataset/train/metadata.csv` and `dataset/test/metadata.csv` already exist under `OUTPUT_DIR`, datagen is skipped entirely. See `_run_or_load_datagen` — `quickstart.py:115`.
+Cell 4 is fully resume-safe across all three dataset modes:
+- **BYO CSV**: no datagen at all; the optional 80/20 split is written once to `OUTPUT_DIR/dataset_split/` and reused.
+- **HF / Auto**: `reuse_dataset=True` is always passed — if `dataset/train/metadata.csv` and `dataset/test/metadata.csv` exist under `OUTPUT_DIR`, datagen is skipped. See `_run_or_load_datagen` — `quickstart.py:115`.
+
+**Q: How do I use my own dataset instead of generating one?**
+
+Set `CUSTOM_TRAIN_CSV=/absolute/path/to/metadata.csv` (format: `path,label`, no header). Optionally set `CUSTOM_TEST_CSV`; if absent, the notebook splits 80/20 and writes the split to `OUTPUT_DIR/dataset_split/` (idempotent). No TTS or HF downloads occur in this mode.
+
+**Q: How do I force a specific HuggingFace dataset for positives?**
+
+Set `HF_DATASET=org/repo-name` (e.g. `HF_DATASET=OpenVoiceOS/hey-jarvis-dataset`). This overrides `find_positive_dataset` auto-detection and downloads positives from the specified repo. Negatives and augmentation proceed normally.
 
 ## Inspiration Features (precise-lite-trainer)
 

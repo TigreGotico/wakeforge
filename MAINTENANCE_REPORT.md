@@ -4,6 +4,21 @@
 
 ---
 
+### 2026-03-20 — Notebook: configurable datasets, resume safety, HF support
+
+**Type:** Enhancement
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Replaced Cell 4 with a three-mode dataset loader: BYO CSV, HF override, Auto
+- Added `CUSTOM_TRAIN_CSV`, `CUSTOM_TEST_CSV`, `HF_DATASET` env vars (Cell 2 + Cell 1 table)
+- BYO mode: auto 80/20 split written once to `OUTPUT_DIR/dataset_split/` (idempotent)
+- HF override mode: patches `find_positive_dataset` via `unittest.mock` without modifying library code
+- All modes explicitly resume-safe (no re-synthesis on re-run)
+- Updated `FAQ.md` with three new Q&A entries
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-20 — Add genetic search Jupyter notebook
 
 **Type:** Feature
