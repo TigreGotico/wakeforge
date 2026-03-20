@@ -4,6 +4,19 @@
 
 ---
 
+### 2026-03-20 — Add genetic search Jupyter notebook
+
+**Type:** Feature
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Created `notebooks/genetic_search.ipynb` — 11-cell end-to-end notebook: datagen → `run_genetic_search` → multi-tier training → benchmark → summary table. Kaggle/Colab-ready via env vars.
+- API adaptations from spec: `run_benchmark` has no `featurizer_types` param (benchmarks all available extractors); `save_results`/`plot_results` take a `Path` directory, not a CSV path string.
+- Updated `docs/index.md` — added Notebooks section linking to the new notebook.
+- Updated `FAQ.md` — added Kaggle/cloud training Q&A section with 3 new entries.
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-19 — Bug fixes: FeatureCache CLI wiring, flaky HMM test, SileroVAD lazy init, scripts coverage
 
 **Type:** Fix + Test

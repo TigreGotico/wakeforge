@@ -1,5 +1,23 @@
 # ww-trainer — FAQ
 
+## Notebooks & Cloud Training
+
+**Q: How do I run the genetic search notebook on Kaggle?**
+
+1. Upload or link the repo to a Kaggle dataset/notebook.
+2. Add secrets in **Add-ons → Secrets**: `WAKE_WORD`, `OUTPUT_DIR` (e.g. `/kaggle/working/ww_output`), and any other config vars.
+3. Open `notebooks/genetic_search.ipynb`; the Config cell reads all vars via `os.environ.get(...)`.
+4. Run all cells. The notebook auto-detects the Kaggle platform and installs dependencies.
+5. Outputs (ONNX models, evolution plot, benchmark PNGs) are written to `OUTPUT_DIR` and available in the Kaggle output panel.
+
+**Q: Which env vars control the genetic search notebook?**
+
+See the configuration table in `notebooks/genetic_search.ipynb` cell 1, or `docs/index.md`. Key vars: `WAKE_WORD`, `POPULATION`, `GENERATIONS`, `TIERS_TO_TRAIN`, `FINAL_EPOCHS`. All have safe defaults so the notebook runs without any env vars set.
+
+**Q: How do I skip dataset regeneration on repeated runs?**
+
+The Config cell sets `reuse_dataset=True` by default in `_run_or_load_datagen`. If `dataset/train/metadata.csv` and `dataset/test/metadata.csv` already exist under `OUTPUT_DIR`, datagen is skipped entirely. See `_run_or_load_datagen` — `quickstart.py:115`.
+
 ## Inspiration Features (precise-lite-trainer)
 
 **Q: How do I cache extracted features between training runs?**

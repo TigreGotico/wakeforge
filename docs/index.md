@@ -61,6 +61,12 @@ Version: `0.0.1a1` -- `ww_trainer/version.py`
 | [benchmarking.md](benchmarking.md) | Latency measurement, ONNX vs PyTorch comparison, RTF analysis |
 | [recipes.md](recipes.md) | End-to-end recipes: smallest model, best accuracy, noisy env, auto-search, RPi deploy |
 
+### Notebooks
+
+| Notebook | Description |
+|----------|-------------|
+| [notebooks/genetic_search.ipynb](../notebooks/genetic_search.ipynb) | End-to-end: datagen → genetic HP search → multi-tier training → ONNX export → benchmark. Kaggle/Colab-ready via env vars. |
+
 ---
 
 ## Quick Start
