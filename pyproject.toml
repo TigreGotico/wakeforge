@@ -70,7 +70,7 @@ ww_trainer-quickstart = "ww_trainer.quickstart:cli_main"
 Homepage = "https://github.com/TigreGotico/ww_trainer"
 
 [tool.setuptools.dynamic]
-version = {attr = "ww_trainer.version.VERSION_STR"}
+version = {attr = "ww_trainer.version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

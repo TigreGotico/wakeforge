@@ -2,7 +2,7 @@
 
 All exported to ONNX — from MFCC on microcontrollers to HuBERT on servers.
 """
-from ww_trainer.version import VERSION_STR as __version__
+from ww_trainer.version import __version__
 
 # --- Feature Extractors ---
 from ww_trainer.feats import (

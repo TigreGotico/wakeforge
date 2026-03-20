@@ -4,6 +4,20 @@
 
 ---
 
+### 2026-03-20 — Initial release versioning at 0.1.0 + OVOS shared workflows
+
+**Type:** Packaging / CI
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Updated `ww_trainer/version.py` to 0.1.0 stable release (VERSION_ALPHA=0); added `__version__` per OVOS standard version block format; retained `VERSION_STR` as backwards-compat alias.
+- Updated `pyproject.toml` dynamic version attr from `VERSION_STR` to `__version__`.
+- Updated `ww_trainer/__init__.py` to import `__version__` directly from `ww_trainer.version`.
+- Added 11 standard OVOS shared GitHub Actions workflows via `ovos-workflows-adder`: `build-tests.yml`, `coverage.yml`, `lint.yml`, `publish_stable.yml`, `python-support.yml`, `release_workflow.yml`, `release-preview.yml`, `repo-health.yml`, `license_check.yml`, `pip_audit.yml`, `conventional-label.yml`.
+- All 774 tests pass (1 skipped, pre-existing).
+**Oversight:** Human review required before push
+
+---
+
 ### 2026-03-20 — README and docs/index.md rewrite
 
 **Type:** Documentation
