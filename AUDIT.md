@@ -6,6 +6,14 @@ Known issues, tech debt, and limitations. All claims are evidence-based with `fi
 
 ## Confirmed Bugs (as of v0.0.1a1)
 
+### BUG-004 — dataset.py — torchaudio 2.9+ torchcodec requirement ✅ FIXED
+**Severity:** High — CI failure; `ImportError` on any environment without `torchcodec`
+**File:** `ww_trainer/dataset.py:228,248,251` (pre-fix line numbers)
+**Description:** `torchaudio 2.9` changed `torchaudio.load()` to use `torchcodec` by default. Environments without `torchcodec` installed raised `ImportError: TorchCodec is required for load_with_torchcodec`.
+**Fix:** Introduced `_load_audio(path)` helper (`dataset.py:14`) that catches `ImportError`/`RuntimeError` from `torchaudio.load` and falls back to `soundfile` (already a project dependency). All three `torchaudio.load` call sites in `dataset.py` now use `_load_audio`.
+
+---
+
 ### BUG-001 — feats.py:87 — Wrong argument to ONNX checker ✅ FIXED
 **Severity:** Medium — silently skips model validation
 **File:** `ww_trainer/feats.py:87`

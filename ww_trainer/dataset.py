@@ -10,6 +10,33 @@ import torchaudio
 
 from torch.utils.data import Dataset
 
+
+def _load_audio(path: str) -> tuple[torch.Tensor, int]:
+    """Load an audio file, handling torchaudio 2.9+ torchcodec requirement.
+
+    torchaudio 2.9 changed ``torchaudio.load()`` to use ``torchcodec`` by
+    default. When ``torchcodec`` is not installed this raises an
+    ``ImportError``.  This helper falls back to ``soundfile`` (always a
+    project dependency) in that case.
+
+    Args:
+        path: Filesystem path to the audio file.
+
+    Returns:
+        A ``(waveform, sample_rate)`` tuple where ``waveform`` has shape
+        ``[channels, time]`` and dtype ``float32``.
+    """
+    try:
+        wav, sr = torchaudio.load(path)
+        return wav, sr
+    except (ImportError, RuntimeError):
+        pass
+    # Fallback: soundfile (always available as a project dependency)
+    import soundfile as sf
+    data, sr = sf.read(path, dtype="float32", always_2d=True)
+    wav = torch.from_numpy(data.T)  # [channels, time]
+    return wav, int(sr)
+
 from ww_trainer.utils import timed
 from ww_trainer.augment import (
     _collect_audio_files,
@@ -225,7 +252,7 @@ class AudioDataset(Dataset):
             target_voice_path=target_voice,
             output_file_name=vc_path,
         )
-        wav, sr = torchaudio.load(vc_path)
+        wav, sr = _load_audio(vc_path)
         return wav, sr
 
     def __getitem__(self, idx):
@@ -245,10 +272,10 @@ class AudioDataset(Dataset):
                 wav, sr = self.revoice(idx)
             except Exception as exc:
                 logger.warning("Voice conversion failed for %s: %s", path, exc)
-                wav, sr = torchaudio.load(path)
+                wav, sr = _load_audio(path)
         else:
             # 1. Load and Resample Source WAV
-            wav, sr = torchaudio.load(path)
+            wav, sr = _load_audio(path)
 
         # 1. Resample Source WAV if needed
         if sr != self.sample_rate:
