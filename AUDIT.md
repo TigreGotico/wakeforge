@@ -125,3 +125,27 @@ Root cause: identical-frequency sinusoids → trivial K-means → near-uniform H
 
 ### S-015 — Quickstart module added ✅ DONE
 `ww_trainer/quickstart.py` — `train_from_wakeword()` Python API + `ww_trainer-quickstart` CLI. Glues `run_datagen_pipeline` → `WakeWordTrainer.train` with automatic augmentation wiring from `DatagenResult`. 11 unit tests in `test/test_quickstart.py`. See `docs/quickstart.md`.
+
+---
+
+## Genetic / Island Model Limitations (sweep.py)
+
+### LIM-001 — No migration between demes — `sweep.py:630-652`
+**Severity:** Low — suboptimal convergence on long runs
+**File:** `ww_trainer/sweep.py:630-652`
+**Description:** `run_genetic_search` with `n_demes > 1` runs each deme in an isolated `ProcessPoolExecutor` worker. There is no periodic exchange of elite individuals between demes (island migration). Each island evolves independently until completion; only the winning deme's result is returned. This prevents cross-deme gene flow and can lead to premature convergence on individual islands.
+
+### LIM-002 — No input validation on `fitness_fn` — `sweep.py:23-38`
+**Severity:** Low — silently uses identity when given an unknown value
+**File:** `ww_trainer/sweep.py:23-38`
+**Description:** `_apply_fitness_fn` falls through to the identity (`f1`) branch for any unrecognised `fitness_fn` string. No `ValueError` or warning is raised. A typo like `"expf1"` silently uses the identity without alerting the user.
+
+### LIM-003 — No input validation on `elite_frac` / `mutation_rate` — `sweep.py:543-659`
+**Severity:** Low — degenerate behaviour with out-of-range values
+**File:** `ww_trainer/sweep.py:394-540` (`_run_deme`)
+**Description:** Neither `elite_frac` nor `mutation_rate` are validated to be in `[0, 1]`. `elite_frac=0.0` sets `n_elite = max(1, 0)` = 1 (safe), but `elite_frac > 1.0` would keep the whole population as elite, eliminating selection pressure. `mutation_rate > 1.0` always mutates every gene.
+
+### LIM-004 — Thread-safety: `Path.mkdir` called from worker processes — `sweep.py:441`
+**Severity:** Low — race condition when two demes target the same `output_dir` subdirectory
+**File:** `ww_trainer/sweep.py:441`
+**Description:** Each `_run_deme` call creates `output_dir / f"trial_{trial_id}"`. Trial IDs start at 0 in every deme (`trial_id = 0` — `sweep.py:453`), so deme 0 and deme 1 will both try to create `trial_0/`, `trial_1/`, etc. The `exist_ok=True` flag on `mkdir` prevents a crash, but trial result files (`metrics.csv`, checkpoints) from different demes will overwrite each other in the same directory.

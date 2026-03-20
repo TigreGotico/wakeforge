@@ -4,15 +4,19 @@
 
 **Q: What does `SEARCH_TWO_STAGE` do?**
 
-Runs a coarse global search (stage 1) then seeds a focused fine-tune round (stage 2) with the top-K configs from stage 1. This improves final quality by first exploring broadly then refining the best region. See `run_two_stage_genetic_search` — `ww_trainer/sweep.py`.
+Runs a coarse global search (stage 1) then seeds a focused fine-tune round (stage 2) with the top-K configs from stage 1. This improves final quality by first exploring broadly then refining the best region. See `run_two_stage_genetic_search` — `ww_trainer/sweep.py:662`. Each history entry in the merged result carries a `stage` field (1 or 2).
 
 **Q: When should I use `SEARCH_DEMES > 1`?**
 
-On multi-core CPUs or multi-GPU machines. Each deme is an independent GA population run in parallel, preventing premature convergence. Use 2–4 demes; each deme uses roughly one CPU core. See `run_genetic_search` (`n_demes` parameter) — `ww_trainer/sweep.py`.
+On multi-core CPUs or multi-GPU machines. Each deme is an independent GA population run in parallel, preventing premature convergence. Use 2–4 demes; each deme uses roughly one CPU core. See `run_genetic_search` (`n_demes` parameter) — `ww_trainer/sweep.py:543`. Note: trial output files from different demes share the same directory and will overwrite each other (see LIM-004 in `AUDIT.md`).
 
 **Q: What is `SEARCH_FITNESS_FN` and which value should I pick?**
 
-Controls selection pressure. `f1` (default) uses raw F1. `exp_f1` steepens the gradient and helps when F1 plateaus above 0.9. `double_exp_f1` applies extreme pressure near the optimum. Start with `f1`; switch to `exp_f1` if search stagnates at high F1. See `_apply_fitness_fn` — `ww_trainer/sweep.py`.
+Controls selection pressure. `f1` (default) uses raw F1. `exp_f1` steepens the gradient and helps when F1 plateaus above 0.9. `double_exp_f1` applies extreme pressure near the optimum. Start with `f1`; switch to `exp_f1` if search stagnates at high F1. The fitness transform is applied **only for selection**; `best_score` in the result is always raw F1. Unknown `fitness_fn` values fall through to identity (no error raised). See `_apply_fitness_fn` — `ww_trainer/sweep.py:23`.
+
+**Q: What fields does each history entry contain?**
+
+Each entry in `run_genetic_search` / `_run_deme` history: `{"generation": int, "best": float, "avg": float, "elapsed_seconds": float}`. In two-stage results, an additional `"stage"` key (1 or 2) is added — `sweep.py:774-778`.
 
 ---
 

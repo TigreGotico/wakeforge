@@ -115,3 +115,45 @@ Implemented via `_apply` override in both `BaseExtractor` (`feats.py`) and `Clas
 **Solution:** In `cli.py`, construct `FeatureCache` from the model's extractor name/params and pass it via `augment_opts` or directly to the `AudioDataset` in the evaluation path. Also pass it to the `evaluate_model` call for test-set caching.
 
 **Impact:** Full end-to-end cache integration. Currently the cache param is only usable via the Python API.
+
+---
+
+## S-016 — Deme migration (island model gene flow) — `sweep.py:630-652`
+
+**Problem:** `n_demes > 1` runs fully isolated islands. Without migration, demes converge independently, limiting diversity and missing the main benefit of the island model.
+
+**Solution:** After every N generations, serialize the top-K elite configs from each deme and broadcast them to all other demes via a `multiprocessing.Queue`. Each receiving deme replaces its K worst individuals. Migration interval and K should be configurable parameters.
+
+**Impact:** Improved final F1 on multi-modal search spaces; standard in EA literature (e.g., Cantu-Paz 1998).
+
+---
+
+## S-017 — Adaptive mutation rate — `sweep.py:463-469`
+
+**Problem:** `mutation_rate` is fixed throughout the run. Early generations benefit from high mutation (exploration); late generations need low mutation (exploitation).
+
+**Solution:** Decay `mutation_rate` as `max(min_rate, mutation_rate * decay^gen)`. Expose `mutation_decay` (default 0.95) and `min_mutation_rate` (default 0.05) as parameters to `run_genetic_search` and `_run_deme`.
+
+**Impact:** Faster convergence without sacrificing early exploration. Zero breaking changes (existing callers get the fixed-rate behaviour by setting `mutation_decay=1.0`).
+
+---
+
+## S-018 — Progress callback / hook for notebook live updates — `sweep.py:484-533`
+
+**Problem:** Long genetic searches have no way to stream per-generation results to a notebook or logging system without polling the output JSON.
+
+**Solution:** Add an optional `on_generation(gen: int, best: float, avg: float, elapsed: float) -> None` callback parameter to `run_genetic_search` and `_run_deme`. The callback is invoked at the end of each generation inside `_run_deme` after the `history.append(...)` call (`sweep.py:506`). For notebook use, the callback can update a `tqdm` progress bar or append to a live plot.
+
+**Impact:** Zero performance overhead when callback is `None` (default). Enables Kaggle/Colab progress display without subprocess polling.
+
+---
+
+## S-019 — Input validation for `fitness_fn`, `elite_frac`, `mutation_rate`
+
+**Problem:** See LIM-002 and LIM-003 in AUDIT.md. Typos and out-of-range values fail silently.
+
+**Solution:** Add a `_validate_ga_params` helper called at the top of `run_genetic_search`:
+- Raise `ValueError` if `fitness_fn not in ("f1", "exp_f1", "double_exp_f1")`.
+- Raise `ValueError` if `elite_frac` or `mutation_rate` not in `[0, 1]`.
+
+**Impact:** Immediate, clear errors instead of silent misconfigurations. Zero breaking changes for valid inputs.

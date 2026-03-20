@@ -4,6 +4,23 @@
 
 ---
 
+### 2026-03-20 — Sweep coverage expansion + documentation update
+
+**Type:** Test / Documentation
+**AI Model:** claude-sonnet-4-6
+**Actions Taken:**
+- Expanded `test/test_sweep_extensions.py` from 9 to 28 tests covering:
+  - `_apply_fitness_fn` edge cases: `f1=0.0`, `f1=1.0`, unknown `fitness_fn` (fallback to identity)
+  - `_run_deme` called directly: expected keys, `elapsed_seconds` in history, `seed_population` initialisation, raw-F1 invariant
+  - `run_genetic_search` with `seed_population`, `fitness_fn="exp_f1"`, `fitness_fn="double_exp_f1"`, `elapsed_seconds` in history, best_score ≤ 1.0 for all transforms
+  - `run_two_stage_genetic_search`: `stage` field in all history entries, `top_k_seed > stage1 results`, `n_demes=2`, best_score ≤ 1.0 for all transforms
+- Updated `docs/sweep.md`: added Strategies Overview table row for `run_two_stage_genetic_search`, full parameter tables for `run_genetic_search` and `run_two_stage_genetic_search` with line citations, documented `_apply_fitness_fn` and its fallback behaviour
+- Updated `AUDIT.md`: added LIM-001 (no deme migration), LIM-002 (no `fitness_fn` validation), LIM-003 (no range validation for `elite_frac`/`mutation_rate`), LIM-004 (trial-ID collision in multi-deme output dirs)
+- Updated `SUGGESTIONS.md`: added S-016 (deme migration), S-017 (adaptive mutation rate), S-018 (progress callback for notebooks), S-019 (input validation for GA params)
+**Oversight:** Human review required before merge
+
+---
+
 ### 2026-03-20 — wakegp-inspired sweep extensions
 
 **Type:** Feature
