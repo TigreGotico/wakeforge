@@ -39,11 +39,13 @@ from ww_trainer.feats import (
     PitchExtractor,
     SNRAwareExtractor,
     SileroVadWrapper,
+    BeatsExtractor,
 )
 from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
     TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
     KWTHead, ConformerHead, CRNNHead, MixConvHead,
+    EfficientNetHead, MambaHead,
     BaseWakeModel,
 )
 
@@ -63,6 +65,7 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "pncc": PNCCExtractor,
     "cqt": CQTExtractor,
     "torchaudio_hubert": TorchAudioHubertExtractor,
+    "beats": BeatsExtractor,
 }
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
@@ -78,6 +81,8 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "conformer": (ConformerHead, {"d_model", "n_heads", "n_layers", "conv_kernel", "dim_ff", "dropout"}),
     "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
+    "efficientnet": (EfficientNetHead, {"dropout"}),
+    "mamba": (MambaHead, {"d_model", "n_layers", "dropout"}),
 }
 
 
@@ -202,6 +207,8 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
             "delta_mfcc": lambda: DeltaExtractor(MfccExtractor(sr=sample_rate, n_mfcc=n_feat)),
             "delta_filterbank": lambda: DeltaExtractor(
                 FilterbankExtractor(sr=sample_rate, n_mels=n_feat)),
+            "beats": lambda: BeatsExtractor(
+                featurizer or "microsoft/beats-iter3-plus", sample_rate, device),
         }
         builder = _EXTRACTOR_BUILDERS.get(featurizer_type)
         if builder is None:

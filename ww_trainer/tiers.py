@@ -103,6 +103,33 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         approx_params="~200K",
         target_hardware="RPi, small SBC",
     ),
+    "beats_small": TierConfig(
+        name="beats_small",
+        extractor_type="beats",
+        head_arch="gru",
+        hidden_dim=256,
+        description="BEATs (AudioSet SSL) + GRU — best for non-speech/non-English WW",
+        approx_params="~90M feat + 1M head",
+        target_hardware="GPU server / workstation",
+    ),
+    "efficientnet_small": TierConfig(
+        name="efficientnet_small",
+        extractor_type="filterbank",
+        head_arch="efficientnet",
+        hidden_dim=128,
+        description="Log-mel FilterBank + EfficientNet-B0 — production 2D CNN baseline",
+        approx_params="~4M",
+        target_hardware="RPi 4 / x86 laptop",
+    ),
+    "mamba_small": TierConfig(
+        name="mamba_small",
+        extractor_type="mfcc",
+        head_arch="mamba",
+        hidden_dim=128,
+        description="MFCC + Mamba SSM — causal streaming, O(T) compute",
+        approx_params="~500K",
+        target_hardware="RPi 4 / x86 (GPU for training)",
+    ),
     # --- ESP32 tiers (520 KB RAM, 4 MB flash) ---
     "esp32_nano": TierConfig(
         name="esp32_nano",

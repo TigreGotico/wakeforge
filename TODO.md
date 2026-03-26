@@ -2,7 +2,7 @@
 
 ## Feature Extractors / Classifier Heads
 
-### BEATs extractor — `BeatsExtractor(BaseExtractor)`
+### ~~BEATs extractor — `BeatsExtractor(BaseExtractor)`~~ ✓ DONE
 **Priority: High** | Effort: Low-Medium
 
 Microsoft BEATs (2023) — audio SSL pretrained on AudioSet rather than speech corpora.
@@ -16,7 +16,7 @@ phoneme-like or for non-English words with unusual phonotactics.
 
 ---
 
-### EfficientNet-B0 head on log-mel — `EfficientNetHead(ClassifierHead)`
+### ~~EfficientNet-B0 head on log-mel — `EfficientNetHead(ClassifierHead)`~~ ✓ DONE
 **Priority: Medium** | Effort: Low
 
 Apply a 2D image CNN (EfficientNet-B0) to the log-mel spectrogram treated as a
@@ -29,7 +29,7 @@ the existing 1D `CnnClassifierHead` and the heavier transformer heads.
 
 ---
 
-### Mamba / SSM-based head — `MambaHead(ClassifierHead)`
+### ~~Mamba / SSM-based head — `MambaHead(ClassifierHead)`~~ ✓ DONE
 **Priority: Medium** | Effort: High | Research interest: High
 
 State Space Models (Mamba, S4) outperform GRU at similar parameter counts for

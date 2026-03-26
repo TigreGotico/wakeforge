@@ -1223,3 +1223,137 @@ class CRNNHead(ClassifierHead):
         x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fp)
         out, _ = self.gru(x)
         return out.mean(dim=1)
+
+
+class EfficientNetHead(ClassifierHead):
+    """EfficientNet-B0 classifier head applied to 2-D log-mel spectrograms.
+
+    Treats the feature sequence ``[B, T, F]`` as a single-channel image
+    ``[B, 1, F, T]`` and applies EfficientNet-B0 with an adapted classifier.
+    No pre-trained weights are used — trained from scratch on the wake-word task.
+
+    Requires ``torchvision``::
+
+        pip install torchvision
+
+    Args:
+        input_size: Number of mel bins (frequency axis), e.g. 40 or 80.
+        dropout: Dropout before the final linear layer.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 40,
+        dropout: float = 0.2,
+        sample_rate: int = 16000,
+        device: str = "auto",
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        try:
+            from torchvision.models import efficientnet_b0
+        except ImportError:
+            raise ImportError("Install torchvision for EfficientNetHead: pip install torchvision")
+        import torch.nn as nn
+        backbone = efficientnet_b0(weights=None)
+        # Replace first conv to accept 1-channel input instead of 3
+        backbone.features[0][0] = nn.Conv2d(
+            1, 32, kernel_size=3, stride=2, padding=1, bias=False
+        )
+        # Remove the original classifier; we add our own binary head
+        in_features = backbone.classifier[1].in_features
+        backbone.classifier = nn.Sequential(
+            nn.Dropout(p=dropout, inplace=True),
+            nn.Linear(in_features, 1),
+        )
+        self.net = backbone
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        # feats: [B, T, F]
+        x = feats.transpose(1, 2).unsqueeze(1)  # [B, 1, F, T]
+        return self.net(x).squeeze(-1)           # [B]
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = feats.transpose(1, 2).unsqueeze(1)
+        # Pool features before the classifier head
+        x = self.net.features(x)
+        x = self.net.avgpool(x)
+        return x.flatten(1)
+
+
+class MambaHead(ClassifierHead):
+    """Mamba SSM classifier head for streaming wake-word detection.
+
+    Uses a stack of Mamba (selective state space) layers instead of GRU or
+    Transformer. Mamba is strictly causal (no future context) and processes
+    sequences in O(T) time and O(1) recurrent memory — ideal for streaming.
+
+    Requires ``mamba-ssm`` (CUDA) **or** the pure-PyTorch reference
+    ``mamba2-minimal`` (CPU-compatible)::
+
+        # GPU (recommended for training)
+        pip install mamba-ssm
+
+        # CPU-compatible reference (slower, no CUDA kernel)
+        pip install git+https://github.com/state-spaces/mamba.git@v2.2.2#egg=mamba2-minimal
+
+    Falls back gracefully: if neither is installed an ``ImportError`` is raised
+    at construction time with install instructions.
+
+    Args:
+        input_size: Feature dimension from the extractor.
+        d_model: Mamba model dimension (hidden width).
+        n_layers: Number of stacked Mamba layers.
+        dropout: Dropout applied after the Mamba stack.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 40,
+        d_model: int = 128,
+        n_layers: int = 2,
+        dropout: float = 0.1,
+        sample_rate: int = 16000,
+        device: str = "auto",
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        import torch.nn as nn
+
+        # Try CUDA mamba-ssm first, then CPU-compatible fallback
+        try:
+            from mamba_ssm import Mamba
+        except ImportError:
+            try:
+                from mamba2_minimal import Mamba2 as Mamba  # type: ignore[import]
+            except ImportError:
+                raise ImportError(
+                    "MambaHead requires mamba-ssm (GPU) or mamba2-minimal (CPU).\n"
+                    "  GPU:  pip install mamba-ssm\n"
+                    "  CPU:  pip install git+https://github.com/state-spaces/mamba.git"
+                    "@v2.2.2#egg=mamba2-minimal"
+                )
+
+        self.proj_in = nn.Linear(input_size, d_model)
+        self.layers = nn.ModuleList([Mamba(d_model=d_model, d_state=16, d_conv=4, expand=2)
+                                     for _ in range(n_layers)])
+        self.norm = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+        self.fc = nn.Linear(d_model, 1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        # feats: [B, T, F]
+        x = self.proj_in(feats)          # [B, T, d_model]
+        for layer in self.layers:
+            x = layer(x)
+        x = self.norm(x)
+        x = self.drop(x.mean(dim=1))    # mean-pool over time
+        return self.fc(x).squeeze(-1)   # [B]
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        x = self.proj_in(feats)
+        for layer in self.layers:
+            x = layer(x)
+        return self.norm(x).mean(dim=1)
