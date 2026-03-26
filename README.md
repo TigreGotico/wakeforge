@@ -77,6 +77,7 @@ Key parameters — full tables in [`docs/sweep.md`](docs/sweep.md):
 | [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) | Zero-to-ONNX: TTS datagen → single-tier training → ONNX export → inference test |
 | [`notebooks/kaggle_experiments.ipynb`](notebooks/kaggle_experiments.ipynb) | Grid: tiers × loss functions × augmentation → results table + plots. Resumable. |
 | [`notebooks/genetic_search.ipynb`](notebooks/genetic_search.ipynb) | Datagen → genetic HP search → multi-tier training → ONNX export → benchmark |
+| [`notebooks/kaggle_infinite.ipynb`](notebooks/kaggle_infinite.ipynb) | Infinite training: smoke test, full run, VC synthesis, NWW pool ablation |
 | [`notebooks/distill.ipynb`](notebooks/distill.ipynb) | Knowledge distillation experiments |
 
 All notebooks are Kaggle/Colab/Paperspace-ready via env vars and Kaggle Secrets for MLflow credentials.

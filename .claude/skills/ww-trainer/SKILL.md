@@ -262,6 +262,7 @@ trainer.model.feature_extractor.export_to_onnx("./model/best_f1_featurizer.onnx"
 |----------|---------|
 | `notebooks/kaggle_quickstart.ipynb` | Zero-to-ONNX, Kaggle/Colab-ready |
 | `notebooks/kaggle_experiments.ipynb` | Resumable experiment grid with plots |
+| `notebooks/kaggle_infinite.ipynb` | Infinite training: smoke test, full run, VC synthesis, pool ablation |
 | `notebooks/genetic_search.ipynb` | Genetic HP search + multi-tier benchmark |
 | `notebooks/distill.ipynb` | HuBERT → TinyHuBERT distillation |
 

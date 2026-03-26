@@ -43,6 +43,7 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 |----------|-------------|
 | [notebooks/kaggle_quickstart.ipynb](../notebooks/kaggle_quickstart.ipynb) | Zero-to-ONNX in one notebook: TTS datagen → single-tier training → ONNX export → inference test. Kaggle/Colab/Paperspace-ready. |
 | [notebooks/kaggle_experiments.ipynb](../notebooks/kaggle_experiments.ipynb) | Systematic experiments: loop over tiers × loss functions × augmentation levels → results table + F1 bar chart. Resumable. |
+| [notebooks/kaggle_infinite.ipynb](../notebooks/kaggle_infinite.ipynb) | Infinite training: smoke test, full goal-based run, VC synthesis, NWW pool size ablation, training curves. |
 | [notebooks/genetic_search.ipynb](../notebooks/genetic_search.ipynb) | End-to-end: datagen → genetic HP search → multi-tier training → ONNX export → benchmark. Kaggle/Colab/Paperspace-ready via env vars. |
 
 ### Notebook env vars (key subset — full table in Cell 1)
