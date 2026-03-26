@@ -108,20 +108,26 @@ def _get_vc_backend(vc_backend: str, vc_device: str):
 
 
 def _synthesise_positives(
-    text: str,
+    source_paths: List[Path],
     donor_paths: List[Path],
     out_dir: Path,
     n: int,
     seed: int,
-    exaggeration: float = 0.4,
     vc_backend: str = "auto",
     vc_device: str = "auto",
 ) -> List[Tuple[str, str]]:
-    """Generate up to *n* TTS positives using the configured VC backend.
+    """Generate up to *n* VC positives by cloning existing wake-word clips into donor voices.
+
+    Each output = one real wake-word audio clip voice-converted to a random donor's timbre.
+    No text synthesis — chatterbox is used in VC mode only.
 
     Returns list of (path, "1") pairs for newly created files.
     Failures are silently skipped — the caller continues with fewer samples.
     """
+    if not source_paths:
+        logger.warning("[VC] No source wake-word clips available — skipping VC synthesis")
+        return []
+
     backend = _get_vc_backend(vc_backend, vc_device)
     if backend is None:
         return []
@@ -136,13 +142,16 @@ def _synthesise_positives(
         if out_path.exists():
             results.append((str(out_path), "1"))
             continue
+        # Pick a random source wake-word clip to voice-convert
+        source = rng.choice(source_paths)
         try:
-            backend.tts(text, donor, out_path, exaggeration=exaggeration)
+            backend.vc(source, donor, out_path)
             results.append((str(out_path), "1"))
         except Exception as exc:
-            logger.debug("[VC] Failed for donor %s: %s", donor.name, exc)
+            logger.debug("[VC] Failed for donor %s / source %s: %s",
+                         donor.name, source.name, exc)
 
-    logger.info("[VC] Generated %d/%d positives this epoch", len(results), n)
+    logger.info("[VC] Generated %d/%d VC positives this epoch", len(results), n)
     return results
 
 
@@ -210,8 +219,6 @@ def infinite_training_loop(
     spec_augment: bool = True,
     neg_weight_schedule: str = "linear",
     vc_per_epoch: int = 0,             # how many VC positives to generate per epoch
-    vc_text: str = "hey mycroft",
-    vc_exaggeration: float = 0.4,
     vc_backend: str = "auto",          # "auto", "chatterbox-onnx", or "chatterbox"
     vc_device: str = "auto",           # PyTorch device for torch backend
     vc_out_dir: Optional["str | Path"] = None,
@@ -256,8 +263,9 @@ def infinite_training_loop(
         if hardness_cache:
             logger.info("[Cache] Loaded %d cached scores from %s", len(hardness_cache), _cache_path)
 
-    # VC donor pool (NWW clips as voice donors)
+    # VC pools: NWW clips as voice donors, wake-word clips as conversion sources
     nww_paths = [Path(p) for p, _ in nww_pool]
+    wake_paths = [Path(p) for p, _ in wakes]
     vc_out = Path(vc_out_dir) if vc_out_dir else output_dir / "vc_epoch_positives"
 
     # State
@@ -295,11 +303,10 @@ def infinite_training_loop(
 
         # -- 1. Optional VC synthesis ------------------------------------------
         epoch_wakes = list(wakes)
-        if vc_per_epoch > 0 and nww_paths:
+        if vc_per_epoch > 0 and nww_paths and wake_paths:
             vc_samples = _synthesise_positives(
-                vc_text, nww_paths, vc_out, vc_per_epoch,
-                seed=ep, exaggeration=vc_exaggeration,
-                vc_backend=vc_backend, vc_device=vc_device,
+                wake_paths, nww_paths, vc_out, vc_per_epoch,
+                seed=ep, vc_backend=vc_backend, vc_device=vc_device,
             )
             epoch_wakes += vc_samples
             if vc_samples:

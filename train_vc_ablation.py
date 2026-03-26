@@ -3,10 +3,14 @@
 Trains the same model under 4 conditions with identical seeds, NWW pool, and
 test set, then compares final F1 / EER / AUC:
 
-  no_vc           — control: mining only, no synthesis
-  vc_conservative — 5 TTS positives/epoch, exaggeration=0.3
-  vc_balanced     — 10 TTS positives/epoch, exaggeration=0.4  (recommended default)
-  vc_aggressive   — 20 TTS positives/epoch, exaggeration=0.5
+  no_vc           — control: mining only, no VC
+  vc_conservative — 5 VC positives/epoch
+  vc_balanced     — 10 VC positives/epoch  (recommended default)
+  vc_aggressive   — 20 VC positives/epoch
+
+Voice conversion mode: each new positive = an existing wake-word clip
+voice-converted to a random NWW donor's timbre via backend.vc().
+No text synthesis involved.
 
 Each condition is one separate MLflow run, tagged so they group together in the
 MLflow UI. A final comparison table is printed to stdout and saved as a CSV.
@@ -108,7 +112,6 @@ parser.add_argument("--scan-size",   type=int, default=_e("WW_SCAN_SIZE", 3000),
 parser.add_argument("--vc-backend",  default=_e("WW_VC_BACKEND", "auto"),
                     choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"])
 parser.add_argument("--vc-device",   default=_e("WW_VC_DEVICE", "auto"))
-parser.add_argument("--vc-text",     default=_e("WW_VC_TEXT", "hey mycroft"))
 
 # Condition customisation
 parser.add_argument("--conditions",
@@ -116,8 +119,6 @@ parser.add_argument("--conditions",
                     help="Comma-separated subset of conditions to run")
 parser.add_argument("--vc-counts",   default=None,
                     help="Override: comma-separated vc_per_epoch values (creates one condition each, e.g. 0,5,10,20)")
-parser.add_argument("--exaggerations", default=None,
-                    help="Override: comma-separated exaggeration values with fixed vc_per_epoch=10")
 
 parser.add_argument("--skip-probe",  action="store_true",
                     help="Skip the VC sanity probe (not recommended)")
@@ -190,24 +191,15 @@ if NWW_DIR.exists():
 Condition = dict  # {"name", "vc_per_epoch", "exaggeration", "label"}
 
 _DEFAULT_CONDITIONS: list[Condition] = [
-    {"name": "no_vc",           "vc_per_epoch": 0,  "exaggeration": 0.0},
-    {"name": "vc_conservative", "vc_per_epoch": 5,  "exaggeration": 0.3},
-    {"name": "vc_balanced",     "vc_per_epoch": 10, "exaggeration": 0.4},
-    {"name": "vc_aggressive",   "vc_per_epoch": 20, "exaggeration": 0.5},
+    {"name": "no_vc",           "vc_per_epoch": 0},
+    {"name": "vc_conservative", "vc_per_epoch": 5},
+    {"name": "vc_balanced",     "vc_per_epoch": 10},
+    {"name": "vc_aggressive",   "vc_per_epoch": 20},
 ]
 
 if args.vc_counts:
     counts = [int(x) for x in args.vc_counts.split(",")]
-    conditions = [
-        {"name": f"vc_{c}",       "vc_per_epoch": c, "exaggeration": 0.4}
-        for c in counts
-    ]
-elif args.exaggerations:
-    exags = [float(x) for x in args.exaggerations.split(",")]
-    conditions = [
-        {"name": f"exag_{e:.1f}", "vc_per_epoch": 10, "exaggeration": e}
-        for e in exags
-    ]
+    conditions = [{"name": f"vc_{c}", "vc_per_epoch": c} for c in counts]
 else:
     requested = [s.strip() for s in args.conditions.split(",")]
     conditions = [c for c in _DEFAULT_CONDITIONS if c["name"] in requested]
@@ -246,13 +238,18 @@ def _probe_vc() -> bool:
     generated = []
     for i, donor in enumerate(donors[:2]):
         out_path = probe_dir / f"probe_{i}.wav"
+        # Pick a random wake-word clip as the VC source
+        source = csv_wakes[i % len(csv_wakes)][0] if csv_wakes else None
+        if source is None:
+            logger.error("PROBE FAILED: no wake-word source clips available")
+            return False
         try:
             t0 = time.time()
-            backend.tts(args.vc_text, donor, out_path, exaggeration=0.4)
+            backend.vc(source, donor, out_path)
             elapsed = time.time() - t0
             logger.info("  sample %d generated in %.1f s → %s", i, elapsed, out_path)
         except Exception as exc:
-            logger.error("PROBE FAILED: TTS raised %s: %s", type(exc).__name__, exc)
+            logger.error("PROBE FAILED: VC raised %s: %s", type(exc).__name__, exc)
             return False
 
         # Check: file exists and is non-empty
@@ -366,12 +363,10 @@ results: list[dict] = []
 for cond in conditions:
     cname        = cond["name"]
     vc_per_epoch = cond["vc_per_epoch"]
-    exaggeration = cond["exaggeration"]
 
     logger.info("")
     logger.info("══════════════════════════════════════════════════════")
-    logger.info("  CONDITION: %s  (vc_per_epoch=%d  exag=%.2f)",
-                cname, vc_per_epoch, exaggeration)
+    logger.info("  CONDITION: %s  (vc_per_epoch=%d)", cname, vc_per_epoch)
     logger.info("══════════════════════════════════════════════════════")
 
     cond_dir = OUT_DIR / cname
@@ -401,7 +396,6 @@ for cond in conditions:
                 "experiment":    "vc_ablation",
                 "condition":     cname,
                 "vc_per_epoch":  vc_per_epoch,
-                "exaggeration":  exaggeration,
                 "arch":          args.arch,
                 "loss":          args.loss,
                 "seed":          args.seed,
@@ -439,8 +433,6 @@ for cond in conditions:
         spec_augment=True,
         neg_weight_schedule="linear",
         vc_per_epoch=vc_per_epoch,
-        vc_text=args.vc_text,
-        vc_exaggeration=exaggeration,
         vc_backend=args.vc_backend,
         vc_device=args.vc_device,
         resume_cache=False,   # fresh start for fair comparison
