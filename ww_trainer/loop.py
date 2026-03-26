@@ -141,7 +141,7 @@ def _run_batch_loop(
         total_loss += loss_dict["total"]
         for k, v in loss_dict.items():
             if k != "total":
-                loss_breakdown[k] += v
+                loss_breakdown[k] = loss_breakdown.get(k, 0.0) + v
         batch_bar.set_postfix(loss=f"{loss_dict['total']:.4f}")
 
     n = max(1, len(loader))
@@ -401,7 +401,7 @@ def training_loop(
             ema_alpha = 0.3 if ep < epochs // 2 else 0.15
             readiness_ema = (1 - ema_alpha) * readiness_ema + ema_alpha * readiness
         if trainer.mlflow:
-            trainer.mlflow.log_metrics({"readiness": readiness_ema}, step=ep + 1)
+            trainer.mlflow_log("log_metrics", {"readiness": readiness_ema}, step=ep + 1)
 
         adaptive_phase = (adaptive_phase + readiness_ema) / 2.0
         hard_ratio = base_hard + (max_hard - base_hard) * adaptive_phase
@@ -418,7 +418,7 @@ def training_loop(
         logger.info("[Adaptive] readiness=%.3f -> hard=%.2f easy=%.2f rand=%.2f",
                     readiness_ema, hard_ratio, easy_ratio, random_ratio)
         if trainer.mlflow:
-            trainer.mlflow.log_metrics({
+            trainer.mlflow_log("log_metrics", {
                 "learning-rate": current_lr, "hard-ratio": hard_ratio,
                 "easy-ratio": easy_ratio, "random-ratio": random_ratio,
             }, step=ep + 1)
@@ -443,7 +443,7 @@ def training_loop(
         else:
             current_aug_prob = 0.0
         if trainer.mlflow:
-            trainer.mlflow.log_metrics({"aug_prob": current_aug_prob}, step=ep + 1)
+            trainer.mlflow_log("log_metrics", {"aug_prob": current_aug_prob}, step=ep + 1)
 
         loader = DataLoader(
             AudioDataset(epoch_data, device=trainer.device.type,
@@ -464,7 +464,7 @@ def training_loop(
         logger.info("Average total loss: %.4f", avg_loss)
         metrics = {"total_loss": avg_loss, **loss_breakdown}
         if trainer.mlflow:
-            trainer.mlflow.log_metrics(metrics, step=ep + 1)
+            trainer.mlflow_log("log_metrics", metrics, step=ep + 1)
 
         tqdm.write(f"  [ep {ep+1}] evaluating …")
         acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs, det_report = \
@@ -486,7 +486,7 @@ def training_loop(
             )
             logger.info("[Threshold] Optimal F1 threshold for next epoch: %.4f", current_threshold)
             if trainer.mlflow:
-                trainer.mlflow.log_metrics({"optimal_threshold": current_threshold}, step=ep + 1)
+                trainer.mlflow_log("log_metrics", {"optimal_threshold": current_threshold}, step=ep + 1)
 
         if fitness_checkpoint:
             param_count = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
@@ -497,7 +497,7 @@ def training_loop(
             )
             logger.info("Fitness score: %.4f", fitness)
             if trainer.mlflow:
-                trainer.mlflow.log_metrics({"fitness": fitness}, step=ep + 1)
+                trainer.mlflow_log("log_metrics", {"fitness": fitness}, step=ep + 1)
             if fitness > best_fitness:
                 best_fitness = fitness
                 save_intermediate_checkpoint(
@@ -522,7 +522,7 @@ def training_loop(
                 fp_per_hour = estimate_fp_per_hour(trainer.model.infer, ambient_paths, threshold=current_threshold)
                 logger.info("[Ambient] FP/hour: %.2f (%d files)", fp_per_hour, len(ambient_paths))
                 if trainer.mlflow:
-                    trainer.mlflow.log_metrics({"fp_per_hour": fp_per_hour}, step=ep + 1)
+                    trainer.mlflow_log("log_metrics", {"fp_per_hour": fp_per_hour}, step=ep + 1)
 
         if metrics_log:
             log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)
@@ -583,31 +583,29 @@ def training_loop(
                     ema_norm = float(rppl_crit.proto_w_ema.norm().item())
                     rppl_extras["rppl_proto_ema_norm"] = ema_norm
                     epoch_record["rppl_proto_ema_norm"] = ema_norm
-                trainer.mlflow.log_metrics(rppl_extras, step=ep + 1)
+                trainer.mlflow_log("log_metrics", rppl_extras, step=ep + 1)
             except Exception as exc:
                 logger.debug("RPPL scalar logging failed: %s", exc)
 
         if trainer.mlflow:
-            try:
-                trainer.mlflow.log_metrics(
-                    {
-                        "accuracy": acc, "precision": prec, "recall": rec,
-                        "f1": f1, "auc": auc,
-                        "fpr": fpr, "fnr": fnr,
-                        "eer": det_report.eer,
-                        "n_hard_negatives": len(hard_negatives),
-                        "n_easy_negatives": len(easy_negatives),
-                        "neg_weight": current_neg_weight,
-                        "n_fp": fp_count, "n_fn": fn_count,
-                    },
-                    step=ep + 1,
-                )
-                _log_fp_fn_artifacts(trainer.mlflow, ep, paths_all, targets, preds, probs, output_dir)
-            except Exception as exc:
-                logger.error("Failed to log metrics/artifacts to MLflow: %s", exc)
+            trainer.mlflow_log("log_metrics", {
+                    "accuracy": acc, "precision": prec, "recall": rec,
+                    "f1": f1, "auc": auc,
+                    "fpr": fpr, "fnr": fnr,
+                    "eer": det_report.eer,
+                    "n_hard_negatives": len(hard_negatives),
+                    "n_easy_negatives": len(easy_negatives),
+                    "neg_weight": current_neg_weight,
+                    "n_fp": fp_count, "n_fn": fn_count,
+                }, step=ep + 1)
+            if trainer.mlflow:  # still active after log attempt
+                try:
+                    _log_fp_fn_artifacts(trainer.mlflow, ep, paths_all, targets, preds, probs, output_dir)
+                except Exception as exc:
+                    logger.warning("Failed to log artifacts to MLflow: %s", exc)
 
         # Confusion matrix + threshold sensitivity — update every 10 epochs and at the end
-        if output_dir and (ep + 1) % 10 == 0 or ep == epochs - 1:
+        if output_dir and ((ep + 1) % 10 == 0 or ep == epochs - 1):
             viz_dir = output_dir / "viz"
             viz_dir.mkdir(parents=True, exist_ok=True)
             plot_confusion_matrix(targets, preds, ep + 1, viz_dir, trainer.mlflow)
@@ -698,16 +696,12 @@ def training_loop(
             )
 
     if trainer.mlflow:
-        try:
-            # Log best metrics as summary scalars so they appear in the run comparison table
-            trainer.mlflow.log_metrics({
-                "best_f1":        best_metrics.get("f1", 0.0),
-                "best_precision": best_metrics.get("precision", 0.0),
-                "best_recall":    best_metrics.get("recall", 0.0),
-                "best_loss":      best_metrics.get("loss", 0.0),
-            })
-        except Exception:
-            pass
+        trainer.mlflow_log("log_metrics", {
+            "best_f1":        best_metrics.get("f1", 0.0),
+            "best_precision": best_metrics.get("precision", 0.0),
+            "best_recall":    best_metrics.get("recall", 0.0),
+            "best_loss":      best_metrics.get("loss", 0.0),
+        })
         try:
             trainer.mlflow.end_run()
         except Exception:

@@ -98,7 +98,23 @@ class WakeWordTrainer:
 
         self.mlflow = None
         if mlflow_uri is not None:
-            self._setup_mlflow(mlflow_uri, featurizer, arch, resume, losses_cfg, feature_dim, model_kwargs)
+            self._setup_mlflow(mlflow_uri, featurizer, arch, resume, losses_cfg, feature_dim,
+                               {**model_kwargs, "featurizer_type": featurizer_type})
+
+    def mlflow_log(self, fn_name: str, *args, **kwargs) -> None:
+        """Call trainer.mlflow.<fn_name>(...) safely.
+
+        On any MLflow error (e.g. deleted/finished run), logs a warning and
+        disables MLflow for the rest of this training run so subsequent calls
+        are no-ops rather than crashes.
+        """
+        if self.mlflow is None:
+            return
+        try:
+            getattr(self.mlflow, fn_name)(*args, **kwargs)
+        except Exception as exc:
+            logger.warning("[MLflow] %s failed — disabling MLflow for this run: %s", fn_name, exc)
+            self.mlflow = None
 
     # --------------------- MLflow Setup ---------------------
 
@@ -129,7 +145,8 @@ class WakeWordTrainer:
         exp_name = f"ww: {wake}"
 
         # Featurizer label: use the type kwarg if available, else the onnx filename
-        feat_type = model_kwargs.get("featurizer_type") or (
+        featurizer_type = model_kwargs.get("featurizer_type")
+        feat_type = featurizer_type or (
             featurizer.split("/")[-1].replace(".onnx", "") if featurizer else "unknown"
         )
         n_feat = (model_kwargs.get("n_mfcc")
@@ -173,7 +190,8 @@ class WakeWordTrainer:
         clean_kwargs = {k: v for k, v in model_kwargs.items() if k not in _PATH_KEYS}
 
         try:
-            mlflow.start_run(experiment_id=exp_id, run_name=run_name)
+            mlflow.start_run(experiment_id=exp_id, run_name=run_name,
+                             nested=mlflow.active_run() is not None)
             mlflow.log_params({
                 "wake_word":    wake,
                 "arch":         arch,

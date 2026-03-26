@@ -157,9 +157,13 @@ Top-level scripts for common training workflows. All read defaults from `.env` v
 
 ## Key Links
 
-- [FAQ.md](../FAQ.md) — keyword-rich Q&A
-- [AUDIT.md](../AUDIT.md) — known issues and tech debt
-- [SUGGESTIONS.md](../SUGGESTIONS.md) — improvement proposals
+- [faq.md](faq.md) — keyword-rich Q&A
+- [audit.md](audit.md) — known issues and tech debt
+- [suggestions.md](suggestions.md) — feature backlog
+- [changelog.md](changelog.md) — timestamped change history
+- [references.md](references.md) — academic bibliography
+- [rppl_whitepaper.md](rppl_whitepaper.md) — RPPL loss technical whitepaper
+- [tinyhubert_whitepaper.md](tinyhubert_whitepaper.md) — TinyHuBERT distillation design
 - GitHub: https://github.com/TigreGotico/ww_trainer
 - Pre-exported MFCC ONNX: https://huggingface.co/TigreGotico/mfcc-onnx
 - Funded by NGI0 Commons Fund / NLnet

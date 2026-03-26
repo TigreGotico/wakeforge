@@ -17,10 +17,14 @@ ww_trainer/          Core library
   inference.py       OnnxWakeWordInferencer(featurizer_onnx, head_onnx)
   quickstart.py      train_from_wakeword() — one-call pipeline
 scripts/
-  train_hey_mycroft.py   Quick 30-epoch CPU training (micro tier)
-  train_full.py          Multi-arch 50-epoch run (6 architectures)
-  eval_hey_mycroft.py    Full evaluation + plots
-  test_wakeword.py       CLI: --audio file.wav or --mic live testing
+  train/             Training scripts (train_hey_mycroft, train_full, train_ablation, …)
+  eval/              Evaluation + live inference (eval_hey_mycroft, listen_all, test_wakeword, mic_test)
+  data/              Dataset management (download, preprocess, generate positives, …)
+  research/          Experimental (tinyhubert distillation, …)
+  export_mfcc.py     Export MFCC featurizer to ONNX
+  export_w2vbert.py  Export Wav2Vec2-BERT featurizer to ONNX
+examples/            Numbered API usage examples (01–41)
+notebooks/           Jupyter notebooks (genetic_search, distill)
 experiments/hey_mycroft/ Output: dataset/, models/<arch>/, eval/
 ```
 
@@ -117,16 +121,22 @@ This machine has constrained swap. See `AGENTS.md` for full rules. Summary:
 
 ```bash
 # 1. Quick training (30 epochs, micro tier)
-.venv/bin/python train_hey_mycroft.py
+.venv/bin/python scripts/train/train_hey_mycroft.py
 
 # 2. Full multi-arch training (50 epochs × 6 archs, background)
-.venv/bin/python train_full.py >> train_full.log 2>&1 &
+.venv/bin/python scripts/train/train_full.py >> train_full.log 2>&1 &
 tail -f train_full.log
 
 # 3. Evaluate with plots
-.venv/bin/python eval_hey_mycroft.py
+.venv/bin/python scripts/eval/eval_hey_mycroft.py
 
 # 4. Test a specific model
-.venv/bin/python test_wakeword.py --dir experiments/hey_mycroft/models/small --audio sample.wav
-.venv/bin/python test_wakeword.py --dir experiments/hey_mycroft/models/small --mic
+.venv/bin/python scripts/eval/test_wakeword.py \
+    --featurizer experiments/hey_mycroft/models/small/best_f1_featurizer.onnx \
+    --model      experiments/hey_mycroft/models/small/best_f1.onnx \
+    --audio sample.wav
+
+# 5. Live model comparison dashboard
+.venv/bin/python scripts/eval/listen_all.py \
+    --models-dir experiments/hey_mycroft/models --max-models 5
 ```

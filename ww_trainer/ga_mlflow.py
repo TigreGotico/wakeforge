@@ -92,7 +92,7 @@ class GeneticMLflowLogger:
     # ── Per-trial ──────────────────────────────────────────────────────────────
 
     def log_trial(self, result: dict) -> None:
-        """Log one trial's metrics (step = trial id).
+        """Log one trial's metrics on the parent run (step = trial id).
 
         Expected keys in *result*: ``fitness``, ``f1``, ``fpr``, ``fnr``,
         ``n_params``, ``tid``.
@@ -112,6 +112,62 @@ class GeneticMLflowLogger:
             )
         except Exception:
             pass
+
+    def log_trial_run(self, result: dict, trial_dir: "Path | None" = None) -> None:
+        """Log one trial as a nested child MLflow run AND on the parent run.
+
+        Opens a child run, logs config as params + all metrics, uploads
+        any model/ONNX/plot artifacts from *trial_dir*, then closes the
+        child run.  Also calls :meth:`log_trial` to keep parent-run step
+        metrics in sync.
+
+        Args:
+            result:    Trial result dict (same as :meth:`log_trial`).
+            trial_dir: Local directory where the trial saved checkpoints and
+                       plots.  Pass ``None`` to skip artifact upload.
+        """
+        self.log_trial(result)
+        if self._mlf is None:
+            return
+        try:
+            cfg = result.get("config", {})
+            tid = result["tid"]
+            stage = result.get("stage", 0)
+            arch = cfg.get("arch", "?")
+            run_name = f"s{stage}_t{tid}_{arch}"
+            with self._mlf.start_run(run_name=run_name, nested=True):
+                # Config as params
+                self._mlf.log_params({k: str(v) for k, v in cfg.items()})
+                self._mlf.log_params({"stage": stage, "tid": tid})
+                # Metrics
+                self._mlf.log_metrics(
+                    {
+                        "fitness":  result["fitness"],
+                        "f1":       result["f1"],
+                        "fpr":      result["fpr"],
+                        "fnr":      result["fnr"],
+                        "n_params": result.get("n_params", 0),
+                    }
+                )
+                # Artifacts
+                if trial_dir is not None:
+                    trial_dir = Path(trial_dir)
+                    for suffix in ("*.pt", "*.onnx"):
+                        for p in trial_dir.glob(suffix):
+                            try:
+                                self._mlf.log_artifact(str(p), artifact_path="model")
+                            except Exception:
+                                pass
+                    plots_subdir = trial_dir / "roc_pr_det"
+                    scan_dirs = [trial_dir, plots_subdir] if plots_subdir.is_dir() else [trial_dir]
+                    for d in scan_dirs:
+                        for p in d.glob("*.png"):
+                            try:
+                                self._mlf.log_artifact(str(p), artifact_path="plots")
+                            except Exception:
+                                pass
+        except Exception as exc:
+            logger.warning("[MLflow] log_trial_run failed for tid=%s: %s", result.get("tid"), exc)
 
     # ── Per-generation ─────────────────────────────────────────────────────────
 

@@ -458,12 +458,12 @@ def infinite_training_loop(
                 mixed = [lam * w + (1 - lam) * wavs[idx[i]]
                          for i, w in enumerate(wavs)]
                 mixed_labels = lam * labels_f + (1 - lam) * labels_f[idx]
-                loss = loss_manager.compute(
-                    model, mixed, mixed_labels, weights=weights,
+                loss, _ = loss_manager.compute_loss(
+                    model, mixed, mixed_labels,
                 )
             else:
-                loss = loss_manager.compute(
-                    model, wavs, labels_f, weights=weights,
+                loss, _ = loss_manager.compute_loss(
+                    model, wavs, labels_f,
                 )
 
             optimizer.zero_grad()

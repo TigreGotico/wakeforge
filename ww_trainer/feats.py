@@ -107,18 +107,32 @@ class BaseExtractor(torch.nn.Module):
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
         import onnx
         dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
-        dynamic_axes = {"input_values": {0: "batch_size", 1: "time"}, "features": {0: "batch_size", 1: "time"}
-                        # optional, if output has same batch/time dims
-                        }
 
-        torch.onnx.export(self, dummy_wav, out, input_names=["input_values"], output_names=["features"],
-                          dynamic_axes=dynamic_axes,
-                          opset_version=18,
-                          do_constant_folding=True,
-                          dynamo=dynamo,
-                          verbose=False,
-                          external_data=False,
-                          training=torch.onnx.TrainingMode.EVAL)
+        if dynamo:
+            # Dynamo exporter: dynamic_axes not supported — use dynamic_shapes.
+            # Reset dynamo cache so stale compiled graphs from training don't
+            # interfere with the export trace.
+            import torch._dynamo
+            torch._dynamo.reset()
+            batch_dim = torch.export.Dim("batch_size")
+            time_dim  = torch.export.Dim("time")
+            torch.onnx.export(self, (dummy_wav,), out,
+                              input_names=["input_values"], output_names=["features"],
+                              dynamic_shapes={"wavs": {0: batch_dim, 1: time_dim}},
+                              opset_version=18,
+                              dynamo=True)
+        else:
+            dynamic_axes = {"input_values": {0: "batch_size", 1: "time"},
+                            "features": {0: "batch_size", 1: "time"}}
+            torch.onnx.export(self, dummy_wav, out,
+                              input_names=["input_values"], output_names=["features"],
+                              dynamic_axes=dynamic_axes,
+                              opset_version=18,
+                              do_constant_folding=True,
+                              dynamo=False,
+                              verbose=False,
+                              external_data=False,
+                              training=torch.onnx.TrainingMode.EVAL)
         onnx_model = onnx.load(out)
         onnx.checker.check_model(onnx_model)
         logger.info("Exported ONNX model to %s", out)
@@ -246,6 +260,12 @@ class OnnxFeatureExtractor(BaseExtractor):
 
         return torch.stack(padded_feats, dim=0)  # returns [B, T_feats, 768]
 
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        raise NotImplementedError(
+            "OnnxFeatureExtractor wraps an onnxruntime session and cannot be re-exported "
+            "via PyTorch. The model is already an ONNX file — copy it directly."
+        )
+
 
 def _build_mel_filterbank(n_mels: int, n_fft: int, sample_rate: int,
                           f_min: float, f_max: float) -> torch.Tensor:
@@ -365,6 +385,11 @@ class MfccExtractor(BaseExtractor):
         # Transpose to [B, T, n_mfcc]
         return mfcc.transpose(1, 2)
 
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        # torch.stft + view_as_real fails with the TorchScript ONNX exporter;
+        # the dynamo exporter decomposes STFT into ONNX-safe real ops correctly.
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
+
 
 class FilterbankExtractor(BaseExtractor):
     """Log Mel filterbank (log-mel spectrogram), ONNX-exportable.
@@ -432,6 +457,10 @@ class FilterbankExtractor(BaseExtractor):
         log_mel = torch.log(mel_spec + 1e-10)
 
         return log_mel.transpose(1, 2)  # [B, T_frames, n_mels]
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        # Same STFT issue as MfccExtractor — force dynamo exporter.
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
 
 
 class SincNetExtractor(BaseExtractor):
@@ -604,35 +633,14 @@ class DeltaExtractor(BaseExtractor):
         return torch.cat([feats, delta, delta2], dim=-1)                 # [B, T, 3*F]
 
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
-        """Export the full DeltaExtractor (base + delta computation) to ONNX."""
-        import onnx
-        dummy_wav = torch.zeros(1, self.sample_rate, device=self.device)
-        dynamic_axes = {
-            "input_values": {0: "batch_size", 1: "time"},
-            "features": {0: "batch_size", 1: "time"}
-        }
-        torch.onnx.export(
-            self, dummy_wav, out,
-            input_names=["input_values"],
-            output_names=["features"],
-            dynamic_axes=dynamic_axes,
-            opset_version=18,
-            do_constant_folding=True,
-            dynamo=dynamo,
-            verbose=False,
-            external_data=False,
-            training=torch.onnx.TrainingMode.EVAL,
-        )
-        onnx_model = onnx.load(out)
-        onnx.checker.check_model(onnx_model)
-        logger.info("Exported DeltaExtractor ONNX to %s", out)
-        if metadata:
-            embed_onnx_metadata(out, metadata)
-        if quantize:
-            from onnxruntime.quantization import quantize_dynamic, QuantType
-            from pathlib import Path
-            out_int8 = str(Path(out).with_stem(Path(out).stem + "_int8"))
-            quantize_dynamic(out, out_int8, weight_type=QuantType.QInt8)
+        """Export the full DeltaExtractor (base + delta computation) to ONNX.
+
+        Forces dynamo=True so that any STFT-based base extractor (MFCC, Filterbank, …)
+        exports correctly — the TorchScript exporter cannot handle complex torch.stft output.
+        """
+        # Always use dynamo: base extractor may use torch.stft (MFCC/Filterbank/PLP/PNCC/CQT)
+        # which the TorchScript ONNX exporter cannot handle.
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
 
 
 class GammatoneExtractor(BaseExtractor):
@@ -765,6 +773,13 @@ class HubertExtractor(BaseExtractor):
             feats = self.hubert(wav_tensor).last_hidden_state
         return feats  # [B, T, C]
 
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        raise NotImplementedError(
+            "HubertExtractor uses a HuggingFace transformers model that is too large for "
+            "CPU-only deployment. Export it separately with optimum, then load the ONNX "
+            "file via OnnxFeatureExtractor."
+        )
+
 
 class Wav2Vec2Extractor(BaseExtractor):
     """Wav2Vec2 encoder for training. Requires `transformers` library.
@@ -798,6 +813,12 @@ class Wav2Vec2Extractor(BaseExtractor):
         with torch.no_grad():
             outputs = self.model(wavs)
         return outputs.last_hidden_state  # [B, T', hidden]
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        raise NotImplementedError(
+            "Wav2Vec2Extractor uses a HuggingFace transformers model. Export it separately "
+            "with optimum, then load the ONNX file via OnnxFeatureExtractor."
+        )
 
 
 class Wav2Vec2BertExtractor(BaseExtractor):
@@ -849,6 +870,12 @@ class Wav2Vec2BertExtractor(BaseExtractor):
         with torch.no_grad():
             outputs = self.model(wavs)
         return outputs.last_hidden_state  # [B, T', hidden_size]
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        raise NotImplementedError(
+            "Wav2Vec2BertExtractor uses a HuggingFace transformers model. Export it separately "
+            "with optimum, then load the ONNX file via OnnxFeatureExtractor."
+        )
 
 
 class TorchAudioHubertExtractor(BaseExtractor):
@@ -929,6 +956,13 @@ class TorchAudioHubertExtractor(BaseExtractor):
         with torch.no_grad():
             features, _ = self.model.extract_features(wav_tensor)
         return features[-1]  # last layer: [B, T, hidden]
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        raise NotImplementedError(
+            "TorchAudioHubertExtractor wraps a torchaudio JIT model with complex internal "
+            "control flow that cannot be traced by the PyTorch ONNX exporter. "
+            "Export the base extractor separately."
+        )
 
 
 class LEAFExtractor(BaseExtractor):
@@ -1212,6 +1246,9 @@ class PLPExtractor(BaseExtractor):
 
         return plp.transpose(1, 2)  # [B, T', n_plp]
 
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
+
 
 # ---------------------- PNCC Extractor ----------------------
 
@@ -1329,6 +1366,9 @@ class PNCCExtractor(BaseExtractor):
 
         return pncc.transpose(1, 2)  # [B, T', n_pncc]
 
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
+
 
 # ---------------------- CQT Extractor ----------------------
 
@@ -1432,6 +1472,9 @@ class CQTExtractor(BaseExtractor):
         cqt = (cqt.clamp(min=1e-10)).log()
 
         return cqt.transpose(1, 2)  # [B, T', n_cqt_bins]
+
+    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
+        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
 
 
 # ---------------------- Feature Enrichment Wrappers ----------------------

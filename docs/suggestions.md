@@ -142,7 +142,7 @@ Payload: `{generation, stage, best, avg, elapsed_seconds, deme}`. Notebook Cell 
 
 ## S-019 — Input validation for `fitness_fn`, `elite_frac`, `mutation_rate`
 
-**Problem:** See LIM-002 and LIM-003 in AUDIT.md. Typos and out-of-range values fail silently.
+**Problem:** See LIM-002 and LIM-003 in docs/audit.md. Typos and out-of-range values fail silently.
 
 **Solution:** Add a `_validate_ga_params` helper called at the top of `run_genetic_search`:
 - Raise `ValueError` if `fitness_fn not in ("f1", "exp_f1", "double_exp_f1")`.

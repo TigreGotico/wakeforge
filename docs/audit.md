@@ -66,7 +66,7 @@ Known issues, tech debt, and limitations. All claims are evidence-based with `fi
 **Severity:** Low — minor parity mismatch (~1e-4) between PyTorch and ONNX Runtime
 **File:** `ww_trainer/feats.py:317`
 **Description:** `torch.stft` used in MFCC and Filterbank extractors produces slightly different results in the exported ONNX graph compared to the native PyTorch implementation. This is due to internal differences in FFT windowing and floating-point optimizations in ONNX Runtime.
-**Status:** Documented in `FAQ.md`. Recommended workaround: increase tolerance in unit tests to `1e-3`.
+**Status:** Documented in `docs/faq.md`. Recommended workaround: increase tolerance in unit tests to `1e-3`.
 
 ---
 

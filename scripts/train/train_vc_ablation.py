@@ -448,12 +448,11 @@ for cond in conditions:
         batch_size=args.batch_size, threshold=0.5,
     )
     eer    = det.eer
-    far1   = getattr(det, "far_at_frr1", None)
+    far1   = det.far_at_frr.get(0.01, None)
 
     row = {
         "condition":     cname,
         "vc_per_epoch":  vc_per_epoch,
-        "exaggeration":  exaggeration,
         "best_f1":       round(best_f1, 4),
         "eval_f1":       round(f1, 4),
         "eval_precision": round(prec, 4),
@@ -484,11 +483,11 @@ for cond in conditions:
 # ── Summary ────────────────────────────────────────────────────────────────
 print()
 print("╔══════════════════ VC ABLATION RESULTS ══════════════════╗")
-header = f"{'Condition':<20} {'vc/ep':>5} {'exag':>5} {'F1':>7} {'EER':>7} {'AUC':>7} {'n_gen':>7}"
+header = f"{'Condition':<20} {'vc/ep':>5} {'F1':>7} {'EER':>7} {'AUC':>7} {'n_gen':>7}"
 print(header)
 print("─" * len(header))
 for r in results:
-    print(f"{r['condition']:<20} {r['vc_per_epoch']:>5} {r['exaggeration']:>5.2f} "
+    print(f"{r['condition']:<20} {r['vc_per_epoch']:>5} "
           f"{r['eval_f1']:>7.4f} {r['eval_eer']:>7.4f} {r['eval_auc']:>7.4f} {r['n_generated']:>7}")
 print("╚" + "═" * (len(header) - 2) + "╝")
 

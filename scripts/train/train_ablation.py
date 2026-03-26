@@ -106,7 +106,7 @@ TRAIN_CSV   = DATASET_DIR / "train" / "metadata.csv"
 TEST_CSV    = DATASET_DIR / "test"  / "metadata.csv"
 NWW_DIR     = DATASET_DIR / "negatives" / "not_wake_word_subset"
 AUG_DIR     = DATASET_DIR / "augmentation"
-OUT_BASE    = BASE / "ablation"
+OUT_BASE    = BASE / "ablation" / f"{args.arch}_mfcc40_h{args.hidden_dim}"
 PLOTS_DIR   = OUT_BASE / "plots"
 RESULTS_JSON = OUT_BASE / "results.json"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -281,8 +281,8 @@ def run_cell(
             "far_at_frr10":float(report.far_at_frr.get(0.10, 1.0)),
             "n_fp":        len(fp_paths),
             "n_fn":        len(fn_paths),
-            "n_pos":       int((targets == 1).sum()),
-            "n_neg":       int((targets == 0).sum()),
+            "n_pos":       int(sum(1 for t in targets if t == 1)),
+            "n_neg":       int(sum(1 for t in targets if t == 0)),
             "n_params":    n_params,
             "elapsed_s":   float(elapsed),
         }

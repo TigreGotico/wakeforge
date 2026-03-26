@@ -50,10 +50,15 @@ def save_intermediate_checkpoint(
         metrics: dict,
         optimizer: Optional[torch.optim.Optimizer],
         model_file: Path,
-        export_onnx: bool = False,
+        export_onnx: bool = True,
         mlflow=None,
 ) -> None:
-    """Save a training checkpoint with optional ONNX export and MLflow logging.
+    """Save a training checkpoint with ONNX export and MLflow logging.
+
+    ONNX export (both classifier and featurizer) is always attempted regardless
+    of the ``export_onnx`` flag — the flag now only suppresses a warning when
+    export fails.  MLflow receives ONNX artifacts first; the ``.pt`` file is
+    logged second as a fallback artifact.
 
     Args:
         model: The BaseWakeModel instance.
@@ -63,47 +68,50 @@ def save_intermediate_checkpoint(
         metrics: Current best metrics dict.
         optimizer: Optimizer for state dict.
         model_file: Destination path for the ``.pt`` file.
-        export_onnx: If True, also export the model to ONNX.
+        export_onnx: Kept for backwards-compatibility; ONNX is always attempted.
         mlflow: Optional mlflow module for artifact logging.
     """
     model_file = Path(model_file)
     onnx_path = model_file.with_suffix(".onnx")
     save_checkpoint(model, epoch, metrics or {}, optimizer, model_file)
 
-    if export_onnx:
-        logger.info("Exporting model to onnx: %s", onnx_path)
-        meta: dict = {
-            "wake_word": wake_word,
-            "arch": arch,
-            "epoch": epoch,
-            "featurizer": model.feature_extractor.__class__.__name__,
-        }
-        if metrics:
-            meta.update({f"metric_{k}": str(v) for k, v in metrics.items()})
+    # Always export classifier ONNX
+    logger.info("Exporting model to onnx: %s", onnx_path)
+    meta: dict = {
+        "wake_word": wake_word,
+        "arch": arch,
+        "epoch": epoch,
+        "featurizer": model.feature_extractor.__class__.__name__,
+    }
+    if metrics:
+        meta.update({f"metric_{k}": str(v) for k, v in metrics.items()})
+    try:
         model.export_to_onnx(onnx_path, metadata=meta)
+    except Exception as exc:
+        logger.warning("Classifier ONNX export failed (non-fatal): %s", exc)
+        onnx_path = None
 
-        # Export featurizer ONNX so the full inference pipeline is captured
-        feat_onnx_path = model_file.with_name(model_file.stem + "_featurizer.onnx")
-        try:
-            if hasattr(model, "feature_extractor") and hasattr(model.feature_extractor, "export_to_onnx"):
-                model.feature_extractor.export_to_onnx(str(feat_onnx_path))
-                logger.info("Exported featurizer to onnx: %s", feat_onnx_path)
-        except Exception as exc:
-            logger.warning("Featurizer ONNX export failed (non-fatal): %s", exc)
-            feat_onnx_path = None
-    else:
+    # Always export featurizer ONNX
+    feat_onnx_path = model_file.with_name(model_file.stem + "_featurizer.onnx")
+    try:
+        if hasattr(model, "feature_extractor") and hasattr(model.feature_extractor, "export_to_onnx"):
+            model.feature_extractor.export_to_onnx(str(feat_onnx_path))
+            logger.info("Exported featurizer to onnx: %s", feat_onnx_path)
+    except Exception as exc:
+        logger.warning("Featurizer ONNX export failed (non-fatal): %s", exc)
         feat_onnx_path = None
 
     if mlflow is not None:
         stem = model_file.stem  # e.g. "best_f1"
         artifact_path = f"models/{stem}"
-        if export_onnx:
-            for path in [onnx_path, feat_onnx_path]:
-                if path and Path(path).exists():
-                    try:
-                        mlflow.log_artifact(str(path), artifact_path=artifact_path)
-                    except Exception as exc:
-                        logger.error("Failed to log onnx to MLflow: %s", exc)
+        # Log ONNX artifacts first — they are the primary inference artifacts
+        for path in [onnx_path, feat_onnx_path]:
+            if path and Path(path).exists():
+                try:
+                    mlflow.log_artifact(str(path), artifact_path=artifact_path)
+                except Exception as exc:
+                    logger.error("Failed to log onnx to MLflow: %s", exc)
+        # Log .pt as secondary fallback artifact
         try:
             mlflow.log_artifact(str(model_file), artifact_path=artifact_path)
         except Exception as exc:

@@ -89,33 +89,129 @@ Key env vars (all have safe defaults):
 
 See [docs/index.md](docs/index.md) for full env var reference.
 
+## Scripts
+
+All runnable scripts live under `scripts/`. Run any of them from the project root with `.venv/bin/python scripts/<subdir>/<script>.py`.
+
+### Training (`scripts/train/`)
+
+| Script | Purpose |
+|--------|---------|
+| `train_hey_mycroft.py` | Quick 30-epoch CPU run (micro tier, mfcc-40 + GRU). Good first smoke test. |
+| `train_full.py` | Sequential training across 6 architectures (FFN/GRU/CNN/BCResNet/TCResNet/DSCNN). |
+| `train_full_nww.py` | Genetic search + multi-loss comparison with the full NWW pool. |
+| `train_ablation.py` | Sweeps all (loss × augmentation) pairs, logs heatmaps to MLflow. `--resume` skips completed cells. |
+| `train_rppl.py` | RPPL loss experiment with per-epoch embedding visualisation dashboard. |
+| `train_infinite.py` | Goal-based open-ended loop — trains until F1/EER targets are met. |
+| `train_vc_ablation.py` | Measures the impact of voice conversion positives on F1/EER. |
+| `train_parallel.py` | Trains multiple loss configs in parallel using a shared waveform cache. |
+| `train_micro_genetic.py` | Genetic search for the smallest viable model (class-imbalance focus). |
+| `train_sincnet_genetic.py` | Genetic search over SincNet/Gammatone featurizers. |
+| `train_pilot_gpt.py` | Infinite training for the "pilot gee pee tee" wake word. |
+| `train_mfcc.sh` | Shell wrapper for a standard MFCC run. |
+
+```bash
+# Quick single-run
+.venv/bin/python scripts/train/train_hey_mycroft.py
+
+# Ablation (resumable)
+.venv/bin/python scripts/train/train_ablation.py --epochs 30 --resume
+
+# Infinite training until F1 ≥ 0.92
+.venv/bin/python scripts/train/train_infinite.py --target-f1 0.92 --target-eer 0.08
+
+# RPPL experiment with embedding plots
+.venv/bin/python scripts/train/train_rppl.py --epochs 50 --arch gru --viz-every 5
+```
+
+### Evaluation & Live Inference (`scripts/eval/`)
+
+| Script | Purpose |
+|--------|---------|
+| `eval_hey_mycroft.py` | Full evaluation suite — ROC/PR/DET plots, confusion matrix, FP/hour estimate. |
+| `test_wakeword.py` | Test a trained model on an audio file or live mic. |
+| `listen_all.py` | Run N random models in parallel with a real-time confidence dashboard. |
+| `mic_test.py` | Minimal mic capture test (sounddevice). |
+
+```bash
+# Evaluate best checkpoint
+.venv/bin/python scripts/eval/eval_hey_mycroft.py
+
+# Test on a file
+.venv/bin/python scripts/eval/test_wakeword.py \
+    --featurizer experiments/hey_mycroft/models/best_f1_featurizer.onnx \
+    --model      experiments/hey_mycroft/models/best_f1.onnx \
+    --audio sample.wav
+
+# Live dashboard (5 random models from a directory)
+.venv/bin/python scripts/eval/listen_all.py \
+    --models-dir experiments/hey_mycroft/ablation --max-models 5
+```
+
+### Data Management (`scripts/data/`)
+
+| Script | Purpose |
+|--------|---------|
+| `download_hdd4_datasets.py` | Download NWW/augmentation datasets to `/mnt/hdd4` via git-lfs. |
+| `select_training_subset.py` | Copy a size-capped subset from hdd4 into a local fast-access dir. |
+| `preprocess.py` | VAD-based silence trimming + normalisation of raw audio. |
+| `rebuild_dataset.py` | Rebuild dataset adding speech negatives (required for good FAR). |
+| `localise_csvs.py` | Rewrite metadata CSVs to use local paths after copying from hdd4. |
+| `generate_vc_positives.py` | Generate VC positives for hey_mycroft using NWW clips as speaker donors. |
+| `generate_pilot_gpt_dataset.py` | Build the pilot_gpt dataset (TTS + negatives). |
+| `generate_pilot_gpt_vc.py` | VC positives for pilot_gpt. |
+
+```bash
+# Typical first-time setup for hey_mycroft
+.venv/bin/python scripts/data/download_hdd4_datasets.py
+.venv/bin/python scripts/data/select_training_subset.py
+.venv/bin/python scripts/data/rebuild_dataset.py
+```
+
+### Research / Experimental (`scripts/research/`)
+
+| Script | Purpose |
+|--------|---------|
+| `tinyhubert.py` | WakeHuBERT — streaming HuBERT distillation trainer. |
+| `tinyhuberta.py` | Alternative HuBERT distillation variant. |
+
+### Utilities (`scripts/`)
+
+| Script | Purpose |
+|--------|---------|
+| `export_mfcc.py` | Export a trained model's MFCC featurizer to ONNX. |
+| `export_w2vbert.py` | Export a Wav2Vec2-BERT featurizer to ONNX via optimum. |
+| `train_markov_featurizer.py` | Fit and export a MarkovTransitionExtractor. |
+
+---
+
 ## RPPL Loss + Infinite Training
 
 Two research-focused workflows for squeezing maximum accuracy from large NWW pools:
 
-### RPPL experiment (`train_rppl.py`)
+### RPPL experiment
 
 Trains with the Robust Prototype Diversity Loss and logs rich embedding visualisations to MLflow every N epochs:
 
 ```bash
-.venv/bin/python train_rppl.py --epochs 50 --arch gru --viz-every 5
+.venv/bin/python scripts/train/train_rppl.py --epochs 50 --arch gru --viz-every 5
 ```
 
-What you see in MLflow per epoch: `rppl_bce`, `rppl_proto`, `rppl_div`, `rppl_center`, `rppl_cons`, `rppl_geo_scale`, `rppl_proto_ema_norm`, plus a 6-panel dashboard PNG (`rppl/rppl_dashboard.png`) showing sub-loss trajectories, warmup ramp, EMA prototype stability, Fisher ratio, and silhouette score.
+What you see in MLflow per epoch: `rppl_bce`, `rppl_proto`, `rppl_div`, `rppl_center`, `rppl_cons`, `rppl_geo_scale`, `rppl_proto_ema_norm`, plus a 6-panel dashboard PNG showing sub-loss trajectories, warmup ramp, EMA prototype stability, Fisher ratio, and silhouette score.
 
-### Infinite training (`train_infinite.py`)
+### Infinite training
 
 Goal-based open-ended loop — trains until F1/EER targets are met, not until a fixed epoch count. Designed for very large NWW pools (millions of files):
 
 ```bash
 # Run until F1 ≥ 0.92 and EER ≤ 0.08
-.venv/bin/python train_infinite.py
+.venv/bin/python scripts/train/train_infinite.py
 
 # With on-the-fly voice conversion positives
-.venv/bin/python train_infinite.py --vc-per-epoch 5 --vc-text "hey mycroft"
+.venv/bin/python scripts/train/train_infinite.py --vc-per-epoch 5
 
 # Stricter targets, larger NWW scan
-.venv/bin/python train_infinite.py \
+.venv/bin/python scripts/train/train_infinite.py \
     --target-f1 0.95 --target-eer 0.05 \
     --scan-size 20000 --arch bcresnet --loss rppl
 ```
@@ -166,8 +262,13 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/classifiers.md](docs/classifiers.md) | All 11 classifier heads |
 | [docs/losses.md](docs/losses.md) | All 17 loss functions including RPPL component breakdown |
 | [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
-| [FAQ.md](FAQ.md) | Common questions and error resolutions |
-| [AUDIT.md](AUDIT.md) | Known issues and tech debt |
+| [docs/faq.md](docs/faq.md) | Common questions and error resolutions |
+| [docs/audit.md](docs/audit.md) | Known issues and tech debt |
+| [docs/changelog.md](docs/changelog.md) | Timestamped change history |
+| [docs/suggestions.md](docs/suggestions.md) | Feature backlog and improvement proposals |
+| [docs/references.md](docs/references.md) | Academic references and bibliography |
+| [docs/rppl_whitepaper.md](docs/rppl_whitepaper.md) | RPPL loss technical whitepaper |
+| [docs/tinyhubert_whitepaper.md](docs/tinyhubert_whitepaper.md) | TinyHuBERT distillation design |
 
 ## Credits
 

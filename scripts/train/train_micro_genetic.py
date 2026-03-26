@@ -408,7 +408,7 @@ def run_generation(
         all_results.append(r)
         evaluated_keys.add(key)
         if mlf:
-            mlf.log_trial(r)
+            mlf.log_trial_run(r, trial_dir=out_dir / f"trial_{tid}")
         # Incremental save so a crash doesn't lose everything
         ALL_RESULTS_JSON.parent.mkdir(parents=True, exist_ok=True)
         ALL_RESULTS_JSON.write_text(json.dumps(all_results, indent=2))

@@ -1,19 +1,20 @@
 """
-Live microphone listener — runs all trained models in parallel and shows
+Live microphone listener — runs trained models in parallel and shows
 a real-time confidence dashboard in the terminal.
 
 Usage:
   python listen_all.py
   python listen_all.py --threshold 0.6
-  python listen_all.py --models-dir experiments/hey_mycroft/models
+  python listen_all.py --models-dir experiments/hey_mycroft/ablation
+  python listen_all.py --models-dir experiments/hey_mycroft/ablation --max-models 8
   python listen_all.py --window 1.5 --stride 0.5
 """
 import argparse
 import os
+import random
 import sys
 import threading
 import time
-from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -24,42 +25,64 @@ os.environ["MKL_NUM_THREADS"] = "4"
 # ── Args ──────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="Live multi-model wake-word dashboard")
 parser.add_argument("--models-dir", default="experiments/hey_mycroft/models",
-                    help="Directory containing model subdirs (default: experiments/hey_mycroft/models)")
-parser.add_argument("--threshold", type=float, default=0.5,
-                    help="Detection threshold (default: 0.5)")
+                    help="Directory to search recursively for model subdirs")
+parser.add_argument("--max-models", type=int, default=5,
+                    help="Max models to load; picks randomly if more are found (default: 5)")
+parser.add_argument("--threshold", type=float, default=0.5)
 parser.add_argument("--window", type=float, default=1.5,
                     help="Audio window length in seconds (default: 1.5)")
 parser.add_argument("--stride", type=float, default=0.5,
                     help="Stride between windows in seconds (default: 0.5)")
-parser.add_argument("--sr", type=int, default=16000,
-                    help="Sample rate (default: 16000)")
-parser.add_argument("--bar-width", type=int, default=30,
-                    help="Width of confidence bar (default: 30)")
+parser.add_argument("--sr", type=int, default=16000)
+parser.add_argument("--bar-width", type=int, default=30)
+parser.add_argument("--seed", type=int, default=None,
+                    help="Random seed for model selection (default: random)")
 args = parser.parse_args()
 
-# ── Discover models ───────────────────────────────────────────────────────────
+# ── Discover models (recursive) ───────────────────────────────────────────────
 models_dir = Path(args.models_dir)
 if not models_dir.exists():
     sys.exit(f"ERROR: models dir not found: {models_dir}")
 
-ARCHS = []
-for d in sorted(models_dir.iterdir()):
+# Search recursively: a valid model dir has best_f1_featurizer.onnx + best_f1.onnx
+candidates = []
+skipped = []
+for d in sorted(models_dir.rglob("*")):
     if not d.is_dir():
         continue
     feat = d / "best_f1_featurizer.onnx"
     head = d / "best_f1.onnx"
     if feat.exists() and head.exists():
-        ARCHS.append((d.name, str(feat), str(head)))
-    else:
-        missing = []
-        if not feat.exists(): missing.append("featurizer.onnx")
-        if not head.exists(): missing.append("head.onnx")
-        print(f"  [skip] {d.name}: missing {', '.join(missing)}", file=sys.stderr)
+        # Build a display name relative to models_dir, replacing path separators
+        rel = d.relative_to(models_dir)
+        display = str(rel).replace("/", "›")
+        candidates.append((display, str(feat), str(head)))
+    elif head.exists():
+        skipped.append(f"{d.relative_to(models_dir)} (missing featurizer.onnx)")
 
-if not ARCHS:
+if skipped:
+    print(f"  [skip] {len(skipped)} dirs missing featurizer.onnx:", file=sys.stderr)
+    for s in skipped[:5]:
+        print(f"    {s}", file=sys.stderr)
+    if len(skipped) > 5:
+        print(f"    ... and {len(skipped)-5} more", file=sys.stderr)
+
+if not candidates:
     sys.exit("ERROR: no complete model dirs found (need best_f1_featurizer.onnx + best_f1.onnx)")
 
-print(f"  Loaded {len(ARCHS)} models: {', '.join(a[0] for a in ARCHS)}")
+# Random sampling when more candidates than --max-models
+if len(candidates) > args.max_models:
+    rng = random.Random(args.seed)
+    selected = rng.sample(candidates, args.max_models)
+    print(f"  Found {len(candidates)} models, randomly selected {args.max_models}:", file=sys.stderr)
+    selected.sort(key=lambda x: x[0])
+else:
+    selected = candidates
+
+ARCHS = selected
+print(f"  Loaded {len(ARCHS)} models from {models_dir}:", file=sys.stderr)
+for name, *_ in ARCHS:
+    print(f"    {name}", file=sys.stderr)
 
 # ── Load models ───────────────────────────────────────────────────────────────
 from ww_trainer.inference import OnnxWakeWordInferencer
@@ -77,13 +100,12 @@ BAR_W = args.bar_width
 
 audio_buf = np.zeros(WINDOW_SAMPLES * 2, dtype=np.float32)
 buf_lock  = threading.Lock()
-latest_chunk = None
 chunk_event = threading.Event()
 
 # ── Per-model state ───────────────────────────────────────────────────────────
-scores   = {name: 0.0 for name, *_ in ARCHS}
-detected = {name: False for name, *_ in ARCHS}
-det_times = {name: 0.0 for name, *_ in ARCHS}  # last detection timestamp
+scores    = {name: 0.0 for name, *_ in ARCHS}
+detected  = {name: False for name, *_ in ARCHS}
+det_times = {name: 0.0 for name, *_ in ARCHS}
 score_lock = threading.Lock()
 
 # ── Inference threads (one per model) ─────────────────────────────────────────
@@ -121,36 +143,28 @@ YELLOW = "\033[93m"
 RED    = "\033[91m"
 CYAN   = "\033[96m"
 DIM    = "\033[2m"
-CLEAR_LINE = "\033[2K\r"
 
-def bar(score, width, detected):
+def bar(score, width, is_detected):
     filled = int(score * width)
-    if detected:
-        color = RED
-    elif score > 0.3:
-        color = YELLOW
-    else:
-        color = GREEN
+    color = RED if is_detected else (YELLOW if score > 0.3 else GREEN)
     return color + "█" * filled + DIM + "░" * (width - filled) + RESET
 
 def render_dashboard():
     now = time.time()
-    lines = []
-    lines.append(f"\033[H")  # move cursor to top
-    lines.append(f"{BOLD}{CYAN}  Wake Word: hey mycroft  —  threshold={THRESHOLD:.2f}  —  {time.strftime('%H:%M:%S')}{RESET}")
-    lines.append(f"  {DIM}{'Arch':<14} {'Confidence':>{BAR_W+2}}  {'Score':>6}  {'Status'}{RESET}")
-    lines.append(f"  {'─'*60}")
+    lines = ["\033[H"]
+    lines.append(f"{BOLD}{CYAN}  Wake Word Dashboard  —  threshold={THRESHOLD:.2f}  —  {time.strftime('%H:%M:%S')}{RESET}")
+    lines.append(f"  {DIM}{'Model':<28} {'Confidence':>{BAR_W+2}}  {'Score':>6}  {'Status'}{RESET}")
+    lines.append(f"  {'─'*70}")
 
     with score_lock:
-        snap_scores   = dict(scores)
-        snap_detected = dict(detected)
+        snap_scores    = dict(scores)
+        snap_detected  = dict(detected)
         snap_det_times = dict(det_times)
 
     for name, *_ in ARCHS:
-        s = snap_scores[name]
-        d = snap_detected[name]
-        b = bar(s, BAR_W, d)
-        # Flash "DETECTED" for 1.5s after last trigger
+        s   = snap_scores[name]
+        d   = snap_detected[name]
+        b   = bar(s, BAR_W, d)
         since = now - snap_det_times[name]
         if since < 1.5:
             status = f"{RED}{BOLD}◉ DETECTED{RESET}"
@@ -158,10 +172,12 @@ def render_dashboard():
             status = f"{RED}● yes{RESET}"
         else:
             status = f"{DIM}○ no{RESET}"
-        lines.append(f"  {name:<14} {b}  {s:>6.3f}  {status}")
+        # Truncate long names for display
+        disp = (name[:26] + "…") if len(name) > 27 else name
+        lines.append(f"  {disp:<28} {b}  {s:>6.3f}  {status}")
 
-    lines.append(f"  {'─'*60}")
-    lines.append(f"  {DIM}Ctrl+C to stop{RESET}  " + " " * 20)
+    lines.append(f"  {'─'*70}")
+    lines.append(f"  {DIM}Ctrl+C to stop  |  {len(ARCHS)} models active{RESET}  " + " " * 10)
 
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
@@ -172,10 +188,8 @@ try:
 except ImportError:
     sys.exit("ERROR: sounddevice not installed.\nRun: pip install sounddevice")
 
-# Clear screen and hide cursor
 sys.stdout.write("\033[2J\033[?25l")
 sys.stdout.flush()
-
 print(f"\033[H{BOLD}  Initializing microphone...{RESET}")
 sys.stdout.flush()
 
@@ -194,7 +208,6 @@ try:
 except KeyboardInterrupt:
     pass
 finally:
-    # Show cursor, move to bottom
-    sys.stdout.write("\033[?25h\033[{:d}B\n".format(len(ARCHS) + 6))
+    sys.stdout.write(f"\033[?25h\033[{len(ARCHS) + 6:d}B\n")
     sys.stdout.flush()
     print("  Stopped.")

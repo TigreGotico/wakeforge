@@ -516,7 +516,7 @@ Six docs files in `docs/`:
 
 **Q: What documentation was added in the 2026-03-10 sprint?**
 
-All six `docs/` files were created (or replaced for `index.md`) in a single documentation sprint. Every class and method entry in `api.md` cites the actual source file and line number. See `MAINTENANCE_REPORT.md` for the full transparency report.
+All six `docs/` files were created (or replaced for `index.md`) in a single documentation sprint. Every class and method entry in `api.md` cites the actual source file and line number. See `docs/changelog.md` for the full transparency report.
 
 **Q: Where is the notebook → ww-trainer data contract documented?**
 

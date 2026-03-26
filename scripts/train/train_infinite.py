@@ -142,7 +142,7 @@ NWW_DIR     = DATASET_DIR / "negatives" / "not_wake_word_subset"
 WOW_DIR     = NWW_DIR  # same clips used as WoW background
 
 OUT_DIR = Path(args.out_dir) if args.out_dir else (
-    BASE / "models" / f"{args.arch}_{args.loss}_infinite"
+    BASE / "models" / f"{args.arch}_{args.loss}_mfcc{40}_h{args.hidden_dim}_infinite"
 )
 
 if not TRAIN_CSV.exists():
