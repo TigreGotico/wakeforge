@@ -112,8 +112,8 @@ class BaseExtractor(torch.nn.Module):
             # Dynamo exporter: dynamic_axes not supported — use dynamic_shapes.
             # Reset dynamo cache so stale compiled graphs from training don't
             # interfere with the export trace.
-            import torch._dynamo
-            torch._dynamo.reset()
+            import torch._dynamo as _dynamo
+            _dynamo.reset()
             batch_dim = torch.export.Dim("batch_size")
             time_dim  = torch.export.Dim("time")
             torch.onnx.export(self, (dummy_wav,), out,
@@ -442,13 +442,13 @@ class FilterbankExtractor(BaseExtractor):
         device = batch.device
         window = torch.hann_window(self.n_fft, device=device)
 
-        stft = torch.view_as_real(torch.stft(
+        stft = torch.stft(
             batch,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             window=window,
-            return_complex=True,
-        ))
+            return_complex=False,
+        )
         real = stft[..., 0]
         imag = stft[..., 1]
         power = real.pow(2) + imag.pow(2)
@@ -459,8 +459,8 @@ class FilterbankExtractor(BaseExtractor):
         return log_mel.transpose(1, 2)  # [B, T_frames, n_mels]
 
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
-        # Same STFT issue as MfccExtractor — force dynamo exporter.
-        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
+        # Uses return_complex=False so the TorchScript exporter works correctly.
+        super().export_to_onnx(out, quantize=quantize, dynamo=False, metadata=metadata)
 
 
 class SincNetExtractor(BaseExtractor):

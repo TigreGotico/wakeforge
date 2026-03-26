@@ -212,18 +212,54 @@ from ww_trainer.feats import MfccExtractor
 extractor = MfccExtractor()
 extractor.export_to_onnx("mfcc.onnx")
 
-# PyTorch output
-wav = torch.randn(1, 16000)
-with torch.no_grad():
-    pt_out = extractor(wav).numpy()
-
-# ONNX output
 sess = ort.InferenceSession("mfcc.onnx", providers=["CPUExecutionProvider"])
-onnx_out = sess.run(None, {"input_values": wav.numpy()})[0]
 
-diff = np.abs(pt_out - onnx_out).max()
-print(f"Max absolute difference: {diff:.6f}")  # should be < 1e-5
+for length in [8000, 16000, 32000]:          # 0.5 s, 1 s, 2 s
+    torch.manual_seed(42)
+    wav = torch.randn(1, length)
+
+    with torch.no_grad():
+        pt_out = extractor(wav).numpy()
+
+    onnx_out = sess.run(None, {"input_values": wav.numpy()})[0]
+
+    diff = np.abs(pt_out - onnx_out)
+    corr = np.corrcoef(pt_out.flatten(), onnx_out.flatten())[0, 1]
+    print(f"length={length:>6}  MAE={diff.mean():.6f}  MaxAE={diff.max():.6f}  corr={corr:.6f}")
 ```
+
+Expected output for fixed-transform extractors (MFCC, Filterbank, Gammatone, PLP, PNCC, CQT):
+
+```
+length=  8000  MAE=0.000001  MaxAE=0.000012  corr=1.000000
+length= 16000  MAE=0.000001  MaxAE=0.000013  corr=1.000000
+length= 32000  MAE=0.000001  MaxAE=0.000015  corr=1.000000
+```
+
+**Threshold:** MaxAE < 1e-3 is acceptable. Float32 arithmetic divergence between PyTorch and ONNX Runtime is typically < 1e-5. Larger values indicate a tracing issue (dynamic shape, unsupported op, or wrong exporter).
+
+**Dynamo vs TorchScript exporter:** Extractors that use `torch.stft` with `return_complex=True` (Filterbank, PLP, PNCC, CQT, DeltaMFCC) force `dynamo=True` in their `export_to_onnx` override. The dynamo exporter decomposes complex ops differently, which can produce slightly larger but still acceptable numerical differences.
+
+### Bulk export and validate
+
+`scripts/export_and_push_all.py` exports all fixed-transform extractors, runs the three-length divergence check on each before pushing, and prints a summary table:
+
+```
+.venv/bin/python scripts/export_and_push_all.py
+```
+
+```
+[mfcc-mfcc40-mels40-fft400-hop160-onnx] Exporting ...
+[mfcc-mfcc40-mels40-fft400-hop160-onnx] Export OK — 44.8 KB
+[mfcc-mfcc40-mels40-fft400-hop160-onnx] Validating (PyTorch vs ONNX divergence) ...
+    Length           MAE          MaxAE      Corr
+  --------  ------------  ------------  --------
+      8000      0.000001      0.000012  1.000000
+     16000      0.000001      0.000013  1.000000
+     32000      0.000001      0.000015  1.000000
+```
+
+Any model with `*** HIGH ***` on a row has MaxAE ≥ 1e-3 and is flagged before upload.
 
 ---
 
@@ -255,13 +291,28 @@ trainer = WakeWordTrainer(
 
 ## 9. Pre-exported Models
 
-A pre-exported MFCC ONNX model (40 coefficients, 16 kHz, with INT8 and INT16 variants) is available at:
+All fixed-transform extractors are pre-exported and available on HuggingFace under the
+[onnx-feature-extractors](https://huggingface.co/collections/TigreGotico/onnx-feature-extractors) collection:
 
-https://huggingface.co/TigreGotico/mfcc-onnx
+| Repo | Variants | Notes |
+|------|----------|-------|
+| `TigreGotico/mfcc-onnx` | mfcc13/20/30/40 × mels23/40/64/80 + int8/int16 | Multiple configs in one repo |
+| `TigreGotico/filterbank-mels{N}-fft{F}-hop{H}-onnx` | mels=40/64/80/128 | Log-mel spectrogram |
+| `TigreGotico/delta-mfcc-mfcc{N}-mels{M}-fft{F}-hop{H}-onnx` | 4 configs | MFCC + Δ + ΔΔ |
+| `TigreGotico/gammatone-filters{N}-frame{F}-hop{H}-onnx` | 4 configs | ERB-scale auditory filterbank |
+| `TigreGotico/plp-plp{N}-fft{F}-bark{B}-lp{L}-onnx` | 2 configs | Perceptual LP |
+| `TigreGotico/pncc-pncc{N}-fft{F}-filters{M}-onnx` | 2 configs | Power-normalized cepstral |
+| `TigreGotico/cqt-bins{N}-oct{O}-fmin{F}-onnx` | 3 configs | Constant-Q transform |
 
-This is the same model built by `scripts/export_mfcc.py` (`scripts/export_mfcc.py:111`).
+**Learnable extractors** (`SincNetExtractor`, `LEAFExtractor`) are not pre-exported because their
+parameters are trained per wake word. Export them after training:
 
-Download and use directly:
+```python
+trainer.model.load_checkpoint("best_f1.pt")
+trainer.model.feature_extractor.export_to_onnx("sincnet_featurizer.onnx")
+```
+
+Download and use a pre-exported model directly:
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
