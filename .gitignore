@@ -26,5 +26,15 @@ mlruns/
 *.onnx
 !ww_trainer/*.onnx
 
+# Experiment outputs (datasets, checkpoints, audio)
+experiments/
+notebooks/outputs/
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+*.ogg
+
 # OS
 .DS_Store

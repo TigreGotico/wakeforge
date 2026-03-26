@@ -156,13 +156,7 @@ class _LinaCodecBackend(_VCBackend):
     sample_rate = 48000
 
     def __init__(self, device: str = "auto") -> None:
-        import sys, pathlib
-        # Ensure our vendored copy takes precedence over any installed linacodec
-        vendor_root = str(pathlib.Path(__file__).parent / "vendors")
-        if vendor_root not in sys.path:
-            sys.path.insert(0, vendor_root)
-
-        from linacodec.codec import LinaCodec  # type: ignore — vendored
+        from ww_trainer.linacodec.codec import LinaCodec
         logger.info("[VC] Loading LinaCodec (device=%s) — HF download on first run", device)
         self._model = LinaCodec(device=device)
         logger.info("[VC] LinaCodec ready  sr=%d", self.sample_rate)
