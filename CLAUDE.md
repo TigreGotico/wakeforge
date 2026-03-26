@@ -23,8 +23,13 @@ scripts/
   research/          Experimental (tinyhubert distillation, …)
   export_mfcc.py     Export MFCC featurizer to ONNX
   export_w2vbert.py  Export Wav2Vec2-BERT featurizer to ONNX
+  train_markov_featurizer.py  Fit and export a MarkovTransitionExtractor
 examples/            Numbered API usage examples (01–41)
-notebooks/           Jupyter notebooks (genetic_search, distill)
+notebooks/
+  kaggle_quickstart.ipynb   Zero-to-ONNX: datagen → train → ONNX export → inference test
+  kaggle_experiments.ipynb  Grid: tiers × losses × augmentation → results table + plots
+  genetic_search.ipynb      Datagen → genetic HP search → multi-tier training → benchmark
+  distill.ipynb             Knowledge distillation experiments
 experiments/hey_mycroft/ Output: dataset/, models/<arch>/, eval/
 ```
 

@@ -136,9 +136,11 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 
 ---
 
-## Training Scripts
+## Scripts
 
-Top-level scripts for common training workflows. All read defaults from `.env` via `WW_` env vars.
+All scripts live under `scripts/`. Run with `.venv/bin/python scripts/<subdir>/<script>.py`.
+
+### Training (`scripts/train/`)
 
 | Script | Purpose |
 |--------|---------|
@@ -151,9 +153,41 @@ Top-level scripts for common training workflows. All read defaults from `.env` v
 | `train_parallel.py` | Parallel loss-comparison training with shared waveform cache |
 | `train_micro_genetic.py` | Three-stage GA focused on class imbalance / MCU targets |
 | `train_sincnet_genetic.py` | GA over SincNet / Gammatone featurisers |
-| `generate_vc_positives.py` | Batch TTS/VC positive generation from donor voices |
+| `train_vc_ablation.py` | Measures impact of voice-conversion positives on F1/EER |
+| `train_pilot_gpt.py` | Infinite training for the "pilot gee pee tee" wake word |
+| `train_mfcc.sh` | Shell wrapper for a standard MFCC run |
+
+### Evaluation & Inference (`scripts/eval/`)
+
+| Script | Purpose |
+|--------|---------|
 | `eval_hey_mycroft.py` | Full evaluation: ROC/PR/DET, FP/FN lists, confidence histograms |
 | `test_wakeword.py` | CLI: test an ONNX model on a file or live microphone |
+| `listen_all.py` | Run N random models in parallel with a real-time confidence dashboard |
+| `mic_test.py` | Minimal mic capture test (sounddevice) |
+
+### Data Management (`scripts/data/`)
+
+| Script | Purpose |
+|--------|---------|
+| `download_hdd4_datasets.py` | Download NWW/augmentation datasets to `/mnt/hdd4` via git-lfs |
+| `select_training_subset.py` | Copy a size-capped subset from hdd4 into a local fast-access dir |
+| `preprocess.py` | VAD-based silence trimming + normalisation of raw audio |
+| `rebuild_dataset.py` | Rebuild dataset adding speech negatives |
+| `localise_csvs.py` | Rewrite metadata CSVs to use local paths after copying from hdd4 |
+| `generate_vc_positives.py` | Batch TTS/VC positive generation from donor voices |
+| `generate_pilot_gpt_dataset.py` | Build the pilot_gpt dataset (TTS + negatives) |
+| `generate_pilot_gpt_vc.py` | VC positives for pilot_gpt |
+
+### Research / Utilities (`scripts/research/`, `scripts/`)
+
+| Script | Purpose |
+|--------|---------|
+| `research/tinyhubert.py` | WakeHuBERT — streaming HuBERT distillation trainer |
+| `research/tinyhuberta.py` | Alternative HuBERT distillation variant |
+| `export_mfcc.py` | Export a trained model's MFCC featurizer to ONNX |
+| `export_w2vbert.py` | Export a Wav2Vec2-BERT featurizer to ONNX via optimum |
+| `train_markov_featurizer.py` | Fit and export a MarkovTransitionExtractor |
 
 ---
 
@@ -166,6 +200,6 @@ Top-level scripts for common training workflows. All read defaults from `.env` v
 - [references.md](references.md) — academic bibliography
 - [rppl_whitepaper.md](rppl_whitepaper.md) — RPPL loss technical whitepaper
 - [tinyhubert_whitepaper.md](tinyhubert_whitepaper.md) — TinyHuBERT distillation design
-- GitHub: https://github.com/TigreGotico/ww_trainer
+- GitHub: https://github.com/TigreGotico/ww-trainer
 - Pre-exported MFCC ONNX: https://huggingface.co/TigreGotico/mfcc-onnx
 - Funded by NGI0 Commons Fund / NLnet
