@@ -70,9 +70,15 @@ Key parameters — full tables in [`docs/sweep.md`](docs/sweep.md):
 | `target_f1` | None | Early stop when F1 reaches this value |
 | `timeout_minutes` | None | Wall-clock stop per deme |
 
-## Notebook
+## Notebooks
 
-`notebooks/genetic_search.ipynb` — end-to-end: dataset synthesis → genetic search → multi-tier training → ONNX export → benchmark. Kaggle/Colab/Paperspace-ready via env vars.
+| Notebook | Purpose |
+|----------|---------|
+| [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) | Zero-to-ONNX in one notebook: TTS datagen → single-tier training → ONNX export → inference test |
+| [`notebooks/kaggle_experiments.ipynb`](notebooks/kaggle_experiments.ipynb) | Systematic experiments: tiers × loss functions × augmentation → results table + plots. Resumable. |
+| [`notebooks/genetic_search.ipynb`](notebooks/genetic_search.ipynb) | End-to-end: datagen → genetic HP search → multi-tier training → ONNX export → benchmark |
+
+All notebooks are Kaggle/Colab/Paperspace-ready via env vars and Kaggle Secrets for MLflow credentials.
 
 Key env vars (all have safe defaults):
 
