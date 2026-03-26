@@ -29,8 +29,10 @@ def _load_audio(path: str) -> tuple[torch.Tensor, int]:
     try:
         wav, sr = torchaudio.load(path)
         return wav, sr
-    except (ImportError, RuntimeError):
-        pass
+    except (ImportError, RuntimeError) as exc:
+        logging.getLogger(__name__).warning(
+            "torchaudio.load failed (%s); falling back to soundfile", exc
+        )
     # Fallback: soundfile (always available as a project dependency)
     import soundfile as sf
     data, sr = sf.read(path, dtype="float32", always_2d=True)
@@ -73,6 +75,14 @@ class AudioDataset(Dataset):
         mic_noise_folder: Microphone noise folder (legacy mode).
         rir_folder: Room impulse response folder (legacy mode).
         vc_folder: Voice conversion reference folder (legacy mode).
+        wake_word_over_speech_folder: Folder of speech clips to mix *under* wake-word
+            positives, simulating "wake word spoken over background conversation".
+            Only applied to positive (label==1) samples. SNR range is controlled by
+            ``wow_snr_min`` / ``wow_snr_max`` (default 8-18 dB — wake word stays
+            clearly audible above the speech).
+        wow_prob: Per-sample probability of applying wake-word-over-speech mixing.
+        wow_snr_min: Minimum SNR (dB) for wake-word-over-speech mixing.
+        wow_snr_max: Maximum SNR (dB) for wake-word-over-speech mixing.
         snr_min: Minimum SNR for noise mixing (legacy mode).
         snr_max: Maximum SNR for noise mixing (legacy mode).
         pitch_min: Minimum pitch shift in semitones (legacy mode).
@@ -95,6 +105,10 @@ class AudioDataset(Dataset):
                  mic_noise_folder: str = None,
                  rir_folder: str = None,
                  vc_folder: str = None,
+                 wake_word_over_speech_folder: str = None,
+                 wow_prob: float = 0.4,
+                 wow_snr_min: float = 8.0,
+                 wow_snr_max: float = 18.0,
                  snr_min: float = 0.0,
                  snr_max: float = 20.0,
                  pitch_min: float = -1.0,
@@ -120,12 +134,22 @@ class AudioDataset(Dataset):
         self.speed_min = speed_min
         self.speed_max = speed_max
 
+        # Wake-word-over-speech parameters
+        self.wow_prob    = wow_prob
+        self.wow_snr_min = wow_snr_min
+        self.wow_snr_max = wow_snr_max
+
         # Collect file paths for external augmentations
         self.bg_noise_files = _collect_audio_files(bg_noise_folder) if bg_noise_folder else []
         self.music_files = _collect_audio_files(music_folder) if music_folder else []
-        self.bg_speech_files = _collect_audio_files(bg_speech_folder)  if bg_speech_folder else []
+        self.bg_speech_files = _collect_audio_files(bg_speech_folder) if bg_speech_folder else []
         self.mic_noise_files = _collect_audio_files(mic_noise_folder) if mic_noise_folder else []
         self.rir_files = _collect_audio_files(rir_folder) if rir_folder else []
+        self.wow_files = _collect_audio_files(wake_word_over_speech_folder) \
+            if wake_word_over_speech_folder else []
+        if self.wow_files:
+            logger.info("Wake-word-over-speech: %d donor clips (p=%.2f, SNR %.0f-%.0f dB)",
+                        len(self.wow_files), wow_prob, wow_snr_min, wow_snr_max)
         self.vc_files = []
 
         self.vc = None
@@ -158,11 +182,13 @@ class AudioDataset(Dataset):
             counts = list(dist.values())
             if len(counts) >= 2:
                 ratio = max(counts) / max(1, min(counts))
-                if ratio > 10:
+                if ratio > 20:
                     logger.warning(
-                        "AudioDataset: severe class imbalance (%.1f:1). "
-                        "Consider rebalancing or using focal loss.", ratio
+                        "AudioDataset: class imbalance (%.1f:1). "
+                        "Consider focal loss or neg_weight_schedule.", ratio
                     )
+                elif ratio > 5:
+                    logger.info("AudioDataset: class imbalance (%.1f:1).", ratio)
 
         # Deep validation: check files are readable audio
         if validate and self.data:
@@ -208,7 +234,8 @@ class AudioDataset(Dataset):
         if self.pipeline is not None:
             wav_np = self.pipeline(wav_np, sr=self.sample_rate)
         else:
-            # Legacy augmentation path
+            # Legacy augmentation path — always runs when called directly (e.g. by RPPL).
+            # File-based augmentations only fire when the relevant file lists are populated.
             if self.bg_noise_files and random.random() < 0.6:
                 bg_np = _load_audio_mono(random.choice(self.bg_noise_files), self.sample_rate)
                 wav_np = _mix_background(wav_np, bg_np, random.uniform(self.snr_min, self.snr_max))
@@ -217,7 +244,7 @@ class AudioDataset(Dataset):
                 wav_np = _mix_background(wav_np, mic_np, random.uniform(self.snr_min, self.snr_max))
             if self.music_files and random.random() < 0.3:
                 music_np = _load_audio_mono(random.choice(self.music_files), self.sample_rate)
-                wav_np = _mix_background(wav_np, music_np, random.uniform(0.0, 10.0))
+                wav_np = _mix_background(wav_np, music_np, random.uniform(10.0, 25.0))
             if self.bg_speech_files and random.random() < 0.5:
                 speech_np = _load_audio_mono(random.choice(self.bg_speech_files), self.sample_rate)
                 wav_np = _mix_background(wav_np, speech_np, random.uniform(10.0, 25.0))
@@ -232,6 +259,14 @@ class AudioDataset(Dataset):
                 import librosa
                 factor = random.uniform(self.speed_min, self.speed_max)
                 wav_np = librosa.effects.time_stretch(wav_np, rate=factor).astype(np.float32)
+            # Always apply lightweight perturbations so RPPL always gets a different view,
+            # even when no file-based augmentation is configured.
+            snr_db = random.uniform(15.0, 40.0)
+            rms = np.sqrt(np.mean(wav_np ** 2) + 1e-9)
+            noise = np.random.randn(len(wav_np)).astype(np.float32) * rms / (10 ** (snr_db / 20.0))
+            wav_np = wav_np + noise
+            gain = 10 ** (random.uniform(-3.0, 3.0) / 20.0)
+            wav_np = wav_np * gain
             peak = np.max(np.abs(wav_np))
             if peak > 1e-9:
                 wav_np = wav_np / peak
@@ -277,16 +312,15 @@ class AudioDataset(Dataset):
             # 1. Load and Resample Source WAV
             wav, sr = _load_audio(path)
 
-        # 1. Resample Source WAV if needed
+        # Resample to target rate if needed (handles any source SR transparently)
         if sr != self.sample_rate:
-            logger.warning(
-                "Sample rate mismatch: expected %d Hz, got %d Hz for %s. "
-                "Resampling automatically.", self.sample_rate, sr, path
-            )
             wav = torchaudio.functional.resample(wav, orig_freq=sr, new_freq=self.sample_rate)
 
-        # Squeeze to mono [Length]
-        wav = wav.squeeze(0)
+        # Mix down to mono [Length]
+        if wav.dim() > 1 and wav.shape[0] > 1:
+            wav = wav.mean(dim=0)
+        else:
+            wav = wav.squeeze(0)
 
         # Apply on-the-fly augmentation if enabled
         if will_augment:
@@ -294,6 +328,21 @@ class AudioDataset(Dataset):
         elif self.feature_cache is not None:
             # Cache un-augmented waveform for future hits
             self.feature_cache.put(path, wav.numpy() if isinstance(wav, torch.Tensor) else wav)
+
+        # Wake-word-over-speech: mix positives under a speech background at moderate SNR.
+        # Simulates "hey mycroft" spoken while TV / conversation is playing.
+        # Applied independently of aug_prob — runs whenever wow_files is populated
+        # and the sample is a positive.
+        if self.wow_files and label == "1" and random.random() < self.wow_prob:
+            donor_path = random.choice(self.wow_files)
+            try:
+                speech_np = _load_audio_mono(str(donor_path), self.sample_rate)
+                wav_np = wav.numpy() if isinstance(wav, torch.Tensor) else wav
+                snr = random.uniform(self.wow_snr_min, self.wow_snr_max)
+                wav_np = _mix_background(wav_np, speech_np, snr)
+                wav = torch.from_numpy(wav_np).float()
+            except Exception as exc:
+                logger.debug("WoW mixing failed for %s: %s", donor_path, exc)
 
         return wav, int(label), path
 

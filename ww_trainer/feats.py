@@ -35,7 +35,16 @@ class SlidingFeatureCacheTensor(torch.nn.Module):
         self.feature_dim = feature_dim
         # Tensor to hold recent features
         self.register_buffer("feature_cache", torch.zeros(window_size, feature_dim))
-        self.current_len = 0  # number of valid frames in the buffer
+        # Stored as a buffer so state_dict save/load preserves the valid-frame count.
+        self.register_buffer("_current_len", torch.tensor(0, dtype=torch.long))
+
+    @property
+    def current_len(self) -> int:
+        return int(self._current_len.item())
+
+    @current_len.setter
+    def current_len(self, val: int) -> None:
+        self._current_len.fill_(val)
 
     def forward(self, new_feats):
         """
@@ -66,6 +75,9 @@ class BaseExtractor(torch.nn.Module):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sample_rate = sample_rate
         self.device = torch.device(device)
+        # Guarantees at least one buffer so _apply() can always sync self.device
+        # even for pure-function extractors that register no parameters or buffers.
+        self.register_buffer("_device_anchor", torch.empty(0))
 
     def _apply(self, fn: "Callable") -> "BaseExtractor":
         """Override to keep ``self.device`` in sync with ``.to()``/``.cuda()``/``.cpu()``."""
@@ -81,8 +93,9 @@ class BaseExtractor(torch.nn.Module):
         return result
 
     @property
+    @abc.abstractmethod
     def feature_dim(self) -> int:
-        raise NotImplementedError("Subclasses must implement feature_dim")
+        ...
 
     @abc.abstractmethod
     def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
@@ -333,14 +346,14 @@ class MfccExtractor(BaseExtractor):
         device = batch.device
         window = torch.hann_window(self.n_fft, device=device)
 
-        # Compute STFT manually (return_complex=False for ONNX)
-        stft = torch.stft(
+        # Compute STFT
+        stft = torch.view_as_real(torch.stft(
             batch,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             window=window,
-            return_complex=False
-        )
+            return_complex=True,
+        ))
         real = stft[..., 0]
         imag = stft[..., 1]
         power = (real.pow(2) + imag.pow(2))
@@ -404,13 +417,13 @@ class FilterbankExtractor(BaseExtractor):
         device = batch.device
         window = torch.hann_window(self.n_fft, device=device)
 
-        stft = torch.stft(
+        stft = torch.view_as_real(torch.stft(
             batch,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             window=window,
-            return_complex=False,
-        )
+            return_complex=True,
+        ))
         real = stft[..., 0]
         imag = stft[..., 1]
         power = real.pow(2) + imag.pow(2)
@@ -1175,10 +1188,10 @@ class PLPExtractor(BaseExtractor):
         ]).to(self.bark_fb.device)
 
         # Power spectrum
-        spec = torch.stft(
+        spec = torch.view_as_real(torch.stft(
             batch, self.n_fft, self.hop_length, window=self.window,
-            return_complex=False, onesided=True,
-        )
+            return_complex=True, onesided=True,
+        ))
         power = spec[..., 0] ** 2 + spec[..., 1] ** 2  # [B, n_bins, T']
 
         # Bark-scale warping
@@ -1285,10 +1298,10 @@ class PNCCExtractor(BaseExtractor):
         ]).to(self.filterbank.device)
 
         # Power spectrum
-        spec = torch.stft(
+        spec = torch.view_as_real(torch.stft(
             batch, self.n_fft, self.hop_length, window=self.window,
-            return_complex=False, onesided=True,
-        )
+            return_complex=True, onesided=True,
+        ))
         power = spec[..., 0] ** 2 + spec[..., 1] ** 2  # [B, n_bins, T']
 
         # Gammatone filterbank
@@ -1406,10 +1419,10 @@ class CQTExtractor(BaseExtractor):
         ]).to(self.cqt_fb.device)
 
         # STFT
-        spec = torch.stft(
+        spec = torch.view_as_real(torch.stft(
             batch, self.n_fft, self.hop_length, window=self.window,
-            return_complex=False, onesided=True,
-        )
+            return_complex=True, onesided=True,
+        ))
         magnitude = (spec[..., 0] ** 2 + spec[..., 1] ** 2).sqrt()  # [B, n_bins, T']
 
         # Apply CQT filterbank

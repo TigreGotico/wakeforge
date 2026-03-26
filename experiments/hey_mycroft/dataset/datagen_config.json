@@ -1,0 +1,23 @@
+{
+  "wake_word": "hey mycroft",
+  "output_dir": "/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset",
+  "n_positive": 500,
+  "max_negative": null,
+  "lang": "en",
+  "sample_rate": 16000,
+  "vad_trim": false,
+  "test_split": 0.2,
+  "vc_refs_dir": null,
+  "vc_device": "auto",
+  "adversarial": false,
+  "adversarial_n": 20,
+  "llm_url": null,
+  "llm_model": "gemma3:4b",
+  "download_augmentation": false,
+  "pre_augment": false,
+  "seed": 42,
+  "wake_word_normalized": "hey_mycroft",
+  "n_positive_actual": 500,
+  "n_negative_actual": 2852,
+  "timestamp": "2026-03-26T07:17:40"
+}

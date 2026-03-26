@@ -79,12 +79,7 @@ class _OnnxBackend(_VCBackend):
     sample_rate = 24000
 
     def __init__(self, quantized: bool = True) -> None:
-        import sys, pathlib
-        # Prefer vendored copy so we work even if the package is not pip-installed
-        vendor_root = str(pathlib.Path(__file__).parent / "vendors")
-        if vendor_root not in sys.path:
-            sys.path.insert(0, vendor_root)
-        from chatterbox_onnx import ChatterboxOnnx  # type: ignore — vendored or installed
+        from chatterbox_onnx import ChatterboxOnnx  # type: ignore — pip: chatterbox-onnx
         logger.info("[VC] Loading ChatterboxOnnx (quantized=%s)", quantized)
         self._model = ChatterboxOnnx(quantized=quantized)
         logger.info("[VC] chatterbox-onnx ready")

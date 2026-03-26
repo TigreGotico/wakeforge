@@ -82,16 +82,32 @@ def save_intermediate_checkpoint(
             meta.update({f"metric_{k}": str(v) for k, v in metrics.items()})
         model.export_to_onnx(onnx_path, metadata=meta)
 
-    if mlflow is not None:
-        if export_onnx:
-            try:
-                mlflow.log_artifact(str(onnx_path), artifact_path="checkpoints")
-            except Exception as exc:
-                logger.error("Failed to log onnx to MLflow: %s", exc)
+        # Export featurizer ONNX so the full inference pipeline is captured
+        feat_onnx_path = model_file.with_name(model_file.stem + "_featurizer.onnx")
         try:
-            mlflow.log_artifact(str(model_file), artifact_path="checkpoints")
+            if hasattr(model, "feature_extractor") and hasattr(model.feature_extractor, "export_to_onnx"):
+                model.feature_extractor.export_to_onnx(str(feat_onnx_path))
+                logger.info("Exported featurizer to onnx: %s", feat_onnx_path)
         except Exception as exc:
-            logger.error("Failed to log model to MLflow: %s", exc)
+            logger.warning("Featurizer ONNX export failed (non-fatal): %s", exc)
+            feat_onnx_path = None
+    else:
+        feat_onnx_path = None
+
+    if mlflow is not None:
+        stem = model_file.stem  # e.g. "best_f1"
+        artifact_path = f"models/{stem}"
+        if export_onnx:
+            for path in [onnx_path, feat_onnx_path]:
+                if path and Path(path).exists():
+                    try:
+                        mlflow.log_artifact(str(path), artifact_path=artifact_path)
+                    except Exception as exc:
+                        logger.error("Failed to log onnx to MLflow: %s", exc)
+        try:
+            mlflow.log_artifact(str(model_file), artifact_path=artifact_path)
+        except Exception as exc:
+            logger.error("Failed to log checkpoint to MLflow: %s", exc)
 
 
 def load_checkpoint(

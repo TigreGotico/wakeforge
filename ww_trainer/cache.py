@@ -116,6 +116,151 @@ class FeatureCache:
         return sum(1 for _ in self.cache_dir.glob("*.npy"))
 
 
+class SharedWaveformCache:
+    """In-process shared-memory waveform cache for parallel training runs.
+
+    Pre-loads all audio files as float32 tensors into ``torch`` shared memory
+    (``tensor.share_memory_()``).  When the cache object is passed to multiple
+    ``torch.multiprocessing``-spawned processes, the OS shares the physical
+    memory pages — no duplication.
+
+    Compatible with :class:`FeatureCache` interface: ``.get()`` / ``.put()``.
+
+    Typical use::
+
+        cache = SharedWaveformCache()
+        cache.preload(all_paths, sr=16000, max_duration=2.0, n_workers=4)
+        # Pass cache to each parallel training process
+        trainer.train(..., feature_cache=cache)
+
+    Args:
+        sr: Target sample rate (default 16000).
+        max_duration: Waveforms longer than this are truncated (seconds).
+            Keeps memory bounded; wake-word clips are typically ≤ 2 s.
+    """
+
+    def __init__(self, sr: int = 16000, max_duration: float = 2.0) -> None:
+        self.sr = sr
+        self.max_len = int(sr * max_duration)
+        # path → 1-D float32 shared tensor
+        self._store: dict[str, "torch.Tensor"] = {}
+        self._hits = 0
+        self._misses = 0
+
+    def preload(
+        self,
+        paths: list[str],
+        n_workers: int = 1,
+        show_progress: bool = True,
+    ) -> None:
+        """Load all audio files into shared memory.
+
+        Args:
+            paths: List of audio file paths (duplicates are deduped).
+            n_workers: Thread-pool workers for parallel I/O.
+            show_progress: Show tqdm progress bar.
+        """
+        import concurrent.futures
+        import soundfile as sf
+        import torch
+        from tqdm import tqdm
+
+        unique = list(dict.fromkeys(paths))  # dedup, preserve order
+        logger.info("SharedWaveformCache: pre-loading %d files …", len(unique))
+
+        def _load(path: str):
+            try:
+                data, orig_sr = sf.read(path, dtype="float32", always_2d=False)
+                if data.ndim > 1:
+                    data = data.mean(axis=1)
+                if orig_sr != self.sr:
+                    import librosa
+                    data = librosa.resample(data, orig_sr=orig_sr, target_sr=self.sr)
+                if len(data) > self.max_len:
+                    data = data[: self.max_len]
+                t = torch.from_numpy(data.copy())
+                t.share_memory_()
+                return path, t
+            except Exception as exc:
+                logger.debug("SharedWaveformCache: skip %s — %s", path, exc)
+                return path, None
+
+        loaded = 0
+        if n_workers <= 1:
+            it = tqdm(unique, desc="Preloading audio", disable=not show_progress)
+            for path in it:
+                _, tensor = _load(path)
+                if tensor is not None:
+                    self._store[path] = tensor
+                    loaded += 1
+        else:
+            failed = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = {pool.submit(_load, p): p for p in unique}
+                it = tqdm(concurrent.futures.as_completed(futures),
+                          total=len(futures), desc="Preloading audio", disable=not show_progress)
+                for fut in it:
+                    path, tensor = fut.result()
+                    if tensor is not None:
+                        self._store[path] = tensor
+                        loaded += 1
+                    else:
+                        failed.append(path)
+
+            # Retry failures sequentially
+            if failed:
+                logger.warning("SharedWaveformCache: %d files failed — retrying sequentially", len(failed))
+                for path in failed:
+                    _, tensor = _load(path)
+                    if tensor is not None:
+                        self._store[path] = tensor
+                        loaded += 1
+
+        total_mb = sum(t.numel() * 4 for t in self._store.values()) / 1e6
+        skipped = len(unique) - loaded
+        if skipped:
+            logger.warning("SharedWaveformCache: %d files could not be loaded and will be read from disk", skipped)
+        logger.info(
+            "SharedWaveformCache: loaded %d/%d files — %.1f MB in shared memory",
+            loaded, len(unique), total_mb,
+        )
+
+    def get(self, audio_path: str) -> Optional[np.ndarray]:
+        """Return cached waveform as numpy array, or ``None`` on miss.
+
+        Compatible with :class:`FeatureCache`.
+        """
+        t = self._store.get(audio_path)
+        if t is not None:
+            self._hits += 1
+            return t.numpy()
+        self._misses += 1
+        return None
+
+    def put(self, audio_path: str, features: np.ndarray) -> None:
+        """Store a waveform in shared memory (called on first cache miss).
+
+        Compatible with :class:`FeatureCache`.
+        """
+        import torch
+        t = torch.from_numpy(np.array(features, dtype=np.float32))
+        t.share_memory_()
+        self._store[audio_path] = t
+
+    def stats(self) -> dict:
+        """Return hit/miss statistics."""
+        total = self._hits + self._misses
+        return {
+            "entries": len(self._store),
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": self._hits / max(1, total),
+        }
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+
 def make_extractor_params_hash(
     extractor_name: str,
     feature_dim: int,

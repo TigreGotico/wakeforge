@@ -88,9 +88,11 @@ class WakeWordTrainer:
                 "bg_noise_folder", "mic_noise_folder", "bg_speech_folder", "music_folder",
                 "rir_folder", "vc_folder", "snr_min", "snr_max",
                 "pitch_min", "pitch_max", "speed_min", "speed_max",
-                "aug_prob", "vc_prob",
+                "vc_prob",
+                "wake_word_over_speech_folder", "wow_prob", "wow_snr_min", "wow_snr_max",
             ]
         }
+        # aug_prob is scheduled by the training loop — do not bake it in here
         if resume:
             self.load_checkpoint(resume)
 
@@ -110,24 +112,83 @@ class WakeWordTrainer:
             feature_dim: Optional[int],
             model_kwargs: Dict[str, Any],
     ) -> None:
-        """Initialise MLflow tracking for this run."""
+        """Initialise MLflow tracking for this run.
+
+        Failures are non-fatal — training continues without MLflow if the
+        server is unreachable or the experiment setup races with another process.
+        """
+        import time
         import mlflow
+        from ww_trainer.env import load_env
+        load_env()  # no-op if already loaded; ensures .env credentials are present
         mlflow.set_tracking_uri(mlflow_uri)
-        mlflow.set_experiment(f"WakeWord_Trainer:{arch}")
-        feat = featurizer.split("/")[-1].split(".onnx")[0]
-        mlflow.start_run(run_name=f"{feat}-{arch}")
-        mlflow.log_params({
-            "arch": arch,
-            "device": str(self.device),
-            "base_model": resume or "N/A",
-            "loss_types": "+".join([l["name"] for l in (losses_cfg or [])]),
-            "loss_weights": "+".join([str(l["weight"]) for l in (losses_cfg or [])]),
-            "featurizer": feat,
-            "feature_dim": feature_dim,
-            **model_kwargs,
-        })
-        self.mlflow = mlflow
-        logger.info("[MLflow] Enabled at %s", mlflow_uri)
+
+        # Experiment = one wake word.  All architectures/losses for the same
+        # keyword land in the same experiment so they're directly comparable.
+        wake = self.wake_word.replace("_", " ")   # "hey_mycroft" → "hey mycroft"
+        exp_name = f"ww: {wake}"
+
+        # Featurizer label: use the type kwarg if available, else the onnx filename
+        feat_type = model_kwargs.get("featurizer_type") or (
+            featurizer.split("/")[-1].replace(".onnx", "") if featurizer else "unknown"
+        )
+        n_feat = (model_kwargs.get("n_mfcc")
+                  or model_kwargs.get("n_mels")
+                  or model_kwargs.get("n_filters")
+                  or model_kwargs.get("n_features")
+                  or feature_dim
+                  or "?")
+        hidden = model_kwargs.get("hidden_dim", "?")
+        loss_label = "+".join(l["name"] for l in (losses_cfg or [])) or "bce"
+
+        # Run name: human-readable at a glance in the MLflow UI
+        # e.g.  "gru · mfcc-40 · h128 · focal"
+        run_name = f"{arch} · {feat_type}-{n_feat} · h{hidden} · {loss_label}"
+
+        # Resolve experiment id with retry — concurrent workers may race to create it.
+        exp_id = None
+        for attempt in range(5):
+            try:
+                exp = mlflow.get_experiment_by_name(exp_name)
+                if exp is not None and exp.lifecycle_stage == "active":
+                    exp_id = exp.experiment_id
+                    break
+                elif exp is None:
+                    exp_id = mlflow.create_experiment(exp_name)
+                    break
+                else:
+                    # Experiment exists but was deleted — create with a unique suffix
+                    exp_id = mlflow.create_experiment(f"{exp_name} ({int(time.time())})")
+                    break
+            except Exception as exc:
+                if attempt < 4:
+                    time.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.warning("[MLflow] Could not resolve experiment after 5 attempts: %s", exc)
+                    return
+
+        # Only log params that are meaningful in the MLflow UI — skip filesystem paths.
+        _PATH_KEYS = {"bg_noise_folder", "music_folder", "rir_folder", "mic_noise_folder",
+                      "bg_speech_folder", "vc_folder"}
+        clean_kwargs = {k: v for k, v in model_kwargs.items() if k not in _PATH_KEYS}
+
+        try:
+            mlflow.start_run(experiment_id=exp_id, run_name=run_name)
+            mlflow.log_params({
+                "wake_word":    wake,
+                "arch":         arch,
+                "featurizer":   feat_type,
+                "n_features":   n_feat,
+                "hidden_dim":   hidden,
+                "loss":         loss_label,
+                "device":       str(self.device),
+                "resume":       resume or "",
+                **clean_kwargs,
+            })
+            self.mlflow = mlflow
+            logger.info("[MLflow] run '%s' in experiment '%s'", run_name, exp_name)
+        except Exception as exc:
+            logger.warning("[MLflow] Setup failed — continuing without tracking: %s", exc)
 
     # --------------------- Checkpoint I/O ---------------------
 

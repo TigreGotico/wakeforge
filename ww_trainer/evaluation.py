@@ -33,6 +33,7 @@ def evaluate_model(
     output_dir: Optional[Path] = None,
     aug_prob: float = 0,
     mlflow=None,
+    feature_cache=None,
 ) -> tuple:
     """Run evaluation on *dataset* and return metrics.
 
@@ -55,7 +56,7 @@ def evaluate_model(
         return 0.0, 0.0, 0.0, 0.0, 0.0, [], [], [], [], [], []
 
     loader = DataLoader(
-        AudioDataset(dataset, aug_prob=aug_prob),
+        AudioDataset(dataset, aug_prob=aug_prob, feature_cache=feature_cache),
         batch_size=batch_size,
         shuffle=True,
         collate_fn=lambda b: collate_fn(b, device),

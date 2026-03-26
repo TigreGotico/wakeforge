@@ -9,7 +9,7 @@ Usage::
     from ww_trainer.augment import (
         AugmentationPipeline, MixBackground, ApplyReverb,
         PitchShift, SpeedPerturb, GaussianNoise, VolumePerturb,
-        SpecAugment, TimeShift, Normalize,
+        SpecAugment, TimeShift, Normalize, Mixup,
     )
 
     pipeline = AugmentationPipeline([
@@ -248,7 +248,8 @@ class SpecAugment(AudioTransform):
         n_masks: Number of masks to apply (default 2).
     """
 
-    def __init__(self, max_mask_frac: float = 0.1, n_masks: int = 2) -> None:
+    def __init__(self, max_mask_frac: float = 0.2, n_masks: int = 2) -> None:
+        # 0.2 (20%) is standard SpecAugment — was 0.1 (too conservative)
         self.max_mask_frac = max_mask_frac
         self.n_masks = n_masks
 
@@ -338,6 +339,79 @@ class Normalize(AudioTransform):
         if peak > 1e-9:
             return (wav / peak * self.target_peak).astype(np.float32)
         return wav
+
+
+class Mixup(AudioTransform):
+    """Waveform-domain Mixup (Zhang et al., ICLR 2018).
+
+    Blends two waveforms with ``alpha ~ Beta(beta_param, beta_param)``.
+    The mixed waveform has a soft label equal to the mixing coefficient,
+    teaching the model smooth decision boundaries at the wake/non-wake border.
+
+    Use by calling ``Mixup.mix_batch(wavs, labels)`` on a batch tensor, or
+    apply the waveform transform to mix a single sample with a provided
+    background sample via ``__call__``.
+
+    Args:
+        beta_param: Beta distribution parameter (default 1.0 = uniform mixing).
+        min_alpha: Clamp mixing coefficient to [min_alpha, 1-min_alpha] to
+            avoid trivially identical mixtures.
+    """
+
+    def __init__(self, beta_param: float = 1.0, min_alpha: float = 0.1) -> None:
+        self.beta_param = beta_param
+        self.min_alpha = min_alpha
+
+    def __call__(self, wav: np.ndarray, sr: int = 16000) -> np.ndarray:
+        """Single-sample transform — returns wav unchanged (mixing requires a pair)."""
+        return wav
+
+    def mix_pair(self, wav_a: np.ndarray, wav_b: np.ndarray) -> tuple[np.ndarray, float]:
+        """Mix two waveforms and return (mixed_wav, alpha).
+
+        Args:
+            wav_a: First waveform (treated as the primary sample).
+            wav_b: Second waveform to blend in.
+
+        Returns:
+            Tuple of (mixed waveform as float32, alpha mixing coefficient).
+        """
+        alpha = float(np.random.beta(self.beta_param, self.beta_param))
+        alpha = float(np.clip(alpha, self.min_alpha, 1.0 - self.min_alpha))
+        # Match lengths
+        min_len = min(len(wav_a), len(wav_b))
+        mixed = alpha * wav_a[:min_len] + (1.0 - alpha) * wav_b[:min_len]
+        peak = np.max(np.abs(mixed))
+        if peak > 1e-9:
+            mixed = mixed / peak
+        return mixed.astype(np.float32), alpha
+
+    @staticmethod
+    def mix_batch(
+        wavs: "torch.Tensor",
+        labels: "torch.Tensor",
+        beta_param: float = 1.0,
+        min_alpha: float = 0.1,
+    ) -> "tuple[torch.Tensor, torch.Tensor]":
+        """Apply Mixup to a padded batch tensor (in-place mix with a shuffled copy).
+
+        Args:
+            wavs: Float tensor ``[B, T]``.
+            labels: Float tensor ``[B]``.
+            beta_param: Beta distribution shape parameter.
+            min_alpha: Minimum mixing coefficient.
+
+        Returns:
+            Tuple of (mixed_wavs ``[B, T]``, mixed_labels ``[B]``).
+        """
+        import torch
+        B = wavs.size(0)
+        idx = torch.randperm(B, device=wavs.device)
+        alpha = float(np.random.beta(beta_param, beta_param))
+        alpha = float(np.clip(alpha, min_alpha, 1.0 - min_alpha))
+        mixed_wavs = alpha * wavs + (1.0 - alpha) * wavs[idx]
+        mixed_labels = alpha * labels + (1.0 - alpha) * labels[idx]
+        return mixed_wavs, mixed_labels
 
 
 class AugmentationPipeline(AudioTransform):

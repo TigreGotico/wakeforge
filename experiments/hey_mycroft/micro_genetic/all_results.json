@@ -1,0 +1,94 @@
+[
+  {
+    "config": {
+      "arch": "gru",
+      "hidden_dim": 128,
+      "featurizer_type": "mfcc",
+      "n_features": 20,
+      "dropout": 0.4,
+      "lr": 0.0005,
+      "batch_size": 16,
+      "loss": "label_smoothing_bce",
+      "mine_fraction": 0.7,
+      "mixup_alpha": 1.0,
+      "max_neg_weight": 200.0,
+      "spec_augment": true,
+      "use_mixup": true
+    },
+    "fitness": 0.6656466125090174,
+    "f1": 0.9292307692307692,
+    "fpr": 0.008553654743390357,
+    "fnr": 0.006535947712418301,
+    "n_params": 74241,
+    "tid": 0
+  },
+  {
+    "config": {
+      "arch": "gru",
+      "hidden_dim": 32,
+      "featurizer_type": "mfcc",
+      "n_features": 40,
+      "dropout": 0.2,
+      "lr": 0.001,
+      "batch_size": 8,
+      "loss": "label_smoothing_bce",
+      "mine_fraction": 0.2,
+      "mixup_alpha": 0.2,
+      "max_neg_weight": 50.0,
+      "spec_augment": false,
+      "use_mixup": true
+    },
+    "fitness": 0.9895241870724444,
+    "f1": 0.9770491803278688,
+    "fpr": 0.006609642301710731,
+    "fnr": 0.006535947712418301,
+    "n_params": 11457,
+    "tid": 1
+  },
+  {
+    "config": {
+      "arch": "gru",
+      "hidden_dim": 128,
+      "featurizer_type": "filterbank",
+      "n_features": 40,
+      "dropout": 0.1,
+      "lr": 0.001,
+      "batch_size": 16,
+      "loss": "rppl",
+      "mine_fraction": 0.5,
+      "mixup_alpha": 0.2,
+      "max_neg_weight": 200.0,
+      "spec_augment": true,
+      "use_mixup": true
+    },
+    "fitness": 0.5913970712996345,
+    "f1": 0.9113149847094801,
+    "fpr": 0.019440124416796267,
+    "fnr": 0.0196078431372549,
+    "n_params": 81921,
+    "tid": 2
+  },
+  {
+    "config": {
+      "arch": "cnn",
+      "hidden_dim": 128,
+      "featurizer_type": "delta_mfcc",
+      "n_features": 40,
+      "dropout": 0.0,
+      "lr": 0.001,
+      "batch_size": 16,
+      "loss": "label_smoothing_bce",
+      "mine_fraction": 0.33,
+      "mixup_alpha": 1.0,
+      "max_neg_weight": 10.0,
+      "spec_augment": true,
+      "use_mixup": true
+    },
+    "fitness": 0.0,
+    "f1": 0.856338028169014,
+    "fpr": 0.013219284603421462,
+    "fnr": 0.013071895424836602,
+    "n_params": 322305,
+    "tid": 3
+  }
+]

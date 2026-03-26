@@ -1,0 +1,14 @@
+true_label,predicted_label,probability,file_path
+0,1,0.4425,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001291.wav
+0,1,0.7460,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001118.wav
+0,1,0.4864,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_01645.wav
+0,1,0.4920,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/000162.wav
+0,1,0.4549,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_09563.wav
+0,1,0.4523,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_05042.wav
+0,1,0.6124,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_06202.wav
+0,1,0.6016,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001245.wav
+0,1,0.4493,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_05071.wav
+0,1,0.4478,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_04743.wav
+0,1,0.4918,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001070.wav
+0,1,0.4364,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_00646.wav
+0,1,0.6062,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_03695.wav

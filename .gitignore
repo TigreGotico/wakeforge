@@ -9,6 +9,9 @@ build/
 # Virtual environments
 .venv/
 
+# Secrets
+.env
+
 # IDE
 .idea/
 

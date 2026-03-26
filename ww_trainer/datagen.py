@@ -43,9 +43,19 @@ KNOWN_POSITIVE_DATASETS: Dict[str, str] = {
 }
 
 NEGATIVE_DATASETS: Dict[str, List[str]] = {
+    # Non-speech environmental sounds (label=0)
     "general": [
         "TigreGotico/ESC-50",
         "TigreGotico/NAR",
+        "agkphysics/AudioSet",          # large general audio; capped by max_negative
+    ],
+    # Human speech that is NOT the wake word — critical for preventing
+    # models from learning "speech vs silence" instead of the specific phrase.
+    # These are downloaded alongside "general" negatives and mixed in.
+    "speech": [
+        "TigreGotico/not-wake-words-speech-en",        # primary: curated NWW speech
+        "hf-internal-testing/librispeech_asr_demo",    # ~70 clips, LibriSpeech clean
+        "Anton-Bushuiev/speech-commands-v2-resampled", # short spoken commands
     ],
     "bg_noise": [
         "TigreGotico/ambient_noises",
@@ -160,20 +170,50 @@ def download_hf_audio_dataset(
     max_samples: Optional[int] = None,
     sr: int = 16000,
 ) -> List[Path]:
-    """Stream a HuggingFace audio dataset and save WAVs to *output_dir*.
+    """Download a HuggingFace audio dataset and save WAVs to *output_dir*.
+
+    Already-downloaded WAV files are reused without any network access.
+    The HuggingFace Arrow cache (``~/.cache/huggingface/datasets``) is used on
+    the first download so that subsequent calls with the same dataset skip the
+    HTTP transfer.  Streaming mode (which bypasses the cache) is only used as a
+    last resort when the cached download fails.
 
     Returns list of written file paths.
     """
     from datasets import load_dataset
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Skip if already downloaded ──────────────────────────────────────────
+    existing = sorted(output_dir.glob("*.wav"))
+    need = max_samples if max_samples is not None else 1
+    if len(existing) >= need:
+        logger.info("Reusing %d cached WAVs from %s (skipping download)", len(existing), output_dir)
+        return existing[:max_samples] if max_samples is not None else existing
+
     logger.info("Downloading %s → %s (max=%s)", dataset_id, output_dir, max_samples)
 
-    try:
-        ds = load_dataset(dataset_id, split="train", streaming=True, trust_remote_code=True)
-    except Exception:
-        # Some datasets only have a "test" split or no named split
-        ds = load_dataset(dataset_id, split="train", trust_remote_code=True)
+    # ── Prefer cached (non-streaming) download ──────────────────────────────
+    # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
+    # re-runs with the same dataset_id are instant.  Fall back to streaming
+    # only if the non-streaming load fails (e.g. dataset too large for RAM).
+    # Note: trust_remote_code was removed in datasets ≥ 3.x; omit it.
+    ds = None
+    for streaming in (False, True):
+        try:
+            ds = load_dataset(dataset_id, split="train", streaming=streaming)
+            break
+        except Exception as exc:
+            if not streaming:
+                logger.warning(
+                    "Cached download of %s failed (%s); retrying with streaming", dataset_id, exc
+                )
+            else:
+                logger.error("Streaming download of %s also failed: %s", dataset_id, exc)
+                return []
+
+    if ds is None:
+        return []
 
     written: List[Path] = []
     audio_col = None
@@ -198,7 +238,14 @@ def download_hf_audio_dataset(
                 return written
 
         audio = example[audio_col]
-        if isinstance(audio, dict):
+        if hasattr(audio, "get_all_samples"):
+            # datasets ≥ 3.x with torchcodec backend: AudioDecoder object
+            samples = audio.get_all_samples()
+            # samples.data shape: (channels, num_samples) — mix down to mono 1D
+            arr = samples.data.float().mean(dim=0).numpy().astype(np.float32)
+            orig_sr = int(samples.sample_rate)
+        elif isinstance(audio, dict):
+            # datasets < 3.x: {"array": np.ndarray, "sampling_rate": int}
             arr = np.array(audio["array"], dtype=np.float32)
             orig_sr = audio.get("sampling_rate", sr)
         else:
@@ -696,15 +743,29 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     # ── Stage 2: Acquire negatives ──────────────────────────────────────
     logger.info("Stage 2: Acquiring negative samples (purpose-mapped)")
 
-    # General negatives → negatives/ (label=0 in CSV)
+    # General negatives (environmental sounds) + speech negatives → label=0
+    # Speech negatives are essential: without them models learn "speech vs
+    # silence" rather than "this specific wake word vs everything else".
+    # Datasets that are extremely large and must always be capped.
+    _LARGE_DATASETS: Dict[str, int] = {
+        "agkphysics/AudioSet": 5000,
+    }
+
     neg_files: List[Path] = []
-    for ds_id in NEGATIVE_DATASETS["general"]:
-        ds_name = ds_id.split("/")[-1]
-        ds_out = negatives_dir / ds_name
-        files = download_hf_audio_dataset(
-            ds_id, ds_out, max_samples=config.max_negative, sr=config.sample_rate
-        )
-        neg_files.extend(files)
+    for category in ("general", "speech"):
+        for ds_id in NEGATIVE_DATASETS.get(category, []):
+            ds_name = ds_id.split("/")[-1]
+            ds_out = negatives_dir / ds_name
+            # Respect user's max_negative, but enforce a hard cap for huge datasets.
+            hard_cap = _LARGE_DATASETS.get(ds_id)
+            if hard_cap is not None:
+                cap = min(config.max_negative, hard_cap) if config.max_negative else hard_cap
+            else:
+                cap = config.max_negative
+            files = download_hf_audio_dataset(
+                ds_id, ds_out, max_samples=cap, sr=config.sample_rate
+            )
+            neg_files.extend(files)
 
     # Augmentation resources (NOT in CSV)
     if config.download_augmentation:
