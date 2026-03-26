@@ -314,6 +314,15 @@ def infinite_training_loop(
                             len(vc_samples), len(epoch_wakes))
 
         # -- 2. Hard-negative mining from NWW pool -----------------------------
+        # If RPPL is active, use its EMA wake prototype to guide embedding
+        # similarity scoring — more stable than a fresh batch mean each epoch.
+        rppl_proto = None
+        for entry in trainer.loss_manager.losses:
+            crit = entry.get("criterion")
+            if crit is not None and hasattr(crit, "proto_w_ema") and getattr(crit, "_proto_initialised", torch.tensor(False)).item():
+                rppl_proto = crit.proto_w_ema.detach()
+                break
+
         hard_negatives, easy_negatives, hardness_cache = mine_hard_negatives(
             model=model,
             nonwakes=nww_pool,
@@ -324,6 +333,7 @@ def infinite_training_loop(
             cache_decay=0.7,
             max_cache_size=min(100_000, len(nww_pool)),
             wake_cache=epoch_wakes,
+            rppl_proto=rppl_proto,
         )
 
         # Persist cache
