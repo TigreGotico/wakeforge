@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wake Word Tester — ONNX</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2e3245;
+    --accent: #4f8ef7; --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+    --text: #e2e8f0; --muted: #64748b;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif;
+         min-height: 100vh; padding: 24px; }
+  h1 { font-size: 1.4rem; font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 900px; margin: 0 auto; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--muted); margin-bottom: 14px; }
+  label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 5px; }
+  .file-drop { border: 1.5px dashed var(--border); border-radius: 7px; padding: 12px 10px;
+               text-align: center; cursor: pointer; transition: border-color .2s; position: relative; }
+  .file-drop:hover, .file-drop.over { border-color: var(--accent); }
+  .file-drop input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .file-drop .fname { font-size: 0.78rem; color: var(--accent); margin-top: 4px;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-drop .icon { font-size: 1.4rem; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 18px;
+         border-radius: 7px; border: none; font-size: 0.88rem; font-weight: 500;
+         cursor: pointer; transition: opacity .15s; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-danger  { background: var(--red);    color: #fff; }
+  .btn-ghost   { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  /* Gauge */
+  .gauge-wrap { display: flex; flex-direction: column; align-items: center; padding: 10px 0; }
+  .gauge-svg { width: 180px; height: 100px; }
+  .gauge-score { font-size: 2.4rem; font-weight: 700; line-height: 1; }
+  .gauge-label { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+  .detection-badge { margin-top: 10px; padding: 6px 20px; border-radius: 20px;
+                      font-size: 0.88rem; font-weight: 600; letter-spacing: .04em;
+                      background: var(--border); color: var(--muted); transition: all .2s; }
+  .detection-badge.yes { background: var(--green); color: #fff; animation: pulse .4s ease; }
+  .detection-badge.no  { background: var(--border); color: var(--muted); }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
+  /* Sparkline */
+  canvas#spark { width: 100%; height: 80px; border-radius: 6px;
+                  background: var(--bg); display: block; margin-top: 8px; }
+  /* Threshold */
+  .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .thr-val { font-size: 0.88rem; font-weight: 600; min-width: 30px; }
+  /* Log */
+  #log { font-size: 0.75rem; font-family: monospace; color: var(--muted);
+         max-height: 130px; overflow-y: auto; background: var(--bg);
+         border-radius: 6px; padding: 8px; margin-top: 10px; border: 1px solid var(--border); }
+  #log p { margin: 1px 0; }
+  #log .ok  { color: var(--green); }
+  #log .err { color: var(--red); }
+  #log .inf { color: var(--accent); }
+  /* Full-width bottom card */
+  .full { grid-column: 1 / -1; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+                display: inline-block; margin-right: 6px; }
+  .status-dot.active { background: var(--green); animation: blink 1s infinite; }
+  @keyframes blink { 50%{opacity:.3} }
+  .threshold-line { stroke: var(--yellow); stroke-dasharray: 4 3; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div style="max-width:900px;margin:0 auto">
+  <h1>⚡ Wake Word Tester</h1>
+  <p class="subtitle">Pure ONNX in the browser — featurizer + classifier, no server needed</p>
+
+  <div class="grid">
+
+    <!-- ── Model loader ── -->
+    <div class="card">
+      <h2>1 · Load Models</h2>
+
+      <label>Featurizer ONNX <span style="color:var(--muted)">(best_f1_featurizer.onnx)</span></label>
+      <div class="file-drop" id="drop-feat">
+        <div class="icon">🧠</div>
+        <div>Drop or click</div>
+        <div class="fname" id="feat-name">—</div>
+        <input type="file" id="feat-file" accept=".onnx">
+      </div>
+
+      <label style="margin-top:12px">Head ONNX <span style="color:var(--muted)">(best_f1.onnx)</span></label>
+      <div class="file-drop" id="drop-head">
+        <div class="icon">🎯</div>
+        <div>Drop or click</div>
+        <div class="fname" id="head-name">—</div>
+        <input type="file" id="head-file" accept=".onnx">
+      </div>
+
+      <div class="row">
+        <button class="btn btn-primary" id="btn-load">Load Models</button>
+        <span id="model-status" style="font-size:.8rem;color:var(--muted);align-self:center"></span>
+      </div>
+    </div>
+
+    <!-- ── Score display ── -->
+    <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <h2>Score</h2>
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 180 100">
+          <path d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#2e3245" stroke-width="14" stroke-linecap="round"/>
+          <path id="gauge-arc" d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#22c55e"
+                stroke-width="14" stroke-linecap="round"
+                stroke-dasharray="251" stroke-dashoffset="251"/>
+          <line id="thr-line" x1="90" y1="10" x2="90" y2="25" stroke="#f59e0b"
+                stroke-width="2" stroke-dasharray="3 2"/>
+        </svg>
+        <div class="gauge-score" id="score-val">—</div>
+        <div class="gauge-label">probability</div>
+        <div class="detection-badge no" id="det-badge">LISTENING…</div>
+      </div>
+    </div>
+
+    <!-- ── File test ── -->
+    <div class="card">
+      <h2>2a · Test Audio File</h2>
+      <label>Audio file (wav / mp3 / flac / ogg)</label>
+      <div class="file-drop" id="drop-audio">
+        <div class="icon">🎵</div>
+        <div>Drop or click</div>
+        <div class="fname" id="audio-name">—</div>
+        <input type="file" id="audio-file" accept="audio/*">
+      </div>
+      <div class="row">
+        <button class="btn btn-primary" id="btn-run" disabled>Run Inference</button>
+      </div>
+    </div>
+
+    <!-- ── Mic streaming ── -->
+    <div class="card">
+      <h2>2b · Live Microphone</h2>
+      <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px">
+        Streams 16 kHz PCM through both ONNX models in real time.
+        Uses a 1-second rolling window, inferred every 250 ms.
+      </p>
+      <div class="row">
+        <button class="btn btn-primary" id="btn-mic" disabled>▶ Start Mic</button>
+        <button class="btn btn-danger"  id="btn-stop" disabled>■ Stop</button>
+        <span><span class="status-dot" id="mic-dot"></span><span id="mic-label" style="font-size:.8rem;color:var(--muted)">idle</span></span>
+      </div>
+
+      <div class="slider-row" style="margin-top:14px">
+        <label style="margin:0;white-space:nowrap">Threshold</label>
+        <input type="range" id="thr-slider" min="0.1" max="0.9" step="0.05" value="0.5">
+        <span class="thr-val" id="thr-display">0.50</span>
+      </div>
+    </div>
+
+    <!-- ── History + log ── -->
+    <div class="card full">
+      <h2>Score History</h2>
+      <canvas id="spark" height="80"></canvas>
+      <h2 style="margin-top:14px">Log</h2>
+      <div id="log"><p class="inf">Ready. Load models to begin.</p></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let featSession = null, headSession = null;
+let micStream = null, audioCtx = null, processor = null;
+let micBuffer = new Float32Array(0);
+const MIC_SR = 16000;
+const WIN_SAMPLES = MIC_SR;          // 1-second window
+const INFER_INTERVAL_MS = 250;
+let lastInferTime = 0;
+const scoreHistory = new Array(120).fill(null);
+let threshold = 0.5;
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+const logEl = document.getElementById('log');
+function log(msg, cls = '') {
+  const p = document.createElement('p');
+  if (cls) p.className = cls;
+  p.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(p);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── File drop helpers ─────────────────────────────────────────────────────────
+function setupDrop(dropId, inputId, nameId) {
+  const drop = document.getElementById(dropId);
+  const inp  = document.getElementById(inputId);
+  const nm   = document.getElementById(nameId);
+  inp.addEventListener('change', () => { if (inp.files[0]) nm.textContent = inp.files[0].name; });
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f) { const dt = new DataTransfer(); dt.items.add(f); inp.files = dt.files; nm.textContent = f.name; }
+  });
+}
+setupDrop('drop-feat',  'feat-file',  'feat-name');
+setupDrop('drop-head',  'head-file',  'head-name');
+setupDrop('drop-audio', 'audio-file', 'audio-name');
+
+// ── Load models ───────────────────────────────────────────────────────────────
+document.getElementById('btn-load').addEventListener('click', async () => {
+  const ff = document.getElementById('feat-file').files[0];
+  const hf = document.getElementById('head-file').files[0];
+  if (!ff || !hf) { log('Select both ONNX files first.', 'err'); return; }
+
+  const st = document.getElementById('model-status');
+  st.textContent = 'Loading…';
+  try {
+    ort.env.wasm.numThreads = 1;
+    const featBuf = await ff.arrayBuffer();
+    const headBuf = await hf.arrayBuffer();
+    featSession = await ort.InferenceSession.create(featBuf, { executionProviders: ['wasm'] });
+    headSession = await ort.InferenceSession.create(headBuf, { executionProviders: ['wasm'] });
+
+    const featIn  = featSession.inputNames[0];
+    const featOut = featSession.outputNames[0];
+    const headIn  = headSession.inputNames[0];
+    const headOut = headSession.outputNames[0];
+
+    log(`Featurizer loaded — input: "${featIn}", output: "${featOut}"`, 'ok');
+    log(`Head loaded       — input: "${headIn}", output: "${headOut}"`, 'ok');
+    st.textContent = '✓ Ready';
+    st.style.color = 'var(--green)';
+    document.getElementById('btn-run').disabled  = false;
+    document.getElementById('btn-mic').disabled  = false;
+  } catch (e) {
+    log(`Failed to load models: ${e.message}`, 'err');
+    st.textContent = 'Error';
+    st.style.color = 'var(--red)';
+  }
+});
+
+// ── Core inference ────────────────────────────────────────────────────────────
+async function runInference(pcm16k) {
+  // pcm16k: Float32Array at 16 kHz
+  const wavTensor = new ort.Tensor('float32', pcm16k, [1, pcm16k.length]);
+  const featOut = await featSession.run({ [featSession.inputNames[0]]: wavTensor });
+  const features = featOut[featSession.outputNames[0]];  // [1, T_frames, F]
+
+  const headOut = await headSession.run({ [headSession.inputNames[0]]: features });
+  const logit = headOut[headSession.outputNames[0]].data[0];
+  return 1.0 / (1.0 + Math.exp(-logit));   // sigmoid
+}
+
+// ── Resample to 16 kHz ────────────────────────────────────────────────────────
+async function resampleTo16k(audioBuffer) {
+  if (audioBuffer.sampleRate === MIC_SR) {
+    // Already 16 kHz — return mono channel
+    return audioBuffer.getChannelData(0);
+  }
+  const offCtx = new OfflineAudioContext(1, Math.ceil(audioBuffer.duration * MIC_SR), MIC_SR);
+  const src = offCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offCtx.destination);
+  src.start(0);
+  const rendered = await offCtx.startRendering();
+  return rendered.getChannelData(0);
+}
+
+// ── File inference ────────────────────────────────────────────────────────────
+document.getElementById('btn-run').addEventListener('click', async () => {
+  const af = document.getElementById('audio-file').files[0];
+  if (!af) { log('Select an audio file first.', 'err'); return; }
+  if (!featSession || !headSession) { log('Load models first.', 'err'); return; }
+
+  log(`Running inference on: ${af.name}`, 'inf');
+  try {
+    const arrayBuf  = await af.arrayBuffer();
+    const decCtx    = new AudioContext();
+    const audioBuf  = await decCtx.decodeAudioData(arrayBuf);
+    const pcm       = await resampleTo16k(audioBuf);
+    const prob      = await runInference(pcm);
+    log(`Score: ${prob.toFixed(4)}  |  ${af.name}`, prob >= threshold ? 'ok' : '');
+    updateDisplay(prob);
+    pushHistory(prob);
+  } catch (e) {
+    log(`Inference error: ${e.message}`, 'err');
+  }
+});
+
+// ── Microphone streaming ──────────────────────────────────────────────────────
+document.getElementById('btn-mic').addEventListener('click', async () => {
+  if (!featSession || !headSession) { log('Load models first.', 'err'); return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: MIC_SR, channelCount: 1 } });
+    audioCtx  = new AudioContext({ sampleRate: MIC_SR });
+    const src = audioCtx.createMediaStreamSource(micStream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      const chunk = e.inputBuffer.getChannelData(0);
+      // Append to rolling buffer
+      const merged = new Float32Array(micBuffer.length + chunk.length);
+      merged.set(micBuffer);
+      merged.set(chunk, micBuffer.length);
+      // Keep last WIN_SAMPLES
+      micBuffer = merged.length > WIN_SAMPLES ? merged.slice(-WIN_SAMPLES) : merged;
+
+      const now = performance.now();
+      if (micBuffer.length >= WIN_SAMPLES && now - lastInferTime > INFER_INTERVAL_MS) {
+        lastInferTime = now;
+        runInference(micBuffer.slice()).then(prob => {
+          updateDisplay(prob);
+          pushHistory(prob);
+        }).catch(err => log(`Mic infer error: ${err.message}`, 'err'));
+      }
+    };
+
+    src.connect(processor);
+    processor.connect(audioCtx.destination);
+
+    document.getElementById('mic-dot').classList.add('active');
+    document.getElementById('mic-label').textContent = 'streaming';
+    document.getElementById('btn-mic').disabled  = true;
+    document.getElementById('btn-stop').disabled = false;
+    log('Microphone streaming started.', 'ok');
+  } catch (e) {
+    log(`Mic error: ${e.message}`, 'err');
+  }
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+  if (processor)  { processor.disconnect(); processor = null; }
+  if (audioCtx)   { audioCtx.close(); audioCtx = null; }
+  if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  micBuffer = new Float32Array(0);
+  document.getElementById('mic-dot').classList.remove('active');
+  document.getElementById('mic-label').textContent = 'idle';
+  document.getElementById('btn-mic').disabled  = false;
+  document.getElementById('btn-stop').disabled = true;
+  log('Microphone stopped.', 'inf');
+});
+
+// ── Threshold slider ──────────────────────────────────────────────────────────
+document.getElementById('thr-slider').addEventListener('input', function() {
+  threshold = parseFloat(this.value);
+  document.getElementById('thr-display').textContent = threshold.toFixed(2);
+  drawSparkline();
+});
+
+// ── Display helpers ───────────────────────────────────────────────────────────
+const ARC_LEN = 251;
+function updateDisplay(prob) {
+  // Gauge arc
+  const arc = document.getElementById('gauge-arc');
+  const offset = ARC_LEN * (1 - prob);
+  arc.setAttribute('stroke-dashoffset', offset.toFixed(1));
+  const hue = Math.round(prob * 120);  // 0=red, 120=green, reversed
+  arc.setAttribute('stroke', `hsl(${120 - Math.round(prob * 120)},80%,55%)`);
+
+  document.getElementById('score-val').textContent = prob.toFixed(3);
+
+  // Threshold line on gauge — angle from 0° (left) to 180° (right)
+  const a = Math.PI * threshold;  // radians from left
+  const cx = 90, cy = 90, r = 80;
+  const x1 = cx - r * Math.cos(a);
+  const y1 = cy - r * Math.sin(a);
+  const ln = document.getElementById('thr-line');
+  ln.setAttribute('x1', (x1 - 10 * Math.cos(a)).toFixed(1));
+  ln.setAttribute('y1', (y1 - 10 * Math.sin(a)).toFixed(1));
+  ln.setAttribute('x2', (x1 + 10 * Math.cos(a)).toFixed(1));
+  ln.setAttribute('y2', (y1 + 10 * Math.sin(a)).toFixed(1));
+
+  // Badge
+  const badge = document.getElementById('det-badge');
+  if (prob >= threshold) {
+    badge.textContent = '✓ WAKE WORD DETECTED';
+    badge.className = 'detection-badge yes';
+  } else {
+    badge.textContent = 'not detected';
+    badge.className = 'detection-badge no';
+  }
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+function pushHistory(prob) {
+  scoreHistory.push(prob);
+  scoreHistory.shift();
+  drawSparkline();
+}
+
+function drawSparkline() {
+  const canvas = document.getElementById('spark');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+  canvas.width  = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Threshold line
+  const ty = H * (1 - threshold);
+  ctx.beginPath();
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = '#f59e0b66';
+  ctx.lineWidth = 1;
+  ctx.moveTo(0, ty); ctx.lineTo(W, ty);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Score line
+  const vals = scoreHistory.filter(v => v !== null);
+  if (vals.length < 2) return;
+  const step = W / (scoreHistory.length - 1);
+
+  ctx.beginPath();
+  ctx.lineWidth = 1.5;
+  let first = true;
+  scoreHistory.forEach((v, i) => {
+    if (v === null) { first = true; return; }
+    const x = i * step;
+    const y = H * (1 - v);
+    if (first) { ctx.moveTo(x, y); first = false; }
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#4f8ef7';
+  ctx.stroke();
+
+  // Fill below line
+  const lastIdx = scoreHistory.length - 1;
+  ctx.lineTo(lastIdx * step, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#4f8ef730');
+  grad.addColorStop(1, '#4f8ef700');
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+window.addEventListener('resize', drawSparkline);
+drawSparkline();
+</script>
+</body>
+</html>

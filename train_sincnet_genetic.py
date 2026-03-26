@@ -33,6 +33,7 @@ import numpy as np
 
 # ── Env / credentials ─────────────────────────────────────────────────────────
 from ww_trainer.env import load_env, env_default
+from ww_trainer.utils import read_dataset_csv
 load_env()
 
 os.environ.setdefault("OMP_NUM_THREADS", "12")
@@ -137,23 +138,12 @@ SEARCH_SPACE = {
 
 # ── Dataset ────────────────────────────────────────────────────────────────────
 
-def _read_csv(p: Path) -> list:
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                path, label = line.split(",", 1)
-                rows.append((path, label))
-    return rows
-
-
 def _build_dataset() -> tuple[list, list]:
     if not TRAIN_CSV.exists():
         sys.exit(f"Dataset not found at {TRAIN_CSV}. Run train_hey_mycroft.py first.")
 
-    train_data = _read_csv(TRAIN_CSV)
-    test_data  = _read_csv(TEST_CSV)
+    train_data = read_dataset_csv(TRAIN_CSV)
+    test_data  = read_dataset_csv(TEST_CSV)
 
     if NWW_DIR.exists():
         nww_wavs = sorted(NWW_DIR.glob("not_wake_word_*.wav"))

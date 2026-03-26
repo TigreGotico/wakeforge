@@ -60,6 +60,7 @@ from pathlib import Path
 
 from ww_trainer.env import load_env
 load_env()
+from ww_trainer.utils import read_dataset_csv
 
 os.environ.setdefault("OMP_NUM_THREADS", "12")
 os.environ.setdefault("MKL_NUM_THREADS", "12")
@@ -144,19 +145,8 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Dataset ────────────────────────────────────────────────────────────────
-def _read_csv(p):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-train_data = _read_csv(TRAIN_CSV)
-test_data  = _read_csv(TEST_CSV)
+train_data = read_dataset_csv(TRAIN_CSV)
+test_data  = read_dataset_csv(TEST_CSV)
 
 csv_wakes    = [(p, l) for p, l in train_data if l == "1"]
 csv_nonwakes = [(p, l) for p, l in train_data if l == "0"]

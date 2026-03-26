@@ -121,19 +121,8 @@ if not TRAIN_CSV.exists():
     sys.exit(f"Dataset not found at {TRAIN_CSV}. Run train_full_nww.py first.")
 
 # ── Dataset ────────────────────────────────────────────────────────────────
-def _read_csv(p):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-train_data = _read_csv(TRAIN_CSV)
-test_data  = _read_csv(TEST_CSV)
+train_data = read_dataset_csv(TRAIN_CSV)
+test_data  = read_dataset_csv(TEST_CSV)
 
 if NWW_DIR.exists():
     import random
@@ -225,6 +214,7 @@ best_f1 = trainer.train(
 # ── Final viz pass ─────────────────────────────────────────────────────────
 # Generate projections for the final trained model regardless of schedule
 from ww_trainer.visualization import log_pca, log_tsne
+from ww_trainer.utils import read_dataset_csv
 
 logger.info("Generating final embedding projections …")
 log_pca(

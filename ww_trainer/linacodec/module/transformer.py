@@ -448,10 +448,10 @@ class Transformer(nn.Module):
             self.freqs_cis = None
 
         if window_size is not None:
-            logger.debug(f"Using local attention with window size {window_size}")
+            logger.debug("Using local attention with window size %s", window_size)
 
         if self.use_adaln_zero:
-            logger.debug(f"Using AdaLNZero conditioning with condition_dim={adanorm_condition_dim}")
+            logger.debug("Using AdaLNZero conditioning with condition_dim=%s", adanorm_condition_dim)
 
         if use_flash_attention:
             logger.debug("Using Flash Attention for memory-efficient attention computation")

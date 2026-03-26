@@ -92,26 +92,6 @@ class QuickstartResult:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _read_csv(path: Path) -> List[Tuple[str, str]]:
-    """Read a ``path,label`` CSV (no header) into a list of tuples.
-
-    Args:
-        path: Path to the metadata CSV file.
-
-    Returns:
-        List of ``(audio_path, label)`` string tuples.
-    """
-    rows: List[Tuple[str, str]] = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-
 def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
     """Run the datagen pipeline or reconstruct a result from existing paths.
 
@@ -122,6 +102,7 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
         :class:`~ww_trainer.datagen.DatagenResult` instance.
     """
     from ww_trainer.datagen import DatagenConfig, DatagenResult, normalize_wake_word, run_datagen_pipeline
+from ww_trainer.utils import read_dataset_csv
 
     slug = normalize_wake_word(cfg.wake_word)
     dataset_dir = Path(cfg.output_dir) / "dataset"
@@ -214,8 +195,8 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
         **augment_opts,
     )
 
-    train_data = _read_csv(datagen_result.train_csv)
-    test_data = _read_csv(datagen_result.test_csv)
+    train_data = read_dataset_csv(datagen_result.train_csv)
+    test_data = read_dataset_csv(datagen_result.test_csv)
 
     best_f1 = trainer.train(
         output_dir=model_dir,

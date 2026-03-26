@@ -88,19 +88,8 @@ if not NWW_DIR.exists():
     )
 
 # ── Read existing CSVs ────────────────────────────────────────────────────────
-def _read_csv(p: Path):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-train_data = _read_csv(TRAIN_CSV)
-test_data  = _read_csv(TEST_CSV)
+train_data = read_dataset_csv(TRAIN_CSV)
+test_data  = read_dataset_csv(TEST_CSV)
 logger.info("Existing dataset: %d train / %d test", len(train_data), len(test_data))
 
 # ── Append not-wake-word negatives (80/20) ────────────────────────────────────

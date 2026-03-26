@@ -867,19 +867,16 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
         config_path=config_path,
     )
 
-    # Print summary
-    print(f"\nDataset ready.")
-    print(f"  Positives: {result.n_positive} samples")
-    print(f"  Negatives: {result.n_negative} samples")
+    # Log summary
+    logger.info("Dataset ready. Positives: %d  Negatives: %d",
+                result.n_positive, result.n_negative)
     if config.download_augmentation:
         _count = lambda d: sum(1 for _ in d.rglob("*.wav")) if d.exists() else 0
-        print(
-            f"  Augmentation data: bg_noise/ ({_count(bg_noise_dir)} files), "
-            f"music/ ({_count(music_dir)} files), rir/ ({_count(rir_dir)} files)"
-        )
-    print(f"  Train: {train_csv} ({len(train_entries)} samples)")
-    print(f"  Test:  {test_csv} ({len(test_entries)} samples)")
-    print(f"\nTo train:\n  {result.suggested_train_command(config.wake_word)}")
+        logger.info("Augmentation data: bg_noise/ (%d files), music/ (%d files), rir/ (%d files)",
+                    _count(bg_noise_dir), _count(music_dir), _count(rir_dir))
+    logger.info("Train: %s (%d samples)", train_csv, len(train_entries))
+    logger.info("Test:  %s (%d samples)", test_csv, len(test_entries))
+    logger.info("To train:\n  %s", result.suggested_train_command(config.wake_word))
 
     return result
 

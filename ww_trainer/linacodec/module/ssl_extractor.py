@@ -45,7 +45,7 @@ class SSLFeatureExtractor(nn.Module):
         self.ssl_sample_rate = bundle.sample_rate
         # Create resampler if needed
         if sample_rate != self.ssl_sample_rate:
-            logger.debug(f"Resampling from {sample_rate} to {self.ssl_sample_rate} required by {model_name}.")
+            logger.debug("Resampling from %s to %s required by %s.", sample_rate, self.ssl_sample_rate, model_name)
             self.resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.ssl_sample_rate)
         else:
             self.resampler = None

@@ -92,11 +92,10 @@ class LinaCodecModel(nn.Module):
         # Configure local SSL layers
         self.local_ssl_layers = list(config.local_ssl_layers)
         if len(self.local_ssl_layers) > 1:
-            logger.debug(
-                f"Using average of {len(self.local_ssl_layers)} SSL layers for local branch: {self.local_ssl_layers}"
-            )
+            logger.debug("Using average of %d SSL layers for local branch: %s",
+                         len(self.local_ssl_layers), self.local_ssl_layers)
         else:
-            logger.debug(f"Using single SSL layer {self.local_ssl_layers[0]} for local branch")
+            logger.debug("Using single SSL layer %s for local branch", self.local_ssl_layers[0])
 
         if config.normalize_ssl_features:
             logger.debug("Normalizing local SSL features before encoding")
@@ -104,11 +103,10 @@ class LinaCodecModel(nn.Module):
         # Configure global SSL layers
         self.global_ssl_layers = list(config.global_ssl_layers)
         if len(self.global_ssl_layers) > 1:
-            logger.debug(
-                f"Using average of {len(self.global_ssl_layers)} SSL layers for global branch: {self.global_ssl_layers}"
-            )
+            logger.debug("Using average of %d SSL layers for global branch: %s",
+                         len(self.global_ssl_layers), self.global_ssl_layers)
         else:
-            logger.debug(f"Using single SSL layer {self.global_ssl_layers[0]} for global branch")
+            logger.debug("Using single SSL layer %s for global branch", self.global_ssl_layers[0])
 
     def _init_local_branch(
         self,
@@ -125,7 +123,7 @@ class LinaCodecModel(nn.Module):
         # Configure downsampling
         self.downsample_factor = config.downsample_factor
         if self.downsample_factor > 1:
-            logger.debug(f"Using temporal downsampling with factor {self.downsample_factor}")
+            logger.debug("Using temporal downsampling with factor %s", self.downsample_factor)
             if config.use_conv_downsample:
                 # Create Conv1d layers for downsampling and upsampling local embeddings
                 feature_dim = local_encoder.output_dim
@@ -135,7 +133,7 @@ class LinaCodecModel(nn.Module):
                 self.conv_upsample = nn.ConvTranspose1d(
                     feature_dim, feature_dim, kernel_size=config.downsample_factor, stride=config.downsample_factor
                 )  # won't be used unless training feature reconstruction
-                logger.debug(f"Using Conv1d downsampling/upsampling with kernel size {config.downsample_factor}")
+                logger.debug("Using Conv1d downsampling/upsampling with kernel size %s", config.downsample_factor)
             else:
                 self.conv_downsample = None
                 self.conv_upsample = None
@@ -164,7 +162,7 @@ class LinaCodecModel(nn.Module):
             self.mel_conv_upsample = nn.ConvTranspose1d(
                 input_dim, input_dim, kernel_size=config.mel_upsample_factor, stride=config.mel_upsample_factor
             )
-            logger.debug(f"Using Conv1DTranspose for mel upsampling with factor {config.mel_upsample_factor}")
+            logger.debug("Using Conv1DTranspose for mel upsampling with factor %s", config.mel_upsample_factor)
 
     def _calculate_waveform_padding(self, audio_length: int, ensure_recon_length: bool = False) -> int:
         """Calculate required padding for input waveform to ensure consistent SSL feature lengths."""
@@ -414,7 +412,7 @@ class LinaCodecModel(nn.Module):
 
         state_dict = load_file(weights_path, device="cpu")
         model.load_state_dict(state_dict, strict=False)
-        logger.info(f"Loaded weights from safetensors file: {weights_path}")
+        logger.info("Loaded weights from safetensors file: %s", weights_path)
 
         return model
 

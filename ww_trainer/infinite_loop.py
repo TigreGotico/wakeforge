@@ -317,7 +317,7 @@ def infinite_training_loop(
         # Use the best available wake prototype from any active loss criterion
         # (RPPL EMA > ArcFace center > CenterLoss center > ProxyNCA proxy).
         # Falls back to batch-mean of wake embeddings when none is available.
-        loss_proto = trainer.loss_manager.get_wake_prototype()
+        loss_proto = loss_manager.get_wake_prototype()
 
         hard_negatives, easy_negatives, hardness_cache = mine_hard_negatives(
             model=model,

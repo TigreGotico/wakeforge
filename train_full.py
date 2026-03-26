@@ -104,19 +104,8 @@ if music_wav_count: augment_opts["music_folder"]    = str(MUSIC_DIR)
 if rir_wav_count:   augment_opts["rir_folder"]      = str(RIR_DIR)
 
 # ── Step 2: read dataset CSVs ─────────────────────────────────────────────
-def read_csv(p):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-train_data = read_csv(TRAIN_CSV)
-test_data  = read_csv(TEST_CSV)
+train_data = read_dataset_csv(TRAIN_CSV)
+test_data  = read_dataset_csv(TEST_CSV)
 logger.info("Dataset: %d train / %d test", len(train_data), len(test_data))
 
 # ── Step 3: architecture definitions ─────────────────────────────────────
@@ -133,6 +122,7 @@ ARCHS = [
 # ── Step 4: train each arch ───────────────────────────────────────────────
 from ww_trainer.trainer import WakeWordTrainer
 from ww_trainer.tiers import get_tier
+from ww_trainer.utils import read_dataset_csv
 
 results = []   # list of dicts for comparison table
 

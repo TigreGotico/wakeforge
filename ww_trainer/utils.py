@@ -323,3 +323,23 @@ def embed_onnx_metadata(onnx_path: str, metadata: Dict[str, str]) -> None:
 
     onnx.save(model, onnx_path)
     logger.debug("Embedded metadata into %s: %s", onnx_path, list(metadata.keys()))
+
+
+def read_dataset_csv(path) -> list:
+    """Read a dataset CSV of ``path,label`` rows.
+
+    Handles files with or without headers.  Returns a list of
+    ``(path_str, label_str)`` tuples.  Skips blank lines and lines that
+    do not contain a comma.
+    """
+    from pathlib import Path as _Path
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",", 1)
+            if len(parts) == 2:
+                rows.append((parts[0], parts[1]))
+    return rows

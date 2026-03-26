@@ -49,6 +49,7 @@ import torch
 
 # ── MLflow credentials (loaded from .env) ────────────────────────────────────
 from ww_trainer.env import load_env, env_default
+from ww_trainer.utils import read_dataset_csv
 load_env()
 
 # ── Thread cap — set before any torch ops ────────────────────────────────────
@@ -90,17 +91,6 @@ LOSSES = ["bce", "focal", "label_smoothing_bce", "rppl", "supcon", "arcface", "n
 
 # ── Dataset helpers ───────────────────────────────────────────────────────────
 
-def _read_csv(p):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
 
 def _build_dataset():
     if not TRAIN_CSV.exists():
@@ -108,8 +98,8 @@ def _build_dataset():
     if not NWW_DIR.exists():
         sys.exit(f"NWW subset not found at {NWW_DIR}. Run the rsync copy first.")
 
-    train_data = _read_csv(TRAIN_CSV)
-    test_data  = _read_csv(TEST_CSV)
+    train_data = read_dataset_csv(TRAIN_CSV)
+    test_data  = read_dataset_csv(TEST_CSV)
 
     nww_wavs = sorted(NWW_DIR.glob("not_wake_word_*.wav"))
     rng = random.Random(42)

@@ -35,6 +35,7 @@ from pathlib import Path
 
 from ww_trainer.env import load_env
 load_env()
+from ww_trainer.utils import read_dataset_csv
 
 os.environ.setdefault("OMP_NUM_THREADS", "12")
 os.environ.setdefault("MKL_NUM_THREADS", "12")
@@ -148,19 +149,8 @@ if not TRAIN_CSV.exists():
     sys.exit(f"Dataset not found at {TRAIN_CSV}. Run train_full_nww.py first.")
 
 # ── Read dataset ────────────────────────────────────────────────────────────
-def _read_csv(p):
-    rows = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    rows.append((parts[0], parts[1]))
-    return rows
-
-train_data = _read_csv(TRAIN_CSV)
-test_data  = _read_csv(TEST_CSV)
+train_data = read_dataset_csv(TRAIN_CSV)
+test_data  = read_dataset_csv(TEST_CSV)
 
 # Split positives from negatives — negatives go into the NWW pool
 csv_wakes    = [(p, l) for p, l in train_data if l == "1"]
