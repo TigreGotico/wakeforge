@@ -109,12 +109,10 @@ parser.add_argument("--neg-multiplier", type=float, default=_e("WW_NEG_MULTIPLIE
 
 # Voice conversion
 parser.add_argument("--vc-per-epoch",    type=int,   default=_e("WW_VC_PER_EPOCH", 0),
-                    help="VC positives to synthesise per epoch (0=disabled)")
-parser.add_argument("--vc-text",         default=_e("WW_VC_TEXT", "hey mycroft"))
-parser.add_argument("--vc-exaggeration", type=float, default=_e("WW_VC_EXAGGERATION", 0.4))
+                    help="VC positives to generate per epoch via voice conversion (0=disabled)")
 parser.add_argument("--vc-backend",      default=_e("WW_VC_BACKEND", "auto"),
                     choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"],
-                    help="TTS/VC backend")
+                    help="VC backend (audio-to-audio voice cloning)")
 parser.add_argument("--vc-device",       default=_e("WW_VC_DEVICE", "auto"),
                     help="PyTorch device for torch VC backend")
 
@@ -252,8 +250,6 @@ best_f1 = infinite_training_loop(
     spec_augment=not args.no_spec_augment,
     neg_weight_schedule="linear",
     vc_per_epoch=args.vc_per_epoch,
-    vc_text=args.vc_text,
-    vc_exaggeration=args.vc_exaggeration,
     vc_backend=args.vc_backend,
     vc_device=args.vc_device,
     resume_cache=args.resume_cache,

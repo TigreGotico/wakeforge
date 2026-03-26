@@ -292,8 +292,8 @@ def run_cell(
             "far_at_frr10":float(report.far_at_frr.get(0.10, 1.0)),
             "n_fp":        len(fp_paths),
             "n_fn":        len(fn_paths),
-            "n_pos":       int((y_true == 1).sum()),
-            "n_neg":       int((y_true == 0).sum()),
+            "n_pos":       int((targets == 1).sum()),
+            "n_neg":       int((targets == 0).sum()),
             "n_params":    n_params,
             "elapsed_s":   float(elapsed),
         }

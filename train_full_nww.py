@@ -380,7 +380,7 @@ logger.info("Overall best — F1=%.4f config=%s", best_score, best_cfg)
 # STAGE 2: Per-loss final training
 # Fix arch + feature hyperparams from best_cfg; vary only the loss.
 # ─────────────────────────────────────────────────────────────────────────────
-LOSSES = ["bce", "focal", "label_smoothing_bce", "supcon", "arcface", "ntxent"]
+LOSSES = ["bce", "focal", "label_smoothing_bce", "supcon", "arcface", "center", "proxy_nca", "ntxent"]
 
 from ww_trainer.trainer import WakeWordTrainer
 

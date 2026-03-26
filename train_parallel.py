@@ -341,7 +341,7 @@ def main():
     results = []
     pending = list(LOSSES)
 
-    while pending or results is not None:
+    while pending:
         batch = pending[:args.max_parallel]
         pending = pending[args.max_parallel:]
         if not batch:

@@ -543,7 +543,15 @@ def infinite_training_loop(
                 epochs_no_improvement += 1
 
             # Log CSV
-            log_metrics_csv(output_dir / "metrics.csv", ep, metrics_dict)
+            log_metrics_csv(
+                output_dir / "metrics.csv", ep + 1,
+                metrics_dict.get("loss", 0.0),
+                0.0,  # acc not computed in infinite loop
+                0.0,  # prec not tracked here — use MLflow for full metrics
+                0.0,
+                metrics_dict.get("f1",  0.0),
+                metrics_dict.get("auc", 0.0),
+            )
 
             # Goals check
             if goal.goals_met(metrics_dict):
