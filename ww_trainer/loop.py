@@ -27,6 +27,7 @@ from ww_trainer.evaluation import (
     compute_fitness_score,
     compute_readiness,
 )
+from ww_trainer.metrics import find_optimal_threshold
 from ww_trainer.loss import LossManager
 from ww_trainer.mining import mine_hard_negatives
 from ww_trainer.visualization import (
@@ -35,6 +36,10 @@ from ww_trainer.visualization import (
     log_pca,
     log_tsne,
     log_umap,
+    plot_confusion_matrix,
+    plot_rppl_dashboard,
+    plot_threshold_sensitivity,
+    plot_training_curves,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +103,8 @@ def _run_batch_loop(
         accumulate_grad_batches: int,
         ep: int,
         total_steps: int,
+        use_mixup: bool = False,
+        mixup_alpha: float = 1.0,
 ) -> Tuple[float, Dict[str, float]]:
     """Run one training epoch. Returns (avg_loss, loss_breakdown)."""
     model.train()
@@ -105,9 +112,14 @@ def _run_batch_loop(
     loss_breakdown: Dict[str, float] = {cfg["name"]: 0.0 for cfg in losses_cfg}
     optimizer.zero_grad()
 
-    for batch_idx, (wavs, labels, _) in enumerate(tqdm(loader, desc="Training", leave=False)):
+    batch_bar = tqdm(loader, desc=f"  ep{ep+1} train", unit="batch", leave=False, position=1)
+    for batch_idx, (wavs, labels, _) in enumerate(batch_bar):
         global_step = ep * len(loader) + batch_idx
         loss_manager.update_neg_weight(global_step, total_steps)
+
+        if use_mixup and len(wavs) > 1:
+            from ww_trainer.augment import Mixup
+            wavs, labels = Mixup.mix_batch(wavs, labels, beta_param=mixup_alpha)
 
         with torch.amp.autocast(device_type=device.type, enabled=effective_amp):
             loss, loss_dict = loss_manager.compute_loss(model, wavs, labels, loader.dataset)
@@ -130,6 +142,7 @@ def _run_batch_loop(
         for k, v in loss_dict.items():
             if k != "total":
                 loss_breakdown[k] += v
+        batch_bar.set_postfix(loss=f"{loss_dict['total']:.4f}")
 
     n = max(1, len(loader))
     return total_loss / n, {k: v / n for k, v in loss_breakdown.items()}
@@ -193,32 +206,38 @@ def training_loop(
         neg_threshold: float = 0.5,
         mine_fraction: float = 0.2,
         mining_type: str = "semihard",
-        patience: int = 2,
+        patience: int = 5,
         save_best: bool = True,
         metrics_log: str = "metrics_log.csv",
         pca_every: int = 0,
         tsne_every: int = 0,
         umap_every: int = 0,
+        rppl_every: int = 0,
         blend_ratio: float = 0.7,
-        base_hard: float = 0.5,
+        base_hard: float = 1.5,   # was 0.5 — hard negatives should dominate
         max_hard: float = 5.0,
-        base_easy: float = 1.5,
-        min_easy: float = 0.2,
+        base_easy: float = 0.5,   # was 1.5 — easy negatives provide less signal
+        min_easy: float = 0.1,    # was 0.2
         base_random: float = 0.1,
         total_ratio: float = 5,
         use_amp: bool = False,
         accumulate_grad_batches: int = 1,
         resume: Optional[str] = None,
-        neg_weight_schedule: Optional[str] = None,
+        neg_weight_schedule: Optional[str] = "linear",   # was None — now on by default
         max_neg_weight: float = 100.0,
         target_fpr: Optional[float] = None,
         ambient_dir: Optional[str] = None,
-        spec_augment: bool = False,
+        spec_augment: bool = True,    # was False — enable by default
         spec_augment_kwargs: Optional[Dict[str, Any]] = None,
         replacement_ratio: float = 0.0,
         balanced_replacement: bool = True,
         fitness_checkpoint: bool = False,
         fitness_param_budget: int = 100_000,
+        use_mixup: bool = True,     # waveform Mixup — improves boundary robustness
+        mixup_alpha: float = 1.0,   # Beta(alpha, alpha) mixing coefficient
+        feature_cache=None,         # SharedWaveformCache or FeatureCache instance
+        aug_prob: float = 0.7,      # waveform aug probability per sample (bg_noise/music/rir/pitch/speed)
+        aug_warmup_epochs: int = 3, # ramp aug_prob from 0 → aug_prob linearly over this many epochs
 ) -> float:
     """Run the full training loop for *trainer*.
 
@@ -243,6 +262,7 @@ def training_loop(
         pca_every: Save PCA plot every N epochs (0 = disabled).
         tsne_every: Save t-SNE plot every N epochs (0 = disabled).
         umap_every: Save UMAP plot every N epochs (0 = disabled).
+        rppl_every: Save RPPL dashboard plot every N epochs (0 = end-only; auto-enabled when loss=rppl).
         blend_ratio: Controls how fast adaptive mixing shifts toward hard negatives.
         base_hard: Minimum hard-negative ratio.
         max_hard: Maximum hard-negative ratio.
@@ -285,8 +305,20 @@ def training_loop(
     params = filter(lambda p: p.requires_grad, trainer.model.parameters())
     optimizer = torch.optim.Adam(params, lr=lr)
     initial_lr = lr
-    eta_min = lr * (0.05 if len(train_data) > 5000 else 0.2)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=eta_min)
+    # Warmup + cosine annealing: linear warmup for first 2 epochs, then cosine decay
+    warmup_epochs = min(2, max(0, epochs - 1))
+    eta_min = lr * 0.01   # decay to 1% of initial LR (previously 5-20%, too aggressive)
+
+    def _lr_lambda(ep: int) -> float:
+        if ep < warmup_epochs:
+            return (ep + 1) / max(1, warmup_epochs)  # linear warmup
+        cos_ep = ep - warmup_epochs
+        cos_total = max(1, epochs - warmup_epochs)
+        import math
+        cos_val = 0.5 * (1.0 + math.cos(math.pi * cos_ep / cos_total))
+        return (eta_min / lr) + (1.0 - eta_min / lr) * cos_val
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
     loss_manager = LossManager(
         loss_configs=trainer.losses_cfg, mining_type=mining_type, device=trainer.device,
@@ -301,16 +333,46 @@ def training_loop(
     logger.info("Total wake-word samples: %d", len(wakes))
     logger.info("Total not-wake-word samples: %d", len(nonwakes))
 
+    # Log dataset + model stats as run params once
+    if trainer.mlflow:
+        try:
+            param_count = sum(p.numel() for p in trainer.model.parameters())
+            imbalance_ratio = len(nonwakes) / max(1, len(wakes))
+            trainer.mlflow.log_params({
+                "n_train_wake":    len(wakes),
+                "n_train_nonwake": len(nonwakes),
+                "n_test":          len(test_data),
+                "imbalance_ratio": round(imbalance_ratio, 2),
+                "param_count":     param_count,
+                "epochs":          epochs,
+                "lr":              lr,
+                "batch_size":      batch_size,
+                "mine_fraction":   mine_fraction,
+                "max_neg_weight":    max_neg_weight,
+                "use_mixup":         use_mixup,
+                "mixup_alpha":       mixup_alpha,
+                "spec_augment":      spec_augment,
+                "aug_prob":          aug_prob,
+                "aug_warmup_epochs": aug_warmup_epochs,
+            })
+        except Exception as exc:
+            logger.warning("Failed to log run params: %s", exc)
+
     best_metrics = {"loss": float("inf"), "precision": 0.0, "recall": 0.0, "f1": 0.0}
     best_fitness = -1.0
     epochs_no_new = 0
     hard_negatives: List[Tuple[str, str]] = []
     easy_negatives: List[Tuple[str, str]] = []
-    readiness_ema = 0.1
+    readiness_ema = 0.5      # start at genuine uncertainty, not pessimistic 0.1
+    current_threshold = 0.5  # updated each epoch via find_optimal_threshold
+    _epoch_history: List[dict] = []  # accumulates per-epoch metrics for summary plots
 
     ep = 0
-    for ep in range(epochs):
+    epoch_bar = tqdm(range(epochs), desc="Epochs", unit="ep", position=0)
+    for ep in epoch_bar:
+        epoch_bar.set_description(f"Epoch {ep+1}/{epochs}")
         logger.info("=== Epoch %d/%d ===", ep + 1, epochs)
+        loss_manager.step_epoch(ep)
 
         # Progressive unfreezing
         if trainer.unfreeze_at_epoch is not None and ep == trainer.unfreeze_at_epoch:
@@ -325,11 +387,19 @@ def training_loop(
         progress = (ep + 1) / max(1, epochs)
         adaptive_phase = blend_ratio * progress + (1 - blend_ratio) * (1 - lr_factor)
 
-        if ep > 0:
-            stats = log_embeddings_stats(trainer.model, test_data, ep + 1, trainer.device,
-                                         128, trainer.mlflow)
+        # Update readiness every 3 epochs on a balanced sample of train data
+        # (not test — test is imbalanced and inflates readiness via majority-class dominance).
+        # Skip epoch 0 so the untrained model doesn't poison the EMA.
+        if ep > 0 and ep % 3 == 0:
+            # Sample a class-balanced subset so readiness isn't skewed by neg/pos ratio
+            _r_wakes    = random.sample(wakes,    min(200, len(wakes)))
+            _r_nonwakes = random.sample(nonwakes, min(200, len(nonwakes)))
+            _readiness_data = _r_wakes + _r_nonwakes
+            stats = log_embeddings_stats(trainer.model, _readiness_data, ep + 1,
+                                         trainer.device, 128, trainer.mlflow)
             readiness = compute_readiness(stats)
-            readiness_ema = 0.9 * readiness_ema + 0.1 * readiness
+            ema_alpha = 0.3 if ep < epochs // 2 else 0.15
+            readiness_ema = (1 - ema_alpha) * readiness_ema + ema_alpha * readiness
         if trainer.mlflow:
             trainer.mlflow.log_metrics({"readiness": readiness_ema}, step=ep + 1)
 
@@ -337,6 +407,14 @@ def training_loop(
         hard_ratio = base_hard + (max_hard - base_hard) * adaptive_phase
         easy_ratio = base_easy - (base_easy - min_easy) * adaptive_phase
         random_ratio = max(base_random, total_ratio - (hard_ratio + easy_ratio))
+
+        # When the hard pool is empty (early epochs), redirect that budget to random negatives
+        # so the total neg:wake ratio stays at total_ratio instead of dropping.
+        if not hard_negatives:
+            random_ratio = max(random_ratio, hard_ratio + easy_ratio + base_random)
+            hard_ratio = 0.0
+            easy_ratio = 0.0
+
         logger.info("[Adaptive] readiness=%.3f -> hard=%.2f easy=%.2f rand=%.2f",
                     readiness_ema, hard_ratio, easy_ratio, random_ratio)
         if trainer.mlflow:
@@ -353,8 +431,25 @@ def training_loop(
         logger.info("Epoch data: total=%d wake=%d hard=%d easy=%d rand=%d",
                     len(epoch_data), len(wakes), n_hard, n_easy, n_rand)
 
+        # Ramp aug_prob linearly from 0 → target over aug_warmup_epochs,
+        # then hold at target. Warmup lets the model learn clean signal first.
+        has_aug_files = any(
+            trainer.augment_opts.get(k)
+            for k in ("bg_noise_folder", "music_folder", "rir_folder",
+                      "mic_noise_folder", "bg_speech_folder")
+        )
+        if has_aug_files and aug_prob > 0:
+            current_aug_prob = aug_prob * min(1.0, (ep + 1) / max(1, aug_warmup_epochs))
+        else:
+            current_aug_prob = 0.0
+        if trainer.mlflow:
+            trainer.mlflow.log_metrics({"aug_prob": current_aug_prob}, step=ep + 1)
+
         loader = DataLoader(
-            AudioDataset(epoch_data, device=trainer.device.type, **trainer.augment_opts),
+            AudioDataset(epoch_data, device=trainer.device.type,
+                         aug_prob=current_aug_prob,
+                         feature_cache=feature_cache if current_aug_prob == 0.0 else None,
+                         **trainer.augment_opts),
             batch_size=batch_size, shuffle=True,
             collate_fn=lambda b: collate_fn(b, trainer.device),
         )
@@ -363,6 +458,7 @@ def training_loop(
             trainer.model, trainer.device, trainer.losses_cfg,
             loader, optimizer, loss_manager, scaler,
             effective_amp, accumulate_grad_batches, ep, total_steps,
+            use_mixup=use_mixup, mixup_alpha=mixup_alpha,
         )
 
         logger.info("Average total loss: %.4f", avg_loss)
@@ -370,12 +466,27 @@ def training_loop(
         if trainer.mlflow:
             trainer.mlflow.log_metrics(metrics, step=ep + 1)
 
+        tqdm.write(f"  [ep {ep+1}] evaluating …")
         acc, prec, rec, f1, auc, fp_paths, fn_paths, paths_all, targets, preds, probs, det_report = \
             evaluate_model(trainer.model, test_data, trainer.device,
-                           batch_size=batch_size, threshold=0.4,
-                           epoch=ep + 1, output_dir=output_dir, mlflow=trainer.mlflow)
-        logger.info("Loss=%.4f Epoch %d: Acc=%.3f Prec=%.3f Rec=%.3f F1=%.3f AUC=%.3f EER=%.4f",
-                    avg_loss, ep + 1, acc, prec, rec, f1, auc, det_report.eer)
+                           batch_size=batch_size, threshold=current_threshold,
+                           epoch=ep + 1, output_dir=output_dir, mlflow=trainer.mlflow,
+                           feature_cache=feature_cache)
+        tqdm.write(
+            f"  ep {ep+1:>3}/{epochs}  loss={avg_loss:.4f}  "
+            f"F1={f1:.4f}  prec={prec:.3f}  rec={rec:.3f}  "
+            f"AUC={auc:.4f}  EER={det_report.eer:.4f}  "
+            f"hard={len(hard_negatives)}  thr={current_threshold:.3f}"
+        )
+        epoch_bar.set_postfix(loss=f"{avg_loss:.4f}", f1=f"{f1:.4f}", eer=f"{det_report.eer:.4f}")
+
+        if len(set(targets)) > 1:
+            current_threshold, _ = find_optimal_threshold(
+                np.array(targets), np.array(probs), criterion="f1"
+            )
+            logger.info("[Threshold] Optimal F1 threshold for next epoch: %.4f", current_threshold)
+            if trainer.mlflow:
+                trainer.mlflow.log_metrics({"optimal_threshold": current_threshold}, step=ep + 1)
 
         if fitness_checkpoint:
             param_count = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
@@ -408,7 +519,7 @@ def training_loop(
             from ww_trainer.metrics import estimate_fp_per_hour
             ambient_paths = sorted(Path(ambient_dir).rglob("*.wav"))
             if ambient_paths:
-                fp_per_hour = estimate_fp_per_hour(trainer.model.infer, ambient_paths, threshold=0.5)
+                fp_per_hour = estimate_fp_per_hour(trainer.model.infer, ambient_paths, threshold=current_threshold)
                 logger.info("[Ambient] FP/hour: %.2f (%d files)", fp_per_hour, len(ambient_paths))
                 if trainer.mlflow:
                     trainer.mlflow.log_metrics({"fp_per_hour": fp_per_hour}, step=ep + 1)
@@ -418,25 +529,103 @@ def training_loop(
 
         log_confidence_histogram(targets, probs, ep + 1,
                                  output_dir / "viz" / "confidence", mlflow=trainer.mlflow)
+        _embed_metrics_this_epoch: dict = {}
         if pca_every and (ep + 1) % pca_every == 0:
-            log_pca(trainer.model, test_data, output_dir / "viz" / "pca",
-                    ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _, _em = log_pca(trainer.model, test_data, output_dir / "viz" / "pca",
+                             ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _embed_metrics_this_epoch.update(_em)
         if tsne_every and (ep + 1) % tsne_every == 0:
-            log_tsne(trainer.model, test_data, output_dir / "viz" / "tsne",
-                     ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _, _em = log_tsne(trainer.model, test_data, output_dir / "viz" / "tsne",
+                              ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _embed_metrics_this_epoch.update(_em)
         if umap_every and (ep + 1) % umap_every == 0:
-            log_umap(trainer.model, test_data, output_dir / "viz" / "umap",
-                     ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _, _em = log_umap(trainer.model, test_data, output_dir / "viz" / "umap",
+                              ep + 1, trainer.device, mlflow=trainer.mlflow)
+            _embed_metrics_this_epoch.update(_em)
+
+        # Derived imbalance metrics
+        n_pos_test = sum(1 for t in targets if t == 1)
+        n_neg_test = sum(1 for t in targets if t == 0)
+        fp_count = sum(1 for t, p in zip(targets, preds) if p == 1 and t == 0)
+        fn_count = sum(1 for t, p in zip(targets, preds) if p == 0 and t == 1)
+        fpr = fp_count / max(1, n_neg_test)
+        fnr = fn_count / max(1, n_pos_test)
+        current_neg_weight = getattr(loss_manager, "_current_neg_weight", None) or max_neg_weight
+
+        epoch_record: Dict[str, Any] = {
+            "epoch": ep + 1, "loss": avg_loss, "f1": f1, "auc": auc,
+            "precision": prec, "recall": rec,
+            "n_hard_negatives": len(hard_negatives),
+        }
+        # Accumulate RPPL sub-components from loss_breakdown
+        for rppl_key in ("rppl_bce", "rppl_proto", "rppl_div", "rppl_center", "rppl_cons"):
+            if rppl_key in loss_breakdown:
+                epoch_record[rppl_key] = loss_breakdown[rppl_key]
+        # Accumulate embedding metrics logged this epoch by PCA/t-SNE
+        for embed_key in ("embed_fisher_ratio", "embed_silhouette", "embed_centroid_dist"):
+            if embed_key in _embed_metrics_this_epoch:
+                epoch_record[embed_key] = _embed_metrics_this_epoch[embed_key]
+        _epoch_history.append(epoch_record)
+
+        # Log RPPL-specific scalars to MLflow
+        if trainer.mlflow and any(k.startswith("rppl_") for k in loss_breakdown):
+            try:
+                rppl_extras: Dict[str, float] = {}
+                # Warmup geo_scale
+                rppl_crit = next(
+                    (e["criterion"] for e in loss_manager.losses
+                     if e.get("name") == "rppl" and hasattr(e.get("criterion"), "_epoch")),
+                    None,
+                )
+                if rppl_crit is not None:
+                    geo_scale = min(1.0, rppl_crit._epoch / max(1, rppl_crit.warmup_epochs))
+                    rppl_extras["rppl_geo_scale"] = geo_scale
+                    ema_norm = float(rppl_crit.proto_w_ema.norm().item())
+                    rppl_extras["rppl_proto_ema_norm"] = ema_norm
+                    epoch_record["rppl_proto_ema_norm"] = ema_norm
+                trainer.mlflow.log_metrics(rppl_extras, step=ep + 1)
+            except Exception as exc:
+                logger.debug("RPPL scalar logging failed: %s", exc)
 
         if trainer.mlflow:
             try:
                 trainer.mlflow.log_metrics(
-                    {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1, "auc": auc},
+                    {
+                        "accuracy": acc, "precision": prec, "recall": rec,
+                        "f1": f1, "auc": auc,
+                        "fpr": fpr, "fnr": fnr,
+                        "eer": det_report.eer,
+                        "n_hard_negatives": len(hard_negatives),
+                        "n_easy_negatives": len(easy_negatives),
+                        "neg_weight": current_neg_weight,
+                        "n_fp": fp_count, "n_fn": fn_count,
+                    },
                     step=ep + 1,
                 )
                 _log_fp_fn_artifacts(trainer.mlflow, ep, paths_all, targets, preds, probs, output_dir)
             except Exception as exc:
                 logger.error("Failed to log metrics/artifacts to MLflow: %s", exc)
+
+        # Confusion matrix + threshold sensitivity — update every 10 epochs and at the end
+        if output_dir and (ep + 1) % 10 == 0 or ep == epochs - 1:
+            viz_dir = output_dir / "viz"
+            viz_dir.mkdir(parents=True, exist_ok=True)
+            plot_confusion_matrix(targets, preds, ep + 1, viz_dir, trainer.mlflow)
+            if len(set(targets)) > 1:
+                plot_threshold_sensitivity(targets, probs, viz_dir, trainer.mlflow)
+
+        # RPPL dashboard — periodic snapshot
+        _is_rppl = any(cfg.get("name") == "rppl" for cfg in trainer.losses_cfg)
+        _effective_rppl_every = rppl_every if rppl_every > 0 else (5 if _is_rppl else 0)
+        if output_dir and _effective_rppl_every and (ep + 1) % _effective_rppl_every == 0:
+            _rppl_crit = next(
+                (e["criterion"] for e in loss_manager.losses if e.get("name") == "rppl"),
+                None,
+            )
+            _warmup = getattr(_rppl_crit, "warmup_epochs", 5) if _rppl_crit else 5
+            plot_rppl_dashboard(
+                _epoch_history, output_dir / "viz", trainer.mlflow, warmup_epochs=_warmup
+            )
 
         scheduler.step()
 
@@ -450,27 +639,35 @@ def training_loop(
             break
 
         # Hard-negative mining
+        tqdm.write(f"  [ep {ep+1}] mining hard negatives (fraction={mine_fraction}) …")
         if not hasattr(trainer, "hardness_cache"):
             trainer.hardness_cache = hardness_cache
+        prev_hard_paths = {x[0] for x in hard_negatives}
         new_hards, easy_negatives, trainer.hardness_cache = mine_hard_negatives(
             model=trainer.model, nonwakes=nonwakes, device=trainer.device,
             hardness_cache=trainer.hardness_cache,
             neg_threshold=neg_threshold, dataset_fraction=mine_fraction,
             max_cache_size=3 * max(1, len(wakes)),
             wake_cache=getattr(trainer, "_wake_cache", []),
+            feature_cache=feature_cache,
         )
         if new_hards:
-            merged = {x[0]: x for x in new_hards}
             max_samples = max(1, len(wakes)) * 3
-            hard_negatives = list(merged.values())[-max_samples:]
-            epochs_no_new = 0
-            logger.info("  -> Found %d false positives", len(hard_negatives))
+            hard_negatives = new_hards[:max_samples]
+            new_paths = {x[0] for x in hard_negatives} - prev_hard_paths
+            if new_paths:
+                epochs_no_new = 0
+            else:
+                epochs_no_new += 1
+            logger.info("  -> %d hard negatives (%d new)", len(hard_negatives), len(new_paths))
         elif mine_fraction > 0:
+            hard_negatives = []
             epochs_no_new += 1
-            logger.info("  -> No new hard negatives (%d/%d)", epochs_no_new, patience)
-            if epochs_no_new >= patience:
-                logger.info("Early stopping — no new hard negatives.")
-                break
+            logger.info("  -> No hard negatives found (%d/%d)", epochs_no_new, patience)
+
+        if mine_fraction > 0 and epochs_no_new >= patience:
+            logger.info("Early stopping — no new hard negatives for %d epochs.", patience)
+            break
 
     # Final save
     try:
@@ -485,7 +682,32 @@ def training_loop(
     except Exception as exc:
         logger.error("Failed to save final model: %s", exc)
 
+    # End-of-training summary artifacts
+    if output_dir:
+        viz_dir = output_dir / "viz"
+        viz_dir.mkdir(parents=True, exist_ok=True)
+        plot_training_curves(_epoch_history, viz_dir, trainer.mlflow)
+        if any(cfg.get("name") == "rppl" for cfg in trainer.losses_cfg):
+            _rppl_crit = next(
+                (e["criterion"] for e in loss_manager.losses if e.get("name") == "rppl"),
+                None,
+            )
+            _warmup = getattr(_rppl_crit, "warmup_epochs", 5) if _rppl_crit else 5
+            plot_rppl_dashboard(
+                _epoch_history, viz_dir, trainer.mlflow, warmup_epochs=_warmup
+            )
+
     if trainer.mlflow:
+        try:
+            # Log best metrics as summary scalars so they appear in the run comparison table
+            trainer.mlflow.log_metrics({
+                "best_f1":        best_metrics.get("f1", 0.0),
+                "best_precision": best_metrics.get("precision", 0.0),
+                "best_recall":    best_metrics.get("recall", 0.0),
+                "best_loss":      best_metrics.get("loss", 0.0),
+            })
+        except Exception:
+            pass
         try:
             trainer.mlflow.end_run()
         except Exception:

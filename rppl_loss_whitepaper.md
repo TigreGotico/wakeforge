@@ -1,229 +1,178 @@
-# **Robust Prototype Diversity Loss (RPPL): A Unified Representation Loss for Wake Word Detection**
+# Robust Prototype Diversity Loss (RPPL) for Binary Wake-Word Detection
 
-## **1. Introduction**
+## 1. Introduction
 
-Wake word detection (WWD) systems must accurately recognize short, specific keywords (e.g., “Hey Siri”, “Okay Google”) under diverse acoustic conditions — background noise, speaker variability, and microphone distortion.
-Traditional approaches train classifiers using **binary cross-entropy (BCE)** or **metric learning losses** (e.g., Triplet, Contrastive, or CN₂⁺¹-pair losses).
-However, these objectives each have limitations:
+Wake-word detection (WWD) is a binary, fixed-keyword problem with severe class imbalance: in a realistic data mix roughly 94 % of samples are non-wake-word (NWW), so a model that always predicts "not wake" achieves ~94 % accuracy. Accuracy is therefore a misleading metric; F1, EER, and FAR/FRR at an operating threshold are appropriate.
 
-* BCE captures **class discrimination** but not **intra-class compactness** or **inter-class diversity**.
-* Metric losses enforce **embedding geometry**, but require careful triplet/pair sampling and can be unstable early in training.
-* Contrastive frameworks often ignore **consistency under augmentation** or **speaker variation**.
+Standard binary cross-entropy (BCE) optimises the decision boundary but does not shape the embedding space. Two trained models can have identical BCE loss yet very different embedding geometries — one may cluster wake utterances tightly, the other may scatter them. In a hard-negative mining regime (where the NWW pool is very large and only confusable negatives are trained on), a well-structured embedding space directly helps: the model's uncertainty about confusable sounds is visible in the geometry, and the mining loop exploits this signal.
 
-To overcome these gaps, we introduce the **Robust Prototype Diversity Loss (RPPL)** — a unified loss that integrates:
-
-1. **Classification alignment (BCE)**
-2. **Prototype-based class structure (Proto-softmax)**
-3. **Negative diversity enforcement (Diversity regularization)**
-4. **Intra-class compactness (Center loss)**
-5. **Consistency under augmentation (Aug-consistency term)**
+RPPL combines five objectives to jointly optimise the decision boundary and the embedding structure. Most components are drawn from prior work; the novelty is their combination for *binary fixed-keyword KWS with severe class imbalance*, plus two specific adaptations described in §4.
 
 ---
 
-## **2. The RPPL Objective**
+## 2. Loss Formulation
 
-Let ( f_theta(x) in mathbb{R}^d ) be the embedding of an input utterance ( x ), and ( g_phi(f_theta(x)) ) be the classifier logit predicting wake/nonwake.
-We define the loss as:
+Let `z = L2_norm(embed(x))` be the normalised embedding of input `x`, and `logit = classifier(embed(x))` be the binary logit.
 
-[
-mathcal{L}*{text{RPPL}} =
-alpha , mathcal{L}*{text{BCE}} +
-beta , mathcal{L}*{text{proto}} +
-gamma , mathcal{L}*{text{div}} +
-delta , mathcal{L}*{text{center}} +
-eta , mathcal{L}*{text{consistency}}
-]
+**Total loss:**
 
-where each subterm has a specific role:
+```
+L_RPPL = alpha * L_bce
+       + geo_scale * (beta  * L_proto
+                    + gamma * L_div
+                    + delta * L_center)
+       + eta * L_cons
+```
 
-### (a) **Binary Cross-Entropy (( mathcal{L}_{text{BCE}} ))**
+`geo_scale = min(1.0, epoch / warmup_epochs)` ramps the geometric terms from 0 to 1 over the first `warmup_epochs` epochs (default 5). BCE and consistency are active from epoch 0.
 
-[
-mathcal{L}*{text{BCE}} = - frac{1}{N} sum*{i=1}^N [y_i log sigma(z_i) + (1 - y_i) log (1 - sigma(z_i))]
-]
-This drives the network to classify wake vs. nonwake correctly from logits ( z_i ).
+### 2.1 BCE
 
----
+```
+L_bce = BCE_with_logits(logit, label)
+```
 
-### (b) **Prototype Softmax Term (( mathcal{L}_{text{proto}} ))**
+Standard binary cross-entropy. Optimises the decision boundary directly.
 
-RPPL maintains **class prototypes** in the embedding space:
-[
-p_w = frac{1}{|W|} sum_{i in W} f_theta(x_i), quad
-q_j = frac{1}{|N_j|} sum_{i in N_j} f_theta(x_i)
-]
-for the wake class ( W ) and negative prototypes ( {N_j} ).
+### 2.2 Proto-softmax (L_proto)
 
-For each sample, we compute similarity scores:
-[
-s_i = frac{f_theta(x_i)^top [p_w, q_1, dots, q_K]}{tau}
-]
-where ( tau ) is a temperature parameter controlling the sharpness of class separation.
+```
+p_w = EMA_wake_prototype          (see §3 — stable across batches)
+p_n = mean(z[neg])                (single negative prototype; K>1 splits into K groups)
 
-Then, we classify using a softmax over these similarities:
-[
-mathcal{L}*{text{proto}} = -frac{1}{N} sum_i log
-frac{e^{s*{i, y_i}}}{sum_j e^{s_{i, j}}}
-]
+sim_i = [z_i · p_w / tau,  log-sum-exp(z_i · p_n / tau)]
+L_proto = cross_entropy(sim_i, label_i_binary)
+```
 
-This term enforces **embedding-level class separation** in a prototype-driven fashion (similar to *Prototypical Networks* or *Metric Softmax*).
+Each sample is classified against the two prototypes. Pulls wake embeddings toward `p_w` and NWW embeddings toward `p_n` without requiring explicit triplet sampling.
 
----
+Prior work: Snell et al. 2017 (Prototypical Networks) — here applied in a binary, online-prototype setting. In multi-class KWS, prototypical approaches are used for enrollment-based detection; applying a single shared wake prototype to a fixed-keyword binary problem is the specific adaptation.
 
-### (c) **Negative Diversity Term (( mathcal{L}_{text{div}} ))**
+### 2.3 Negative diversity (L_div) — hard-negative targeted
 
-To prevent all negative samples collapsing into one cluster, RPPL encourages negative embeddings to spread apart:
+```
+# Only spread negatives that are confusable with wake
+cos_to_wake = z[neg] · p_w
+hard_neg = z[neg][cos_to_wake > hard_div_threshold]
+L_div = -mean(pairwise_sq_dist(hard_neg))     (maximise pairwise distance)
+```
 
-[
-mathcal{L}*{text{div}} = - frac{1}{M(M-1)} sum*{i ne j} |f_theta(x_i^-) - f_theta(x_j^-)|_2^2
-]
+Easy negatives (silence, music, speech far from wake) are already distant from `p_w`; pushing them further wastes gradient. Targeting only confusable negatives (those with positive cosine similarity to `p_w`) concentrates the diversity pressure where it matters: the confusable region around the wake cluster.
 
-Minimizing ( -mathcal{L}_{text{div}} ) (i.e., maximizing pairwise distances) enforces **representation diversity** among “nonwake” examples (background, silence, etc.).
+Prior work: spread-out regularisation (Boudiaf et al. 2020), DML literature. The hard-negative targeting is specific to this implementation.
 
----
+### 2.4 Center loss (L_center)
 
-### (d) **Center Loss (( mathcal{L}_{text{center}} ))**
+```
+L_center = mean(||z[pos] - p_w||^2)
+```
 
-This term tightens positive embeddings around the wake prototype:
+Pulls wake embeddings toward their prototype. Encourages intra-class compactness, complementing the inter-class separation from `L_proto`.
 
-[
-mathcal{L}*{text{center}} = frac{1}{|W|} sum*{i in W} | f_theta(x_i) - p_w |_2^2
-]
+Prior work: Wen et al. 2016 (Center Loss for face verification). Here applied to the binary wake/nonwake problem.
 
-It reduces intra-class variance and stabilizes the positive cluster.
+### 2.5 Proto-ranked consistency (L_cons)
 
----
+```
+z_aug = L2_norm(embed(augment(x)))
+aug_sim = [z_aug · p_w / tau,  log-sum-exp(z_aug · p_n / tau)]
+L_cons = cross_entropy(aug_sim, label_binary)
+```
 
-### (e) **Consistency Term (( mathcal{L}_{text{consistency}} ))**
+Under acoustic augmentation (noise, RIR, pitch shift), each sample's augmented embedding must still be *correctly classified* against the shared class prototypes. This is stricter than L2 invariance: a model can satisfy L2 consistency by moving both embeddings together without improving separability, whereas proto-ranked consistency requires the augmented embedding to remain on the correct side of the prototype boundary.
 
-Given an **augmented version** ( x_i' ) of ( x_i ) (through noise, RIR, pitch, speed perturbation, or voice conversion):
-
-[
-mathcal{L}*{text{consistency}} = frac{1}{N} sum_i | f*theta(x_i) - f_theta(x_i') |_2^2
-]
-
-This enforces **embedding invariance** under acoustic distortions, improving robustness across microphones, rooms, and noise conditions.
+Prior work: BYOL (Grill et al. 2020), MeanTeacher (Tarvainen & Valpola 2017) use representation invariance under augmentation. The proto-ranked formulation (classification against shared prototypes rather than L2 distance to original embedding) is the specific novel contribution of this work.
 
 ---
 
-## **3. Intuitive Explanation**
+## 3. EMA Wake Prototype
 
-Visually, RPPL shapes the embedding space as follows:
+The batch mean `mean(z[wake_in_batch])` is computed over 2–5 wake samples per batch (given batch_size=16 and ~25 % positives). With 5 samples in 128-D space the estimate is unreliable — the direction changes significantly between batches, and `L_proto` and `L_center` train against an unstable target.
 
-* Wake samples cluster tightly around a prototype ( p_w ).
-* Negatives form **diverse, well-separated clouds**, each potentially representing a type of background (speech, noise, silence).
-* Augmentations pull each sample’s embedding **toward its own invariant representation**, reducing noise sensitivity.
-* BCE keeps the classifier head calibrated to produce sharp wake/nonwake decisions.
+The EMA prototype smooths this noise:
 
----
+```python
+if not initialised:
+    p_w_ema = mean(z[wake])     # cold start
+else:
+    p_w_ema = (1 - alpha) * p_w_ema + alpha * mean(z[wake]).detach()
 
-## **4. Relationship to Other Losses**
+p_w_stable = L2_norm(p_w_ema)
+```
 
-| Loss Type           | Core Idea                                                   | Strengths                      | Weaknesses                                                        |
-| ------------------- | ----------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------- |
-| **BCE**             | Classifies via logits                                       | Simple, stable                 | No embedding structure                                            |
-| **Triplet Loss**    | Pull same-class, push different-class                       | Strong geometric constraint    | Needs hard mining, unstable early                                 |
-| **CN₂⁺¹-Pair**      | Optimized pairwise margin between anchor/pos/neg clusters   | Compactness + diversity        | Sensitive to sampling and hyperparams                             |
-| **RPPL (proposed)** | Jointly optimizes BCE + prototype + diversity + consistency | Unified structure + robustness | Slightly higher computational cost (extra prototype and aug pass) |
+With `alpha=0.05` (the default), the EMA has a time constant of ~20 batches. The prototype drifts with the model as training progresses (because `detach()` means it doesn't directly participate in gradient computation), but does not oscillate at the batch frequency. `L_proto` and `L_center` both use `p_w_stable`.
 
----
-
-## **5. Advantages**
-
-### ✅ *1. Robustness to Acoustic Variability*
-
-* By enforcing consistency across augmented and clean inputs, RPPL learns *acoustic-invariant* embeddings.
-* Reduces domain shift between training and real-world conditions.
-
-### ✅ *2. Embedding Compactness and Separation*
-
-* Prototype and center losses form geometrically meaningful clusters.
-* Makes it easier to threshold embeddings for “wake” vs. “nonwake” without retraining the classifier head.
-
-### ✅ *3. Negative Diversity*
-
-* Avoids feature collapse of nonwake samples.
-* Useful for deployments with highly varied background noise or speech clutter.
-
-### ✅ *4. No Need for Hard Negative Mining*
-
-* Diversity term replaces explicit mining by encouraging natural separation among negatives.
-
-### ✅ *5. Plug-and-Play*
-
-* Works with any encoder (CNN, GRU, Transformer, HuBERT) and integrates into standard BCE pipelines.
+The batch mean is only used to update the EMA; it is never directly used as a loss target.
 
 ---
 
-## **6. Limitations**
+## 4. What Is and Is Not Novel
 
-### ⚠ *1. Extra Computation*
+**Not novel (prior work applied):**
+- BCE: standard
+- Proto-softmax: Prototypical Networks (Snell et al. 2017), applied online
+- Center loss: Wen et al. 2016
+- Diversity / spread-out regularisation: Boudiaf et al. 2020 and DML literature
+- Representation consistency under augmentation: BYOL (Grill 2020), MeanTeacher (Tarvainen 2017)
 
-* Requires computing prototypes and one extra forward pass for augmented data (≈1.5× cost).
+**Genuine novelty (specific to this work):**
+1. **EMA wake prototype for small-batch binary KWS.** The noise problem with batch-mean prototypes is specific to small-batch, severely imbalanced data (2–5 positive samples per batch). EMA stabilisation is not commonly described in the KWS metric-learning literature.
+2. **Proto-ranked consistency.** Replacing L2 augmentation invariance with prototype-classification consistency is a stricter and more semantically grounded objective. Under L2 consistency a model can "cheat" by collapsing all embeddings together; proto-ranked consistency prevents this by requiring correct prototype classification. This formulation is not found in prior KWS work.
+3. **Hard-negative diversity targeting.** Applying diversity regularisation only to confusable negatives (those with positive cosine similarity to the wake prototype) is specific to the mining-loop setting of this system.
+4. **Warmup scheduling for geometric terms.** Ramping geometric losses avoids the well-known instability of training against random-epoch-0 prototypes.
 
-### ⚠ *2. Dependence on Augmentation Quality*
-
-* If augmentations are unrealistic or misaligned (e.g., synthetic voice distortion), consistency can over-regularize.
-
-### ⚠ *3. Prototype Drift*
-
-* With few wake samples, the prototype may fluctuate across batches; mitigation: exponential moving average prototype updates.
-
-### ⚠ *4. Hyperparameter Sensitivity*
-
-* Needs tuning of weights ( alpha dots eta ) (default: 1.0, 1.0, 0.5, 0.1, 0.5).
-* Poor balance can lead to either under-clustering or over-smoothing.
+**Closest prior work:** CN₂⁺¹ (Zeng et al., "Contrastive Metric Learning for Small-Sample Wake Word Detection") uses metric learning for a similar task but is multi-class/enrollment-based. RPPL targets the binary fixed-keyword setting where no enrollment exists.
 
 ---
 
-## **7. Experimental Behavior (Qualitative)**
+## 5. Hyperparameters
 
-| Scenario                      | RPPL Behavior                                                         |
-| ----------------------------- | --------------------------------------------------------------------- |
-| **Clean vs. noisy inputs**    | Produces nearly identical embeddings; low consistency loss.           |
-| **Wake vs. background noise** | Wake embeddings stay compact; negatives are pushed apart.             |
-| **Multi-speaker wake words**  | Consistency + prototype terms yield a speaker-invariant wake cluster. |
-| **Online fine-tuning**        | BCE and center terms stabilize small-batch adaptation.                |
-
----
-
-## **8. Use Cases Beyond Wake Words**
-
-| Domain                            | Why RPPL Helps                                        |
-| --------------------------------- | ----------------------------------------------------- |
-| **Keyword Spotting (KWS)**        | Noise and speaker robust recognition.                 |
-| **Speaker Verification**          | Diversity term increases impostor separation.         |
-| **Acoustic Scene Classification** | Prototype clustering improves generalization.         |
-| **Environmental Sound Detection** | Consistency improves robustness to recording devices. |
+| Parameter | Default | Effect |
+|---|---|---|
+| `alpha` | 1.0 | BCE weight — primary classification signal |
+| `beta` | 1.0 | Proto-softmax weight |
+| `gamma` | 0.5 | Diversity weight |
+| `delta` | 0.1 | Center loss weight (small to avoid over-squishing) |
+| `eta` | 0.5 | Consistency weight |
+| `tau` | 0.1 | Prototype similarity temperature |
+| `warmup_epochs` | 5 | Geometric term ramp-up duration |
+| `proto_ema_alpha` | 0.05 | EMA decay (~20 batch time constant) |
+| `hard_div_threshold` | 0.1 | Cos-sim threshold for hard-negative targeting |
+| `consistency_mode` | "proto" | "proto" = proto-ranked CE; "l2" = legacy MSE |
 
 ---
 
-## **9. Future Directions**
+## 6. MLflow Metrics
 
-1. **Dynamic Prototype Updates:**
-   Maintain prototypes as running means across epochs rather than per batch.
+`train_rppl.py` logs these metrics per epoch in addition to standard F1/EER/AUC:
 
-2. **Multi-prototype Wake Representations:**
-   Allow multiple wake prototypes (for multi-phoneme or multi-accent wake words).
+| Metric | Meaning | Good value |
+|---|---|---|
+| `embed_centroid_dist` | Euclidean distance between wake/NWW centroids | Increasing |
+| `embed_fisher_ratio` | centroid_dist / mean intra-class spread | > 1.0, increasing |
+| `embed_silhouette` | Cosine silhouette score [-1, 1] | > 0.5, increasing |
+| `embed_pca_var_explained` | Variance in first 2 PCs | Diagnostic |
+| `rppl_bce` | BCE sub-loss | Decreasing |
+| `rppl_proto` | Proto-softmax sub-loss | Decreasing |
+| `rppl_div` | Diversity sub-loss | Negative, magnitude increasing |
+| `rppl_center` | Center loss sub-loss | Decreasing |
+| `rppl_cons` | Consistency sub-loss | Decreasing |
 
-3. **Contrastive Extension:**
-   Combine RPPL with self-supervised contrastive pretraining (e.g., HuBERT or Wav2Vec features).
+### Ablation expectations
+
+| Config | Expected effect on `embed_fisher_ratio` |
+|---|---|
+| BCE only (`--loss bce`) | Low, flat after convergence |
+| RPPL full | Higher than BCE, increasing through training |
+| RPPL `--no-proto` (beta=0) | Fisher ratio lower; wake cluster less compact |
+| RPPL `--no-div` (gamma=0) | Fisher ratio lower; NWW cluster not spread |
+| RPPL `consistency_mode=l2` | Similar to proto but slightly lower silhouette |
 
 ---
 
-## **10. Summary**
+## 7. Limitations
 
-**RPPL** unifies multiple learning objectives into a single, interpretable loss:
-[
-boxed{
-mathcal{L}*{text{RPPL}} =
-alpha , mathcal{L}*{text{BCE}} +
-beta , mathcal{L}*{text{proto}} +
-gamma , mathcal{L}*{text{div}} +
-delta , mathcal{L}*{text{center}} +
-eta , mathcal{L}*{text{consistency}}
-}
-]
-
-It is **robust**, **geometry-aware**, and **easy to integrate**, making it well-suited for **real-world wake word spotting systems** that must operate reliably across diverse speakers, rooms, and devices.
-
+1. **Augmented forward pass cost.** Proto-ranked consistency requires a second forward pass per batch (the augmented embeddings). On CPU this roughly doubles batch time. Disable with `--eta 0` for faster ablations.
+2. **`hard_div_threshold` sensitivity.** If the threshold is too high, no hard negatives are targeted and `L_div` goes to zero. Monitor `rppl_div` in MLflow; if it stays at 0 reduce the threshold.
+3. **EMA cold start.** For the first ~20 batches the EMA prototype is noisy. The warmup schedule mitigates this — geometric terms are scaled down while the prototype stabilises.
+4. **Single wake-word per model.** RPPL's single shared wake prototype is appropriate for fixed-keyword detection only. For multi-keyword or open-vocabulary KWS, a prototype per keyword is needed (standard Prototypical Networks regime).
