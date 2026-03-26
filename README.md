@@ -8,9 +8,16 @@ Full training and research suite for wake word detection — from microcontrolle
 uv pip install -e ".[dev]"
 # Optional extras
 uv pip install -e ".[sweep]"        # Optuna Bayesian search
-uv pip install -e ".[transformers]" # HuBERT / Wav2Vec2 extractors
+uv pip install -e ".[transformers]" # HuBERT / Wav2Vec2 / Wav2Vec2-BERT extractors
 uv pip install -e ".[mlflow]"       # experiment tracking
-uv pip install -e ".[datagen]"      # synthetic dataset generation
+uv pip install -e ".[datagen]"      # synthetic dataset generation (TTS + VAD)
+uv pip install -e ".[vc-onnx]"     # voice conversion — CPU ONNX backend (default)
+uv pip install -e ".[vc-torch]"    # voice conversion — GPU PyTorch backend
+uv pip install -e ".[vc-linacodec]" # voice conversion — LinaCodec 48 kHz backend
+uv pip install -e ".[vc]"          # all VC backends
+uv pip install -e ".[mic]"         # live microphone testing (sounddevice)
+uv pip install -e ".[viz]"         # UMAP embedding visualisation
+uv pip install -e ".[markov]"      # Markov/HMM extractor training
 ```
 
 ## Quickstart

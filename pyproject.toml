@@ -26,10 +26,84 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+
+# ── Development & testing ──────────────────────────────────────────────────
 dev = [
     "pytest",
     "pytest-cov",
 ]
+
+# ── Experiment tracking ────────────────────────────────────────────────────
+mlflow = [
+    "mlflow",
+]
+
+# ── Hyperparameter search ──────────────────────────────────────────────────
+sweep = [
+    "optuna",
+]
+
+# ── Feature extractors ─────────────────────────────────────────────────────
+# HuBERT / Wav2Vec2 / Wav2Vec2-BERT extractors
+transformers = [
+    "transformers",
+]
+
+# Markov / HMM extractor training (Baum-Welch EM)
+markov = [
+    "markovonnx",
+]
+
+# ── Voice conversion backends ──────────────────────────────────────────────
+# CPU ONNX backend — recommended default
+vc-onnx = [
+    "chatterbox-onnx",
+]
+
+# GPU PyTorch backend — requires CUDA
+vc-torch = [
+    "chatterbox-tts",
+]
+
+# LinaCodec audio-to-audio VC backend (48 kHz, CPU or GPU)
+vc-linacodec = [
+    "vocos",
+    "huggingface-hub",
+    "jsonargparse",
+    "safetensors",
+    # flash-attn is optional within linacodec; omit here as it requires
+    # a CUDA build environment — install manually if desired
+]
+
+# All VC backends (convenience)
+vc = [
+    "chatterbox-onnx",
+    "chatterbox-tts",
+    "vocos",
+    "huggingface-hub",
+    "jsonargparse",
+    "safetensors",
+]
+
+# ── Dataset generation ─────────────────────────────────────────────────────
+datagen = [
+    "datasets",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",    # default TTS; alternatives (piper, google-tx) auto-discovered via OPM
+    "ovos-vad-plugin-silero",      # default VAD
+]
+
+# ── Live microphone testing ────────────────────────────────────────────────
+mic = [
+    "sounddevice",
+]
+
+# ── Visualisation (UMAP embedding plots) ──────────────────────────────────
+viz = [
+    "umap-learn",
+]
+
+# ── Notebooks ─────────────────────────────────────────────────────────────
 notebooks = [
     "jupyter",
     "nbconvert",
@@ -38,27 +112,6 @@ notebooks = [
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",
     "ovos-vad-plugin-silero",
-]
-transformers = [
-    "transformers",
-]
-vc = [
-    "chatterbox_onnx",
-]
-mlflow = [
-    "mlflow",
-]
-sweep = [
-    "optuna",
-]
-markov = [
-    "markovonnx",
-]
-datagen = [
-    "datasets",
-    "ovos-plugin-manager",
-    "ovos-tts-plugin-edge-tts",  # default TTS, others discovered via OPM
-    "ovos-vad-plugin-silero",    # default VAD
 ]
 
 [project.scripts]
