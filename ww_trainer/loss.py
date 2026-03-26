@@ -357,6 +357,13 @@ class RobustProtoDiversityLoss(nn.Module):
         """Called by LossManager at the start of each epoch to drive warmup scheduling."""
         self._epoch = epoch
 
+    @property
+    def wake_prototype(self) -> torch.Tensor:
+        """EMA wake prototype vector (shape ``(D,)``), or None if not yet initialised."""
+        if not self._proto_initialised.item():
+            return None
+        return F.normalize(self.proto_w_ema.detach(), dim=0)
+
     def forward(
         self,
         logits: torch.Tensor,
@@ -574,6 +581,11 @@ class ArcFaceLoss(nn.Module):
         self.weight = nn.Parameter(torch.randn(2, embed_dim))
         nn.init.xavier_normal_(self.weight)
 
+    @property
+    def wake_prototype(self) -> torch.Tensor:
+        """Normalised wake-class center vector (shape ``(D,)``)."""
+        return F.normalize(self.weight[1].detach(), dim=0)
+
     def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute ArcFace loss.
 
@@ -615,6 +627,11 @@ class CenterLoss(nn.Module):
     def __init__(self, embed_dim: int, num_classes: int = 2) -> None:
         super().__init__()
         self.centers = nn.Parameter(torch.randn(num_classes, embed_dim))
+
+    @property
+    def wake_prototype(self) -> torch.Tensor:
+        """Normalised wake-class center vector (shape ``(D,)``)."""
+        return F.normalize(self.centers[1].detach(), dim=0)
 
     def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute center loss.
@@ -744,6 +761,11 @@ class ProxyNCALoss(nn.Module):
         self.proxies = nn.Parameter(torch.randn(num_classes, embed_dim))
         nn.init.xavier_normal_(self.proxies)
         self.scale = scale
+
+    @property
+    def wake_prototype(self) -> torch.Tensor:
+        """Normalised wake-class proxy vector (shape ``(D,)``)."""
+        return F.normalize(self.proxies[1].detach(), dim=0)
 
     def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute Proxy-NCA loss.
@@ -1100,6 +1122,36 @@ class LossManager:
             crit = entry.get("criterion")
             if crit is not None and hasattr(crit, "set_epoch"):
                 crit.set_epoch(epoch)
+
+    def get_wake_prototype(self) -> Optional[torch.Tensor]:
+        """Return the best available wake-class prototype vector for mining.
+
+        Checks all active loss criteria in priority order:
+
+        1. ``RobustProtoDiversityLoss`` — EMA prototype (most stable; accumulates
+           over the full training run)
+        2. ``ArcFaceLoss`` — learned angular class center for the wake class
+        3. ``CenterLoss`` — learned Euclidean class center for the wake class
+        4. ``ProxyNCALoss`` — learned proxy for the wake class
+
+        Returns:
+            Normalised ``(D,)`` tensor, or ``None`` if no suitable loss is active.
+        """
+        # Priority ordering: prefer the most stable representation first
+        _PRIORITY = ("rppl", "arcface", "center", "proxy_nca")
+        by_name = {
+            entry["name"]: entry.get("criterion")
+            for entry in self.losses
+            if entry.get("criterion") is not None
+        }
+        for name in _PRIORITY:
+            crit = by_name.get(name)
+            if crit is None:
+                continue
+            proto = getattr(crit, "wake_prototype", None)
+            if proto is not None:
+                return proto
+        return None
 
     @timed
     def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor, dataset_ref: Optional[AudioDataset] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
