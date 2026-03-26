@@ -1,20 +1,20 @@
 """
-Voice-clone positives for the "pilot gee pee tee" wake word.
+Voice-clone positives for the "hey computer" wake word.
 
-Reads source positives from synth_output/en/pilot_gee_pee_tee/ (OVOS TTS files)
+Reads source positives from synth_output/en/hey_computer/ (OVOS TTS files)
 and clones each one into NWW donor voices via pure audio-to-audio VC — no text,
 no Chatterbox TTS synthesis.
 
-Output is flat UUID-named WAVs under vc_output/pilot_gee_pee_tee/, matching
+Output is flat UUID-named WAVs under vc_output/hey_computer/, matching
 the structure of all other wake words on hdd4.
 
 Run 02_tts_synth.py first if synth_output is empty.
 
 Usage
 -----
-    .venv/bin/python generate_pilot_gpt_vc.py --dry-run
-    .venv/bin/python generate_pilot_gpt_vc.py
-    .venv/bin/python generate_pilot_gpt_vc.py 2>&1 | tee /mnt/hdd4/ww_datasets/pilot_gpt_vc.log
+    .venv/bin/python generate_hey_computer_vc.py --dry-run
+    .venv/bin/python generate_hey_computer_vc.py
+    .venv/bin/python generate_hey_computer_vc.py 2>&1 | tee /mnt/hdd4/ww_datasets/hey_computer_vc.log
 """
 from __future__ import annotations
 
@@ -39,14 +39,14 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s — %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("generate_pilot_gpt_vc")
+logger = logging.getLogger("generate_hey_computer_vc")
 
 # ── Paths (hdd4 convention) ────────────────────────────────────────────────────
 
 HDD4      = Path("/mnt/hdd4/ww_datasets")
 NWW_DIR   = HDD4 / "hf_datasets" / "not_wake_word_subset"
-SYNTH_DIR = HDD4 / "synth_output" / "en" / "pilot_gee_pee_tee"
-OUT_DIR   = HDD4 / "vc_output" / "pilot_gee_pee_tee"
+SYNTH_DIR = HDD4 / "synth_output" / "en" / "hey_computer"
+OUT_DIR   = HDD4 / "vc_output" / "hey_computer"
 
 # ── Sanity checks ──────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser(
-    description="Voice-clone pilot_gee_pee_tee positives using NWW donor voices",
+    description="Voice-clone hey_computer positives using NWW donor voices",
     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 )
 parser.add_argument("--n-donors", type=int, default=500,

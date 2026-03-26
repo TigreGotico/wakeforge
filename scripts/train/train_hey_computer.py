@@ -1,8 +1,8 @@
 """
-Infinite hard-negative training for "pilot gee pee tee".
+Infinite hard-negative training for "hey computer".
 
-Positives  — synth_output/en/pilot_gee_pee_tee/  (OVOS TTS)
-           — vc_output/pilot_gee_pee_tee/         (voice-cloned)
+Positives  — synth_output/en/hey_computer/  (OVOS TTS)
+           — vc_output/hey_computer/         (voice-cloned)
 NWW pool   — hf_datasets/not_wake_word_subset/    (10 000 clips, mined each epoch)
 
 Runtime augmentations (no VC):
@@ -11,8 +11,8 @@ Runtime augmentations (no VC):
 
 Usage
 -----
-    .venv/bin/python train_pilot_gpt.py
-    .venv/bin/python train_pilot_gpt.py --arch gru --loss rppl
+    .venv/bin/python train_hey_computer.py
+    .venv/bin/python train_hey_computer.py --arch gru --loss rppl
 """
 import argparse
 import logging
@@ -42,7 +42,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("train_pilot_gpt")
+logger = logging.getLogger("train_hey_computer")
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--arch",            default=env_default("WW_ARCH",       "bcresnet"),
@@ -68,7 +68,7 @@ args = parser.parse_args()
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-BASE      = Path("experiments/pilot_gee_pee_tee")
+BASE      = Path("experiments/hey_computer")
 POS_DIR   = BASE / "dataset" / "positives"
 NWW_DIR   = BASE / "dataset" / "negatives" / "not_wake_word_subset"
 OUT_DIR   = BASE / "models" / f"{args.arch}_tau{args.tau}_{args.loss}_infinite"
@@ -130,7 +130,7 @@ trainer = WakeWordTrainer(
     tau=args.tau,                   # BC-ResNet width multiplier
     export_onnx=True,
     seed=42,
-    wake_word="pilot_gee_pee_tee",
+    wake_word="hey_computer",
     mlflow_uri=os.environ.get("MLFLOW_TRACKING_URI"),
     **augment_opts,
 )

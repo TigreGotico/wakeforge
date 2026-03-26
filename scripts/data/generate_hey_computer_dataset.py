@@ -1,15 +1,15 @@
 """
-Generate training data for the "pilot gee pee tee" wake word.
+Generate training data for the "hey computer" wake word.
 
-Saves dataset to /mnt/hdd4/ww_datasets/pilot_gee_pee_tee/.
+Saves dataset to /mnt/hdd4/ww_datasets/hey_computer/.
 Uses existing vc_output/ on hdd4 as voice-conversion reference voices.
 Adversarial hard-negatives are generated to help distinguish from
 phonetically similar phrases.
 
 Usage
 -----
-    .venv/bin/python generate_pilot_gpt_dataset.py
-    .venv/bin/python generate_pilot_gpt_dataset.py 2>&1 | tee /mnt/hdd4/ww_datasets/pilot_gpt_datagen.log
+    .venv/bin/python generate_hey_computer_dataset.py
+    .venv/bin/python generate_hey_computer_dataset.py 2>&1 | tee /mnt/hdd4/ww_datasets/hey_computer_datagen.log
 """
 import logging
 import os
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 HDD4_ROOT = Path("/mnt/hdd4/ww_datasets")
-OUTPUT_DIR = HDD4_ROOT / "pilot_gee_pee_tee"
+OUTPUT_DIR = HDD4_ROOT / "hey_computer"
 VC_REFS_DIR = HDD4_ROOT / "vc_output"
 
 if not HDD4_ROOT.exists():
@@ -91,7 +91,7 @@ for module, pkg in _OPTIONAL_PLUGINS.items():
 from ww_trainer.datagen import DatagenConfig, run_datagen_pipeline
 
 cfg = DatagenConfig(
-    wake_word="pilot gee pee tee",
+    wake_word="hey computer",
     output_dir=OUTPUT_DIR,
     n_positive=1500,
     max_negative=10000,

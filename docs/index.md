@@ -155,7 +155,7 @@ All scripts live under `scripts/`. Run with `.venv/bin/python scripts/<subdir>/<
 | `train_micro_genetic.py` | Three-stage GA focused on class imbalance / MCU targets |
 | `train_sincnet_genetic.py` | GA over SincNet / Gammatone featurisers |
 | `train_vc_ablation.py` | Measures impact of voice-conversion positives on F1/EER |
-| `train_pilot_gpt.py` | Infinite training for the "pilot gee pee tee" wake word |
+| `train_hey_computer.py` | Infinite training for the "hey computer" wake word |
 | `train_mfcc.sh` | Shell wrapper for a standard MFCC run |
 
 ### Evaluation & Inference (`scripts/eval/`)
@@ -177,8 +177,8 @@ All scripts live under `scripts/`. Run with `.venv/bin/python scripts/<subdir>/<
 | `rebuild_dataset.py` | Rebuild dataset adding speech negatives |
 | `localise_csvs.py` | Rewrite metadata CSVs to use local paths after copying from hdd4 |
 | `generate_vc_positives.py` | Batch TTS/VC positive generation from donor voices |
-| `generate_pilot_gpt_dataset.py` | Build the pilot_gpt dataset (TTS + negatives) |
-| `generate_pilot_gpt_vc.py` | VC positives for pilot_gpt |
+| `generate_hey_computer_dataset.py` | Build the "hey computer" dataset (TTS + negatives) |
+| `generate_hey_computer_vc.py` | VC positives for "hey computer" |
 
 ### Research / Utilities (`scripts/research/`, `scripts/`)
 

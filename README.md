@@ -115,7 +115,7 @@ All runnable scripts live under `scripts/`. Run any of them from the project roo
 | `train_parallel.py` | Trains multiple loss configs in parallel using a shared waveform cache. |
 | `train_micro_genetic.py` | Genetic search for the smallest viable model (class-imbalance focus). |
 | `train_sincnet_genetic.py` | Genetic search over SincNet/Gammatone featurizers. |
-| `train_pilot_gpt.py` | Infinite training for the "pilot gee pee tee" wake word. |
+| `train_hey_computer.py` | Infinite training for the "hey computer" wake word. |
 | `train_mfcc.sh` | Shell wrapper for a standard MFCC run. |
 
 ```bash
@@ -166,8 +166,8 @@ All runnable scripts live under `scripts/`. Run any of them from the project roo
 | `rebuild_dataset.py` | Rebuild dataset adding speech negatives (required for good FAR). |
 | `localise_csvs.py` | Rewrite metadata CSVs to use local paths after copying from hdd4. |
 | `generate_vc_positives.py` | Generate VC positives for hey_mycroft using NWW clips as speaker donors. |
-| `generate_pilot_gpt_dataset.py` | Build the pilot_gpt dataset (TTS + negatives). |
-| `generate_pilot_gpt_vc.py` | VC positives for pilot_gpt. |
+| `generate_hey_computer_dataset.py` | Build the "hey computer" dataset (TTS + negatives). |
+| `generate_hey_computer_vc.py` | VC positives for "hey computer". |
 
 ```bash
 # Typical first-time setup for hey_mycroft
