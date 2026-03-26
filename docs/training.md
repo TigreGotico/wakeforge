@@ -271,6 +271,9 @@ Composite fitness: `(1 - fp_weight*FP_rate - fn_weight*FN_rate) * size_penalty`.
 | `--pca-every` | int | `1` | Run PCA embedding plot every N epochs (0 = disable) |
 | `--tsne-every` | int | `0` | Run t-SNE embedding plot every N epochs (0 = disable) |
 | `--umap-every` | int | `0` | Run UMAP embedding plot every N epochs (0 = disable) |
+| `--rppl-every` | int | `0` | RPPL dashboard plot every N epochs (0 = auto: every 5 epochs when loss=rppl) |
+
+All three embedding viz functions (`log_pca`, `log_tsne`, `log_umap`) now log the same scalar embedding metrics to MLflow: `embed_centroid_dist`, `embed_fisher_ratio`, `embed_silhouette`, `embed_intra_pos`, `embed_intra_neg`, `embed_centroid_cos_sim`. These appear in the MLflow metrics tab and accumulate per epoch so you can plot them over training.
 
 ---
 
@@ -294,7 +297,9 @@ Multiple losses can be combined:
 --loss-type bce,triplet --loss-weight 0.7,0.3
 ```
 
-The `rppl` loss is the most comprehensive: it enforces both classification accuracy (BCE component) and embedding quality (prototype contrastive, diversity, center loss). Use it when you want the best possible embedding separation.
+The `rppl` loss is the most comprehensive: it enforces both classification accuracy (BCE component) and embedding quality (EMA prototype contrastive, hard-negative diversity, center loss, proto-ranked consistency). Use it when you want the best possible embedding separation and per-epoch visibility into embedding geometry via MLflow.
+
+Use `train_rppl.py` for a dedicated RPPL experiment — it enables PCA + t-SNE viz every N epochs and generates a 6-panel RPPL dashboard logged as an MLflow artifact.
 
 ---
 
@@ -404,7 +409,91 @@ The `.pt` file contains model weights only. The `.ts` (trainer state) file conta
 
 ---
 
-## 11. Resuming Training
+## 11. Infinite Training Mode
+
+`train_infinite.py` — goal-based training loop designed for very large NWW pools (millions of files). Rather than running a fixed number of epochs, it trains until performance targets are met.
+
+### How it works
+
+Each epoch:
+1. A random `--scan-size` subset of the NWW pool is inferred.
+2. Clips with confidence ≥ `--neg-threshold` are retained as hard negatives.
+3. (Optional) `--vc-per-epoch` new positives are synthesised via voice conversion.
+4. Model trains on wake positives + hard negatives.
+5. Stopping goals are checked — training continues or terminates.
+
+### Stopping goals
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--target-f1` | 0.92 | Stop when F1 ≥ this (after `--min-epochs`) |
+| `--target-eer` | 0.08 | Stop when EER ≤ this |
+| `--target-far-frr1` | None | Stop when FAR at FRR=1% ≤ this |
+| `--patience-after` | 10 | Epochs of no improvement after goals are met |
+| `--hard-plateau` | 20 | Stop if no new hard negatives for this many epochs |
+| `--min-epochs` | 20 | Minimum epochs regardless of goals |
+| `--max-epochs` | None | Hard ceiling (unlimited by default) |
+
+### Usage
+
+```bash
+# Basic — run until F1 ≥ 0.92 and EER ≤ 0.08
+.venv/bin/python train_infinite.py
+
+# With VC synthesis (5 new positives per epoch from chatterbox-onnx)
+.venv/bin/python train_infinite.py --vc-per-epoch 5 --vc-text "hey mycroft"
+
+# Larger NWW scan, stricter targets
+.venv/bin/python train_infinite.py \
+    --scan-size 20000 \
+    --target-f1 0.95 --target-eer 0.05 \
+    --arch bcresnet --loss rppl
+```
+
+All CLI defaults read from `.env` via `WW_` env var prefix (e.g. `WW_TARGET_F1`, `WW_SCAN_SIZE`).
+
+### Mining cache
+
+Hard-negative inference scores are persisted to `hardneg_cache.pt` and reloaded on resume (`--resume-cache`, on by default). This means the first epoch after a restart benefits from previously computed hardness scores.
+
+---
+
+## 12. Voice Conversion Backends
+
+`ww_trainer/vc_helpers.py` provides a unified interface for TTS and voice conversion. All three backends implement `.tts(text, donor_path, out_path)` and `.vc(source_path, donor_path, out_path)`.
+
+| Backend | Mode | Quality | When to use |
+|---------|------|---------|-------------|
+| `chatterbox-onnx` | CPU TTS + VC | Good | Default. Cross-platform, no GPU required. |
+| `chatterbox` | GPU TTS + VC | Best | When a CUDA GPU is available. |
+| `linacodec` | CPU/GPU VC only | Codec-quality | 48 kHz output; VC only (no TTS). |
+| `auto` | — | — | GPU chatterbox if CUDA available, else chatterbox-onnx. |
+
+**Select backend:**
+
+```bash
+# Environment variable (persists across scripts)
+export WW_VC_BACKEND=chatterbox-onnx
+
+# Or per-script CLI flag
+.venv/bin/python train_infinite.py --vc-backend chatterbox
+.venv/bin/python generate_vc_positives.py --vc-backend linacodec
+```
+
+**Python API:**
+
+```python
+from ww_trainer.vc_helpers import load_vc_backend
+
+backend = load_vc_backend()                    # auto-detect
+backend.tts("hey mycroft", donor.wav, out.wav, exaggeration=0.4)
+backend.vc(source.wav, donor.wav, out.wav)
+print(backend.sample_rate)                     # 24000 or 48000
+```
+
+---
+
+## 13. Resuming Training
 
 ```bash
 ww_trainer-train \

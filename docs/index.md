@@ -12,7 +12,7 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 |--------|-------------|
 | `ww_trainer.feats` | Feature extractors (12 standalone + 5 wrappers) and `SlidingFeatureCacheTensor` |
 | `ww_trainer.model` | Classifier heads and `BaseWakeModel` |
-| `ww_trainer.loss` | 17 loss functions via `LossManager` |
+| `ww_trainer.loss` | 17 loss functions via `LossManager`; RPPL with EMA prototype and warmup |
 | `ww_trainer.sweep` | Optuna, Grid, Random, Genetic, Two-Stage Genetic search |
 | `ww_trainer.quickstart` | `train_from_wakeword` — string → ONNX in one call |
 | `ww_trainer.trainer` | `WakeWordTrainer` training loop |
@@ -25,12 +25,15 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 | `ww_trainer.calibration` | Platt scaling confidence calibration |
 | `ww_trainer.qat` | Quantization-aware training |
 | `ww_trainer.ddp` | Multi-GPU (DDP) utilities |
-| `ww_trainer.visualization` | PCA, t-SNE, ROC/PR/DET plot helpers |
+| `ww_trainer.visualization` | PCA, t-SNE, UMAP, ROC/PR/DET, RPPL dashboard plots |
 | `ww_trainer.evaluation` | `compute_fitness_score`, `compute_readiness` |
 | `ww_trainer.checkpoint` | `save_checkpoint`, `load_checkpoint` |
 | `ww_trainer.cache` | `FeatureCache` — MD5-keyed feature caching |
 | `ww_trainer.mining` | `mine_hard_negatives` |
 | `ww_trainer.loop` | `training_loop` (extracted from `WakeWordTrainer`) |
+| `ww_trainer.infinite_loop` | `infinite_training_loop`, `StoppingGoal` — goal-based open-ended training |
+| `ww_trainer.vc_helpers` | `load_vc_backend` — pluggable TTS/VC abstraction (chatterbox-onnx / chatterbox / linacodec) |
+| `ww_trainer.env` | `.env` file loader (`load_env`) — injects env vars for all scripts |
 
 ---
 
@@ -78,6 +81,12 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 | `LossManager` | `loss` | Multi-loss composition and triplet mining | `loss.py` |
 | `_validate_ga_params` | `sweep` | Raises `ValueError` on bad GA inputs | `sweep.py:25` |
 | `_apply_fitness_fn` | `sweep` | Selection pressure transform (internal) | `sweep.py:73` |
+| `infinite_training_loop` | `infinite_loop` | Goal-based training over unlimited NWW pool | `infinite_loop.py` |
+| `StoppingGoal` | `infinite_loop` | Configures F1/EER/FAR targets and plateau detection | `infinite_loop.py` |
+| `load_vc_backend` | `vc_helpers` | Factory for TTS/VC backends (onnx / torch / linacodec) | `vc_helpers.py` |
+| `RobustProtoDiversityLoss` | `loss` | RPPL: EMA prototype + warmup + hard-div + proto-consistency | `loss.py:281` |
+| `LossManager.step_epoch` | `loss` | Notifies epoch-aware criteria (RPPL warmup scheduling) | `loss.py` |
+| `plot_rppl_dashboard` | `visualization` | 6-panel RPPL training dashboard → MLflow artifact | `visualization.py` |
 
 ---
 
@@ -122,6 +131,27 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 | [search_strategies.md](search_strategies.md) | Decision tree for choosing a search strategy |
 | [benchmarking.md](benchmarking.md) | Latency measurement, ONNX vs PyTorch, RTF |
 | [recipes.md](recipes.md) | End-to-end recipes per use case |
+
+---
+
+## Training Scripts
+
+Top-level scripts for common training workflows. All read defaults from `.env` via `WW_` env vars.
+
+| Script | Purpose |
+|--------|---------|
+| `train_hey_mycroft.py` | Quick single-run training from a local dataset |
+| `train_full.py` | Sequential multi-arch training (6 CPU-safe tiers) |
+| `train_full_nww.py` | GA search + loss comparison with full NWW augmentation |
+| `train_rppl.py` | RPPL experiment — PCA/t-SNE + 6-panel RPPL dashboard every N epochs |
+| `train_infinite.py` | Goal-based open-ended training with large NWW pool mining + VC synthesis |
+| `train_ablation.py` | Loss × augmentation ablation grid → MLflow heatmaps |
+| `train_parallel.py` | Parallel loss-comparison training with shared waveform cache |
+| `train_micro_genetic.py` | Three-stage GA focused on class imbalance / MCU targets |
+| `train_sincnet_genetic.py` | GA over SincNet / Gammatone featurisers |
+| `generate_vc_positives.py` | Batch TTS/VC positive generation from donor voices |
+| `eval_hey_mycroft.py` | Full evaluation: ROC/PR/DET, FP/FN lists, confidence histograms |
+| `test_wakeword.py` | CLI: test an ONNX model on a file or live microphone |
 
 ---
 

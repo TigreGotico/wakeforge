@@ -82,11 +82,58 @@ Key env vars (all have safe defaults):
 
 See [docs/index.md](docs/index.md) for full env var reference.
 
+## RPPL Loss + Infinite Training
+
+Two research-focused workflows for squeezing maximum accuracy from large NWW pools:
+
+### RPPL experiment (`train_rppl.py`)
+
+Trains with the Robust Prototype Diversity Loss and logs rich embedding visualisations to MLflow every N epochs:
+
+```bash
+.venv/bin/python train_rppl.py --epochs 50 --arch gru --viz-every 5
+```
+
+What you see in MLflow per epoch: `rppl_bce`, `rppl_proto`, `rppl_div`, `rppl_center`, `rppl_cons`, `rppl_geo_scale`, `rppl_proto_ema_norm`, plus a 6-panel dashboard PNG (`rppl/rppl_dashboard.png`) showing sub-loss trajectories, warmup ramp, EMA prototype stability, Fisher ratio, and silhouette score.
+
+### Infinite training (`train_infinite.py`)
+
+Goal-based open-ended loop — trains until F1/EER targets are met, not until a fixed epoch count. Designed for very large NWW pools (millions of files):
+
+```bash
+# Run until F1 ≥ 0.92 and EER ≤ 0.08
+.venv/bin/python train_infinite.py
+
+# With on-the-fly voice conversion positives
+.venv/bin/python train_infinite.py --vc-per-epoch 5 --vc-text "hey mycroft"
+
+# Stricter targets, larger NWW scan
+.venv/bin/python train_infinite.py \
+    --target-f1 0.95 --target-eer 0.05 \
+    --scan-size 20000 --arch bcresnet --loss rppl
+```
+
+Each epoch: infer on a random subset of the NWW pool → keep hard negatives → (optionally) synthesise VC positives → train → check stopping goals.
+
+### Voice conversion backends (`ww_trainer/vc_helpers.py`)
+
+| Backend | Mode | Notes |
+|---------|------|-------|
+| `chatterbox-onnx` | CPU TTS + VC | Default — cross-platform |
+| `chatterbox` | GPU TTS + VC | Best quality with CUDA |
+| `linacodec` | CPU/GPU VC only | 48 kHz codec-based conversion |
+
+```bash
+export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
+```
+
+---
+
 ## Key Features
 
 - **17 feature extractors**: MFCC, FilterBank, SincNet, Gammatone, LEAF, PLP, PNCC, CQT, HuBERT, Wav2Vec2, TorchAudio-HuBERT, Markov, HMM, plus enrichment wrappers (VAD, Pitch, SNRAware, MultiResolution, Delta)
 - **11 classifier heads**: FFN, GRU, CNN, BC-ResNet, TC-ResNet, DS-CNN, MatchboxNet, Res15, KWT, Conformer, CRNN
-- **17 loss functions**: BCE, Focal, ArcFace, SupCon, NTXent, RPPL, Triplet, and more
+- **17 loss functions**: BCE, Focal, ArcFace, SupCon, NTXent, RPPL (with EMA prototype + hard-neg diversity + proto-consistency), Triplet, and more
 - **5 search strategies**: Optuna (Bayesian), Grid, Random, Genetic, Two-Stage Genetic
 - **Island model**: `n_demes` parallel populations with ring-topology migration — `sweep.py:620`
 - **Adaptive mutation**: `mutation_decay` parameter reduces mutation rate each generation — `sweep.py:530`
@@ -96,19 +143,21 @@ See [docs/index.md](docs/index.md) for full env var reference.
 - **Knowledge distillation**, **QAT**, **multi-GPU (DDP)**, **confidence calibration**
 - **ESP32 tiers**: sub-1 KB models with C header export via `export_c.export_to_c_header`
 - **11 hardware tier presets**: from `esp32_nano` to `hubert_medium`
+- **Infinite training mode**: goal-based loop with large NWW mining + on-the-fly VC synthesis
+- **RPPL dashboard**: 6-panel per-epoch embedding diagnostic, auto-logged to MLflow
 - **41 runnable examples** in [`examples/`](examples/)
 
 ## Documentation
 
 | Doc | Contents |
 |-----|----------|
-| [docs/index.md](docs/index.md) | Navigation hub — all modules and key functions |
+| [docs/index.md](docs/index.md) | Navigation hub — all modules, scripts, and key functions |
 | [docs/sweep.md](docs/sweep.md) | Full search API: parameter tables, fitness functions, island model |
 | [docs/quickstart.md](docs/quickstart.md) | `QuickstartConfig` API reference |
-| [docs/training.md](docs/training.md) | Step-by-step training guide, full CLI reference |
+| [docs/training.md](docs/training.md) | Step-by-step training guide, full CLI reference, infinite training, VC backends |
 | [docs/extractors.md](docs/extractors.md) | All 17 feature extractors |
 | [docs/classifiers.md](docs/classifiers.md) | All 11 classifier heads |
-| [docs/losses.md](docs/losses.md) | All 17 loss functions |
+| [docs/losses.md](docs/losses.md) | All 17 loss functions including RPPL component breakdown |
 | [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
 | [FAQ.md](FAQ.md) | Common questions and error resolutions |
 | [AUDIT.md](AUDIT.md) | Known issues and tech debt |

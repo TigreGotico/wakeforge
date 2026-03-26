@@ -246,15 +246,58 @@ Learnable proxies replace triplet mining (Movshovitz-Attias et al., ICCV 2017). 
 
 ### RobustProtoDiversityLoss (RPPL) -- `loss.py:281`
 
-Five-component loss: (1) BCE, (2) prototype contrastive, (3) positive center, (4) negative diversity, (5) consistency (optional, requires augmented embeddings).
+Five-component loss designed for binary fixed-keyword wake-word detection under severe class imbalance (~94 % NWW).
 
-**Config:** `{"name": "rppl", "weight": 1.0, "tau": 0.1, "K_neg_proto": 0, "alpha": 1.0, "beta": 1.0, "gamma": 0.5, "delta": 0.1, "eta": 0.5}`
+**Components:**
 
-Component weights: `alpha` (BCE), `beta` (prototype), `gamma` (diversity), `delta` (center), `eta` (consistency).
+| Term | Weight param | Description | Prior work |
+|------|-------------|-------------|-----------|
+| BCE | `alpha` | Standard binary cross-entropy | — |
+| Proto-softmax | `beta` | Each sample classified against EMA wake prototype and NWW mean prototype | Snell et al. 2017 (Prototypical Networks) |
+| Center loss | `delta` | Pulls wake embeddings toward the wake prototype | Wen et al. 2016 |
+| Hard-neg diversity | `gamma` | Spreads apart negatives with cos-sim to wake prototype above `hard_div_threshold` | Boudiaf et al. 2020 |
+| Proto-ranked consistency | `eta` | Under acoustic augmentation, each sample must still be correctly classified against the class prototypes (requires dataset `get_augmented`) | BYOL / MeanTeacher |
 
-**When to use:** When you want a single loss that handles classification, embedding quality, and negative diversity. Good for few-shot wake word scenarios.
+**Novel features vs. standard metric learning:**
+- **EMA wake prototype** (`proto_ema_alpha=0.05`): the batch mean of ~2–5 wake embeddings is too noisy to use directly; the EMA stabilises over ~20 batches.
+- **Hard-negative targeting** (`hard_div_threshold=0.1`): only spreads confusable negatives, not easy ones far from the wake cluster.
+- **Proto-ranked consistency**: replaces L2 augmentation invariance with a stricter objective — the augmented embedding must remain on the correct side of the prototype boundary.
+- **Warmup scheduling** (`warmup_epochs=5`): geometric terms ramp from 0 → 1 so they don't train against random-epoch-0 prototypes.
 
-**When NOT to use:** When you want fine control over individual loss components (use separate losses instead). The 5 weight hyperparameters can be hard to tune.
+**Full config:**
+
+```python
+{"name": "rppl", "weight": 1.0,
+ "tau": 0.1,              # prototype similarity temperature
+ "K_neg_proto": 0,        # 0 = single mean NWW prototype; >1 splits into K groups
+ "alpha": 1.0,            # BCE
+ "beta": 1.0,             # proto-softmax
+ "gamma": 0.5,            # diversity
+ "delta": 0.1,            # center
+ "eta": 0.5,              # consistency
+ "warmup_epochs": 5,
+ "proto_ema_alpha": 0.05,
+ "hard_div_threshold": 0.1,
+ "consistency_mode": "proto"}   # "proto" or "l2" (legacy ablation)
+```
+
+**MLflow metrics logged automatically when using RPPL:**
+
+| Metric | Meaning |
+|--------|---------|
+| `rppl_bce` | BCE sub-loss per epoch |
+| `rppl_proto` | Prototype contrastive sub-loss |
+| `rppl_div` | Diversity sub-loss (negative = good, maximising distance) |
+| `rppl_center` | Center loss sub-loss |
+| `rppl_cons` | Consistency sub-loss |
+| `rppl_geo_scale` | Warmup ramp (0 → 1 over `warmup_epochs`) |
+| `rppl_proto_ema_norm` | L2 norm of the EMA wake prototype (should stabilise quickly) |
+
+A 6-panel **RPPL dashboard** PNG is auto-generated every 5 epochs and at end-of-training, logged to the MLflow `rppl/` artifact folder. Use `train_rppl.py` as the dedicated experiment script.
+
+**When to use:** Hard-negative mining regime with a large NWW pool; infinite training mode; any scenario where you want per-epoch visibility into embedding structure.
+
+**When NOT to use:** Very small datasets where there are consistently < 2 wake samples per batch (EMA has no data to stabilise from). Use Focal or SupCon instead. The 5 weight hyperparameters can be hard to tune — `train_rppl.py` provides sane defaults.
 
 ---
 
@@ -269,3 +312,4 @@ Component weights: `alpha` (BCE), `beta` (prototype), `gamma` (diversity), `delt
 | Production | Focal (0.5) + SupCon (0.3) + Center (0.2) | Robust to imbalance + good embeddings |
 | Noisy labels | LabelSmoothing (1.0) + MultiSimilarity (0.3) | Tolerates label noise |
 | Maximum accuracy | BCE (0.5) + ArcFace (0.3) + SupCon (0.2) | Heavy but effective |
+| Large NWW pool + infinite training | RPPL (1.0) | Best when mining loop provides hard negatives every epoch |
