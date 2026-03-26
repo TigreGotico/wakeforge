@@ -2474,6 +2474,9 @@ class BeatsExtractor(BaseExtractor):
 
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
         raise NotImplementedError(
-            "BeatsExtractor uses a HuggingFace transformers model. Export it separately "
-            "with optimum-cli, then load the ONNX via OnnxFeatureExtractor."
+            "BeatsExtractor cannot be exported via this method because the HuggingFace "
+            "feature extractor preprocessor is not ONNX-traceable. Use the dedicated "
+            "export script instead:\n\n"
+            "  .venv/bin/python scripts/export_beats.py --output beats-iter3-plus.onnx\n\n"
+            "Then load the result with OnnxFeatureExtractor."
         )
