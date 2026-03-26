@@ -79,6 +79,12 @@ Key parameters — full tables in [`docs/sweep.md`](docs/sweep.md):
 | [`notebooks/genetic_search.ipynb`](notebooks/genetic_search.ipynb) | Datagen → genetic HP search → multi-tier training → ONNX export → benchmark |
 | [`notebooks/kaggle_infinite.ipynb`](notebooks/kaggle_infinite.ipynb) | Infinite training: smoke test, full run, VC synthesis, NWW pool ablation |
 | [`notebooks/distill.ipynb`](notebooks/distill.ipynb) | Knowledge distillation experiments |
+| [`notebooks/nb04_micro.ipynb`](notebooks/nb04_micro.ipynb) | MCU/ESP32 tiers: size audit, C header export, latency benchmark |
+| [`notebooks/nb05_embedded.ipynb`](notebooks/nb05_embedded.ipynb) | RPi/x86 tiers: RTF benchmark, streaming sliding-window demo |
+| [`notebooks/nb06_gpu.ipynb`](notebooks/nb06_gpu.ipynb) | GPU server (HuBERT): t-SNE embeddings, RTF comparison |
+| [`notebooks/nb07_distill.ipynb`](notebooks/nb07_distill.ipynb) | TinyHuBERT distillation: MSE + InfoNCE student training |
+| [`notebooks/nb08_wakehubert.ipynb`](notebooks/nb08_wakehubert.ipynb) | WakeHuBERT classifier on distilled ONNX featurizer, CPU-only |
+| [`notebooks/nb09_ablation.ipynb`](notebooks/nb09_ablation.ipynb) | Resumable 36-cell ablation grid: featurizers × losses × augmentation |
 
 All notebooks are Kaggle/Colab/Paperspace-ready via env vars and Kaggle Secrets for MLflow credentials.
 
@@ -263,6 +269,7 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | Doc | Contents |
 |-----|----------|
 | [docs/index.md](docs/index.md) | Navigation hub — all modules, scripts, and key functions |
+| [docs/notebooks.md](docs/notebooks.md) | Notebook curriculum guide — hardware tiers, decision tree, recommended running order |
 | [docs/sweep.md](docs/sweep.md) | Full search API: parameter tables, fitness functions, island model |
 | [docs/quickstart.md](docs/quickstart.md) | `QuickstartConfig` API reference |
 | [docs/training.md](docs/training.md) | Step-by-step training guide, full CLI reference, infinite training, VC backends |

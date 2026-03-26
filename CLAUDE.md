@@ -28,8 +28,16 @@ examples/            Numbered API usage examples (01–41)
 notebooks/
   kaggle_quickstart.ipynb   Zero-to-ONNX: datagen → train → ONNX export → inference test
   kaggle_experiments.ipynb  Grid: tiers × losses × augmentation → results table + plots
+  kaggle_infinite.ipynb     Infinite goal-based training: smoke test → full run → ablation
   genetic_search.ipynb      Datagen → genetic HP search → multi-tier training → benchmark
   distill.ipynb             Knowledge distillation experiments
+  nb04_micro.ipynb          MCU/ESP32 tiers: size audit, C header export, latency benchmark
+  nb05_embedded.ipynb       RPi/x86 tiers: RTF benchmark, streaming sliding-window demo
+  nb06_gpu.ipynb            GPU server (HuBERT): t-SNE embeddings, RTF comparison
+  nb07_distill.ipynb        TinyHuBERT distillation: MSE + InfoNCE student training
+  nb08_wakehubert.ipynb     WakeHuBERT classifier on distilled ONNX featurizer, CPU-only
+  nb09_ablation.ipynb       Resumable 36-cell ablation grid: featurizers × losses × augmentation
+docs/notebooks.md           Full curriculum guide with hardware-tier decision tree
 experiments/hey_mycroft/ Output: dataset/, models/<arch>/, eval/
 ```
 

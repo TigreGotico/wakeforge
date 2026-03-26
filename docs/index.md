@@ -45,6 +45,14 @@ Version: `0.0.1a1` — `ww_trainer/version.py`
 | [notebooks/kaggle_experiments.ipynb](../notebooks/kaggle_experiments.ipynb) | Systematic experiments: loop over tiers × loss functions × augmentation levels → results table + F1 bar chart. Resumable. |
 | [notebooks/kaggle_infinite.ipynb](../notebooks/kaggle_infinite.ipynb) | Infinite training: smoke test, full goal-based run, VC synthesis, NWW pool size ablation, training curves. |
 | [notebooks/genetic_search.ipynb](../notebooks/genetic_search.ipynb) | End-to-end: datagen → genetic HP search → multi-tier training → ONNX export → benchmark. Kaggle/Colab/Paperspace-ready via env vars. |
+| [notebooks/nb04_micro.ipynb](../notebooks/nb04_micro.ipynb) | MCU/ESP32 tiers (esp32_nano → micro → delta_micro): size audit, C header export, latency benchmark. |
+| [notebooks/nb05_embedded.ipynb](../notebooks/nb05_embedded.ipynb) | RPi 3/4 and x86 tiers (small, filterbank_small, sincnet_small, gammatone_small): RTF benchmark, streaming sliding-window demo. |
+| [notebooks/nb06_gpu.ipynb](../notebooks/nb06_gpu.ipynb) | GPU server tiers (hubert_small, hubert_medium): t-SNE of HuBERT embeddings, RTF comparison. |
+| [notebooks/nb07_distill.ipynb](../notebooks/nb07_distill.ipynb) | TinyHuBERT distillation: MSE + InfoNCE student training, PCA overlap with teacher. |
+| [notebooks/nb08_wakehubert.ipynb](../notebooks/nb08_wakehubert.ipynb) | WakeHuBERT: classify with distilled ONNX featurizer CPU-only, compare vs MFCC baseline. |
+| [notebooks/nb09_ablation.ipynb](../notebooks/nb09_ablation.ipynb) | Systematic ablation: featurizers × losses × augmentation (36-cell resumable grid) → seaborn heatmap + Fisher ratio. |
+
+See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-tier decision tree, and recommended running order.
 
 ### Notebook env vars (key subset — full table in Cell 1)
 
