@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+import torchaudio
 from torch.utils.data import DataLoader
 
 from ww_trainer.dataset import AudioDataset, collate_fn
@@ -374,7 +375,28 @@ def infinite_training_loop(
                 min(200, len(hard_negatives or easy_negatives or nww_pool)),
             )
             if pos_sample and neg_sample:
-                readiness = compute_readiness(model, pos_sample, neg_sample, device)
+                try:
+                    import numpy as np
+                    def _get_embeds(samples):
+                        wavs = []
+                        for item in samples:
+                            p = item[0] if isinstance(item, (list, tuple)) else item
+                            wav, _ = torchaudio.load(p)
+                            wavs.append(wav.squeeze(0))
+                        with torch.no_grad():
+                            return model.embed(wavs).cpu().numpy()
+                    pos_emb = _get_embeds(pos_sample)
+                    neg_emb = _get_embeds(neg_sample)
+                    all_emb = np.concatenate([pos_emb, neg_emb], axis=0)
+                    intra_pos_var = float(pos_emb.var(axis=0).mean()) if len(pos_emb) > 1 else 1.0
+                    embed_var_total = float(all_emb.var(axis=0).mean())
+                    readiness = compute_readiness({
+                        "intra_pos_var": intra_pos_var,
+                        "embed_var_total": embed_var_total,
+                    })
+                except Exception as _re:
+                    logger.debug("Readiness computation skipped: %s", _re)
+                    readiness = 0.0
                 logger.info("[Readiness] %.3f", readiness)
                 if trainer.mlflow:
                     try:
