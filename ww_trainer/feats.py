@@ -133,8 +133,13 @@ class BaseExtractor(torch.nn.Module):
                               verbose=False,
                               external_data=False,
                               training=torch.onnx.TrainingMode.EVAL)
-        onnx_model = onnx.load(out)
+        onnx_model = onnx.load(out, load_external_data=True)
         onnx.checker.check_model(onnx_model)
+        # Re-save as a single self-contained file (dynamo exporter may split into .onnx + .onnx.data)
+        onnx.save(onnx_model, out, save_as_external_data=False)
+        data_file = Path(out + ".data")
+        if data_file.exists():
+            data_file.unlink()
         logger.info("Exported ONNX model to %s", out)
 
         if metadata:
