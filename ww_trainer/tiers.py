@@ -103,16 +103,7 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         approx_params="~200K",
         target_hardware="RPi, small SBC",
     ),
-    "beats_small": TierConfig(
-        name="beats_small",
-        extractor_type="beats",
-        head_arch="gru",
-        hidden_dim=256,
-        description="BEATs (AudioSet SSL) + GRU — best for non-speech/non-English WW",
-        approx_params="~90M feat + 1M head",
-        target_hardware="GPU server / workstation",
-    ),
-    "efficientnet_small": TierConfig(
+"efficientnet_small": TierConfig(
         name="efficientnet_small",
         extractor_type="filterbank",
         head_arch="efficientnet",

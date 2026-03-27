@@ -2,17 +2,18 @@
 
 ## Feature Extractors / Classifier Heads
 
-### ~~BEATs extractor — `BeatsExtractor(BaseExtractor)`~~ ✓ DONE
-**Priority: High** | Effort: Low-Medium
+### AudioSet-trained ONNX featurizer — `notebooks/nb10_audioset_featurizer.ipynb`
+**Priority: High** | Status: Notebook created, model to be published
 
-Microsoft BEATs (2023) — audio SSL pretrained on AudioSet rather than speech corpora.
-Unlike HuBERT/Wav2Vec2 which are optimised for phoneme-like representations, BEATs
-captures general audio events, making it better suited for wake words that are less
-phoneme-like or for non-English words with unusual phonotactics.
+Train a compact ONNX-exportable CNN encoder on AudioSet as a general-audio featurizer,
+analogous to BEATs but fully within the ww-trainer ONNX pipeline. Trained model to be
+published to TigreGotico/onnx-feature-extractors on HuggingFace for downstream use
+via `OnnxFeatureExtractor`.
 
-- Add `BeatsExtractor(BaseExtractor)` to `feats.py` alongside `HubertExtractor`
-- Add `beats_small` / `beats_medium` tier presets to `tiers.py`
-- Reference model: `microsoft/beats` on HuggingFace
+- Notebook: `notebooks/nb10_audioset_featurizer.ipynb`
+- Architecture: 4-block residual CNN → GRU → 256-dim embedding, ~3M params
+- Loss: NT-Xent contrastive (AudioSet weak labels as positive pairs)
+- Export: standard `export_to_onnx()` + INT8 quantized variant
 
 ---
 

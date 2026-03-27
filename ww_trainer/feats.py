@@ -366,14 +366,14 @@ class MfccExtractor(BaseExtractor):
         device = batch.device
         window = torch.hann_window(self.n_fft, device=device)
 
-        # Compute STFT
-        stft = torch.view_as_real(torch.stft(
+        # Compute STFT (return_complex=False for ONNX compatibility)
+        stft = torch.stft(
             batch,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             window=window,
-            return_complex=True,
-        ))
+            return_complex=False,
+        )
         real = stft[..., 0]
         imag = stft[..., 1]
         power = (real.pow(2) + imag.pow(2))
@@ -386,9 +386,8 @@ class MfccExtractor(BaseExtractor):
         return mfcc.transpose(1, 2)
 
     def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
-        # torch.stft + view_as_real fails with the TorchScript ONNX exporter;
-        # the dynamo exporter decomposes STFT into ONNX-safe real ops correctly.
-        super().export_to_onnx(out, quantize=quantize, dynamo=True, metadata=metadata)
+        # Uses return_complex=False so the TorchScript exporter works correctly.
+        super().export_to_onnx(out, quantize=quantize, dynamo=False, metadata=metadata)
 
 
 class FilterbankExtractor(BaseExtractor):
@@ -2404,79 +2403,3 @@ class HMMStateExtractor(BaseExtractor):
             embed_onnx_metadata(out, metadata)
         logger.info("Exported HMMStateExtractor to %s", out)
 
-
-class BeatsExtractor(BaseExtractor):
-    """Microsoft BEATs audio SSL encoder.
-
-    BEATs (Audio Pre-Training with Acoustic Tokenizers, Chen et al. 2023) is
-    pre-trained on AudioSet rather than speech corpora, making it better suited
-    for wake words that are phonetically unusual or non-English, and for
-    environments with prominent non-speech sounds.
-
-    Requires the ``beats`` extra::
-
-        pip install "ww_trainer[beats]"
-
-    The model is loaded from HuggingFace (``microsoft/beats-iter3-plus``).
-    All encoder weights are frozen; only the downstream classifier head is trained.
-    Use ``OnnxFeatureExtractor`` for inference — export via ``optimum``.
-
-    Args:
-        model_name: HuggingFace model identifier.
-        sample_rate: Must be 16000 (BEATs requirement).
-        device: Torch device string or ``"auto"``.
-    """
-
-    _REQUIRES_TRANSFORMERS = True
-
-    def __init__(
-        self,
-        model_name: str = "microsoft/beats-iter3-plus",
-        sample_rate: int = 16000,
-        device: str = "auto",
-    ) -> None:
-        super().__init__(sample_rate=sample_rate, device=device)
-        try:
-            from transformers import AutoModel, AutoFeatureExtractor as HFFeatureExtractor
-        except ImportError:
-            raise ImportError(
-                "Install transformers for BeatsExtractor: pip install transformers"
-            )
-        self._feature_extractor = HFFeatureExtractor.from_pretrained(model_name)
-        self._model = AutoModel.from_pretrained(model_name).eval().to(self.device)
-        for p in self._model.parameters():
-            p.requires_grad = False
-        self._feature_dim = self._model.config.hidden_size
-
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
-    def forward(self, wavs: WavInput) -> torch.Tensor:
-        wav_list = ensure_wav_list(wavs)
-        max_len = max(w.shape[0] for w in wav_list)
-        padded = [
-            F.pad(w, (0, max_len - w.shape[0])) if w.shape[0] < max_len else w
-            for w in wav_list
-        ]
-        wav_tensor = torch.stack(padded).to(torch.float32).cpu()
-        inputs = self._feature_extractor(
-            list(wav_tensor.numpy()),
-            sampling_rate=self.sample_rate,
-            return_tensors="pt",
-            padding=True,
-        )
-        input_values = inputs["input_values"].to(self.device)
-        with torch.no_grad():
-            out = self._model(input_values)
-        # last_hidden_state: [B, T', hidden]
-        return out.last_hidden_state
-
-    def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None:
-        raise NotImplementedError(
-            "BeatsExtractor cannot be exported via this method because the HuggingFace "
-            "feature extractor preprocessor is not ONNX-traceable. Use the dedicated "
-            "export script instead:\n\n"
-            "  .venv/bin/python scripts/export_beats.py --output beats-iter3-plus.onnx\n\n"
-            "Then load the result with OnnxFeatureExtractor."
-        )

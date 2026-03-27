@@ -39,7 +39,6 @@ from ww_trainer.feats import (
     PitchExtractor,
     SNRAwareExtractor,
     SileroVadWrapper,
-    BeatsExtractor,
 )
 from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
@@ -65,7 +64,6 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "pncc": PNCCExtractor,
     "cqt": CQTExtractor,
     "torchaudio_hubert": TorchAudioHubertExtractor,
-    "beats": BeatsExtractor,
 }
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
@@ -207,8 +205,6 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
             "delta_mfcc": lambda: DeltaExtractor(MfccExtractor(sr=sample_rate, n_mfcc=n_feat)),
             "delta_filterbank": lambda: DeltaExtractor(
                 FilterbankExtractor(sr=sample_rate, n_mels=n_feat)),
-            "beats": lambda: BeatsExtractor(
-                featurizer or "microsoft/beats-iter3-plus", sample_rate, device),
         }
         builder = _EXTRACTOR_BUILDERS.get(featurizer_type)
         if builder is None:
