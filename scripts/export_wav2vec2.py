@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a Wav2Vec2-BERT encoder to ONNX for use as OnnxFeatureExtractor.
+"""Export a Wav2Vec2 encoder to ONNX for use as OnnxFeatureExtractor.
 
 Uses the Hugging Face `optimum` library for reliable ONNX export of transformer
 models. The resulting ONNX file is compatible with `ww_trainer.feats.OnnxFeatureExtractor`
@@ -10,19 +10,19 @@ Usage::
     # Install export dependencies
     pip install optimum[exporters] transformers
 
-    # Export Wav2Vec2-BERT 2.0 (1024-dim, ~600M params)
-    .venv/bin/python scripts/export_w2vbert.py \\
-        --model facebook/w2v-bert-2.0 \\
-        --output w2v-bert-2.0.onnx
+    # Export Wav2Vec2 base (768-dim)
+    .venv/bin/python scripts/export_wav2vec2.py \\
+        --model facebook/wav2vec2-base \\
+        --output wav2vec2-base.onnx
 
     # Export with INT8 quantization
-    .venv/bin/python scripts/export_w2vbert.py \\
-        --model facebook/w2v-bert-2.0 \\
-        --output w2v-bert-2.0.onnx \\
+    .venv/bin/python scripts/export_wav2vec2.py \\
+        --model facebook/wav2vec2-base \\
+        --output wav2vec2-base.onnx \\
         --quantize
 
     # Verify an already-exported file
-    .venv/bin/python scripts/export_w2vbert.py --verify w2v-bert-2.0.onnx
+    .venv/bin/python scripts/export_wav2vec2.py --verify wav2vec2-base.onnx
 
 After export, use for training::
 
@@ -30,8 +30,8 @@ After export, use for training::
     result = train_from_wakeword(
         "hey jarvis", "./hey_jarvis",
         featurizer_type="onnx",
-        featurizer="w2v-bert-2.0.onnx",
-        tier="ssl_medium",
+        featurizer="wav2vec2-base.onnx",
+        tier="ssl_small",
     )
 
 Published ONNX variants: https://huggingface.co/TigreGotico/onnx-feature-extractors
@@ -46,9 +46,12 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Well-known Wav2Vec2-BERT checkpoints
+# Well-known Wav2Vec2 checkpoints
 KNOWN_MODELS = {
-    "2.0":  "facebook/w2v-bert-2.0",
+    "tiny":   "patrickvonplaten/tiny-wav2vec2-no-tokenizer",
+    "base":   "facebook/wav2vec2-base",
+    "large":  "facebook/wav2vec2-large",
+    "large-960h": "facebook/wav2vec2-large-960h",
 }
 
 
@@ -98,9 +101,9 @@ def verify(onnx_path: str, sample_rate: int = 16000) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export Wav2Vec2-BERT encoder to ONNX")
-    parser.add_argument("--model", default="facebook/w2v-bert-2.0",
-                        help="HF model ID or shorthand: 2.0")
+    parser = argparse.ArgumentParser(description="Export Wav2Vec2 encoder to ONNX")
+    parser.add_argument("--model", default="facebook/wav2vec2-base",
+                        help="HF model ID or shorthand: tiny / base / large / large-960h")
     parser.add_argument("--output", default=None, help="Output .onnx path")
     parser.add_argument("--quantize", action="store_true", help="Also export INT8 variant")
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset (default 17)")

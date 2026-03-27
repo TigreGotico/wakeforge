@@ -109,10 +109,10 @@ Every `BaseExtractor` and `ClassifierHead` **must** export cleanly via
   filterbanks; never `torchaudio.compliance.kaldi` or `torchaudio.transforms` in forward
 - Test: `extractor.export_to_onnx("test.onnx")` + `onnx.checker.check_model(...)` must pass
 
-**Accepted exceptions** (training-only, export via `optimum`):
-`HubertExtractor`, `Wav2Vec2Extractor`, `Wav2Vec2BertExtractor`, `TorchAudioHubertExtractor`
-— these raise `NotImplementedError` on `export_to_onnx()` by design. Load their
-exported versions via `OnnxFeatureExtractor`.
+**Large SSL models (HuBERT, Wav2Vec2, Wav2Vec2-BERT):** training-time wrappers have
+been removed — use `scripts/export_hubert.py`, `export_wav2vec2.py`, or `export_w2vbert.py`
+to export once, then load via `OnnxFeatureExtractor` for both training and inference.
+This guarantees feature parity between training and production.
 
 **Dropped for ONNX violation:** `MambaHead` (mamba-ssm CUDA kernels not ONNX-registerable).
 

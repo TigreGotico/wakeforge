@@ -42,14 +42,7 @@ ONNX-safe SSM implementation (e.g. Hawk/Griffin-style linear RNN) becomes availa
 
 ---
 
-### Fine-tunable HuBERT — `unfreeze_top_n` option on `HubertExtractor`
-**Priority: Medium** | Effort: Medium
-
-Current `HubertExtractor` freezes all HuBERT parameters. Partial fine-tuning
-(unfreeze top N transformer layers, layer-wise LR decay or LoRA adapters) can
-meaningfully improve F1/EER on small wake-word datasets without full fine-tuning cost.
-
-- Add `unfreeze_top_n: int = 0` param to `HubertExtractor.__init__`
-- Add optional LoRA adapter support via `peft` library
-- Add `hubert_small_finetune` tier preset
-- GPU-only; document clearly in tier guide
+### ~~Fine-tunable HuBERT~~ — dropped
+**Status: DROPPED** — `HubertExtractor` and all SSL training wrappers have been removed.
+SSL models must be pre-exported to ONNX via `scripts/export_hubert.py` and used via
+`OnnxFeatureExtractor` for both training and inference (guarantees feature parity).

@@ -25,10 +25,6 @@ from ww_trainer.feats import (
     MfccExtractor,
     FilterbankExtractor,
     SincNetExtractor,
-    HubertExtractor,
-    Wav2Vec2Extractor,
-    Wav2Vec2BertExtractor,
-    TorchAudioHubertExtractor,
     DeltaExtractor,
     GammatoneExtractor,
     LEAFExtractor,
@@ -53,9 +49,6 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "mfcc": MfccExtractor,
     "filterbank": FilterbankExtractor,
     "sincnet": SincNetExtractor,
-    "hubert": HubertExtractor,
-    "wav2vec2": Wav2Vec2Extractor,
-    "wav2vec2bert": Wav2Vec2BertExtractor,
     "delta_mfcc": None,           # special: MfccExtractor wrapped in DeltaExtractor
     "gammatone": GammatoneExtractor,
     "delta_filterbank": None,     # special: FilterbankExtractor wrapped in DeltaExtractor
@@ -63,7 +56,6 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "plp": PLPExtractor,
     "pncc": PNCCExtractor,
     "cqt": CQTExtractor,
-    "torchaudio_hubert": TorchAudioHubertExtractor,
 }
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
@@ -197,10 +189,6 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
             "plp": lambda: PLPExtractor(sr=sample_rate, n_plp=kwargs.get("n_plp", 13)),
             "pncc": lambda: PNCCExtractor(sr=sample_rate, n_pncc=kwargs.get("n_pncc", 13)),
             "cqt": lambda: CQTExtractor(sr=sample_rate),
-            "hubert": lambda: HubertExtractor(featurizer, sample_rate, device),
-            "wav2vec2": lambda: Wav2Vec2Extractor(featurizer, sample_rate, device),
-            "wav2vec2bert": lambda: Wav2Vec2BertExtractor(
-                featurizer or "facebook/w2v-bert-2.0", sample_rate, device),
             "delta_mfcc": lambda: DeltaExtractor(MfccExtractor(sr=sample_rate, n_mfcc=n_feat)),
             "delta_filterbank": lambda: DeltaExtractor(
                 FilterbankExtractor(sr=sample_rate, n_mels=n_feat)),

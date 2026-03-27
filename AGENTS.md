@@ -204,13 +204,24 @@ This is a core design constraint. Production inference uses only `onnxruntime` +
 - **Test export before merging**: run `extractor.export_to_onnx("test.onnx")` and
   `onnx.checker.check_model(onnx.load("test.onnx"))` as part of any new component PR.
 
-### Accepted exceptions (large SSL models)
+### Large SSL models (HuBERT, Wav2Vec2, Wav2Vec2-BERT)
 
-`HubertExtractor`, `Wav2Vec2Extractor`, `Wav2Vec2BertExtractor`, `TorchAudioHubertExtractor`
-raise `NotImplementedError` on `export_to_onnx()` by design — these are training-only
-wrappers. Their ONNX equivalents are obtained via `optimum-cli` and loaded as
-`OnnxFeatureExtractor`. This exception applies **only** to models ≥ 90 M params that
-have a documented `optimum` export path.
+These extractors are **not available as training-time wrappers** — they have been
+removed from `ww_trainer/feats.py` because their PyTorch paths diverge from the
+ONNX inference path, breaking feature parity.
+
+**Workflow**: export once with `optimum`, then use `OnnxFeatureExtractor` for both
+training and inference:
+
+```bash
+# Export first (one-time, requires GPU recommended)
+.venv/bin/python scripts/export_hubert.py --model voidful/hubert-tiny-v2 --output hubert-tiny-v2.onnx
+.venv/bin/python scripts/export_wav2vec2.py --model facebook/wav2vec2-base --output wav2vec2-base.onnx
+.venv/bin/python scripts/export_w2vbert.py --model facebook/w2v-bert-2.0 --output w2v-bert-2.0.onnx
+```
+
+Then pass `featurizer_type="onnx"` and `featurizer="<path>.onnx"` to the trainer.
+Pre-exported variants: https://huggingface.co/TigreGotico/onnx-feature-extractors
 
 ### Components dropped for ONNX violation
 

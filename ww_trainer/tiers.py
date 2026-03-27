@@ -12,7 +12,7 @@ from typing import Optional
 class TierConfig:
     """Full configuration for one hardware tier."""
     name: str
-    extractor_type: str          # "mfcc" | "onnx" | "hubert" | "wav2vec2"
+    extractor_type: str          # "mfcc" | "onnx" | "filterbank" | "sincnet" | "gammatone" | "leaf" | etc.
     head_arch: str               # "ffn" | "gru" | "cnn"
     hidden_dim: int
     n_mfcc: int = 40             # only used when extractor_type == "mfcc"
@@ -46,27 +46,27 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         approx_params="~200K",
         target_hardware="RPi, small SBC",
     ),
-    "medium": TierConfig(
-        name="medium",
+    "ssl_small": TierConfig(
+        name="ssl_small",
         extractor_type="onnx",
         head_arch="ffn",
         hidden_dim=128,
-        description="HuBERT-ONNX extractor + FFN — high accuracy",
-        approx_params="~90M feat + 200K head",
-        target_hardware="RPi 4, laptop",
+        description="Pre-exported SSL ONNX featurizer + FFN — use with OnnxFeatureExtractor",
+        approx_params="depends on featurizer + ~200K head",
+        target_hardware="x86 / GPU server",
     ),
-    "large": TierConfig(
-        name="large",
-        extractor_type="hubert",
+    "ssl_medium": TierConfig(
+        name="ssl_medium",
+        extractor_type="onnx",
         head_arch="gru",
         hidden_dim=256,
-        bidirectional=True,
+        bidirectional=False,
         gru_n_layers=2,
-        description="HuBERT encoder + bidirectional GRU — best accuracy",
-        approx_params="~300M feat + 1M head",
-        target_hardware="Server / workstation",
+        description="Pre-exported SSL ONNX featurizer + GRU — use with OnnxFeatureExtractor",
+        approx_params="depends on featurizer + ~1M head",
+        target_hardware="GPU server",
     ),
-    "sincnet_small": TierConfig(
+"sincnet_small": TierConfig(
         name="sincnet_small",
         extractor_type="sincnet",
         head_arch="gru",

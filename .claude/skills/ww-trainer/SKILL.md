@@ -21,7 +21,7 @@ pip install "ww_trainer[datagen,mlflow,vc-onnx,sweep,viz]" # full research stack
 
 Every trained model exports two files. Both are required for inference:
 - `*_featurizer.onnx` — feature extractor (MFCC, FilterBank, SincNet, …)
-- `*.onnx` — classifier head (GRU, FFN, EfficientNet, Mamba, …)
+- `*.onnx` — classifier head (GRU, FFN, EfficientNet, …)
 
 ```python
 from ww_trainer.inference import OnnxWakeWordInferencer
@@ -68,7 +68,7 @@ ww_trainer-train \
   --output-dir ./model
 ```
 
-Key flags: `--arch` (gru/ffn/cnn/bcresnet/tcresnet/dscnn/matchboxnet/res15/kwt/conformer/crnn/efficientnet/mamba), `--loss-type` (bce/focal/arcface/supcon/ntxent/rppl/triplet), `--device` (auto/cpu/cuda), `--calibrate`, `--use-vad`, `--export-c` (ESP32 C header).
+Key flags: `--arch` (gru/ffn/cnn/bcresnet/tcresnet/dscnn/matchboxnet/res15/kwt/conformer/crnn/efficientnet), `--loss-type` (bce/focal/arcface/supcon/ntxent/rppl/triplet), `--device` (auto/cpu/cuda), `--calibrate`, `--use-vad`, `--export-c` (ESP32 C header).
 
 ### ww_trainer-datagen
 ```bash
@@ -184,10 +184,18 @@ Pass `tier=` to quickstart/train. Controls both extractor and head architecture.
 | `gammatone_small` | Gammatone + GRU | ~200 K | Embedded SBC |
 | `sincnet_small` | SincNet + GRU | ~300 K | Low-power x86 |
 | `efficientnet_small` | FilterBank + EfficientNet-B0 | ~4 M | RPi 4 / x86 |
-| `medium` | HuBERT-ONNX + FFN | ~90 M feat | RPi 4 / laptop |
-| `large` | HuBERT + bidir GRU | ~300 M feat | GPU server |
+| `ssl_small` | ONNX featurizer + FFN | ~200 K head | x86 / GPU server |
+| `ssl_medium` | ONNX featurizer + GRU | ~1 M head | GPU server |
 
-**CPU-safe** (no GPU required): all tiers except `medium` and `large`.
+**CPU-safe** (no GPU required): all tiers except `ssl_small` and `ssl_medium` (which
+depend on the loaded ONNX featurizer size).
+
+**SSL tiers** require a pre-exported featurizer ONNX. Export once, then use for both training and inference:
+```bash
+.venv/bin/python scripts/export_hubert.py --model voidful/hubert-tiny-v2 --output hubert-tiny-v2.onnx
+# then: --tier ssl_small --featurizer-type onnx --featurizer hubert-tiny-v2.onnx
+```
+Pre-exported variants: https://huggingface.co/TigreGotico/onnx-feature-extractors
 
 ---
 
@@ -213,6 +221,6 @@ Combine: `losses_cfg=[{"name": "bce", "weight": 0.5}, {"name": "arcface", "weigh
 - **Two ONNX files required** — featurizer path first, head path second. One arg → `TypeError`.
 - **16 kHz mono float32** — resample before `infer()`.
 - **`reuse_dataset=True`** — always set on re-runs; TTS synthesis is slow.
-- **`medium`/`large` tiers need GPU** — HuBERT is impractical on CPU.
+- **`ssl_small`/`ssl_medium` tiers**: must export featurizer ONNX first (`scripts/export_hubert.py` etc.) — HuBERT/Wav2Vec2 training wrappers were removed; use `OnnxFeatureExtractor` for training too (guarantees feature parity with inference).
 - **`efficientnet` head needs `torchvision`**: `pip install torchvision`.
 - **`trust_remote_code` removed in datasets ≥ 3.x** — do not pass to `load_dataset`.
