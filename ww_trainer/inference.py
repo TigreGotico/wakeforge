@@ -274,3 +274,57 @@ class OnnxWakeWordInferencer:
         if smoother is not None:
             prob = smoother.update(prob)
         return prob, cache
+
+
+def cli_main() -> None:
+    """CLI entry point for ``ww_trainer-infer``.
+
+    Run a trained ONNX wake-word model on an audio file and print the
+    confidence score.
+    """
+    import argparse
+    import logging
+    import sys
+
+    import numpy as np
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(
+        prog="ww_trainer-infer",
+        description="Score an audio file with a trained ONNX wake-word model.",
+    )
+    parser.add_argument("--featurizer", required=True, help="Path to featurizer ONNX file.")
+    parser.add_argument("--model", required=True, help="Path to head ONNX file.")
+    parser.add_argument("--audio", required=True, help="Path to WAV file (16 kHz mono float32).")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold (default 0.5).")
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    args = parser.parse_args()
+
+    try:
+        import soundfile as sf
+    except ImportError:
+        try:
+            import torchaudio
+            wav, sr = torchaudio.load(args.audio)
+            if sr != 16000:
+                import torchaudio.functional as F_ta
+                wav = F_ta.resample(wav, sr, 16000)
+            audio = wav.squeeze().numpy().astype(np.float32)
+        except ImportError:
+            print("Install soundfile or torchaudio to load audio files.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        audio, sr = sf.read(args.audio, dtype="float32", always_2d=False)
+        if sr != 16000:
+            print(f"Warning: sample rate is {sr} Hz, expected 16000.", file=sys.stderr)
+
+    model = OnnxWakeWordInferencer(args.featurizer, args.model, device=args.device)
+    score = model.infer(audio)
+    detected = score >= args.threshold
+    print(f"score={score:.4f}  threshold={args.threshold}  detected={detected}")
+    sys.exit(0 if detected else 1)
+
+
+if __name__ == "__main__":
+    cli_main()

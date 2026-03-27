@@ -3,41 +3,25 @@ name: ww-trainer
 description: "Train, evaluate, and export wake-word detection models using the ww-trainer toolkit (pip: ww_trainer). Covers dataset generation, single-run training, genetic HP search, multi-tier experiments, ONNX export, and live inference testing."
 ---
 
-You have access to the `ww_trainer` Python package. It may be installed as a pip package or available as a local git clone. Check availability with:
-
+Check availability:
 ```bash
 python -c "import ww_trainer; print(ww_trainer.__version__)"
 ```
 
-If not installed, install it:
-
+Install:
 ```bash
-# Minimal (training only)
-pip install ww_trainer
-
-# With dataset generation (TTS + VAD)
-pip install "ww_trainer[datagen]"
-
-# With MLflow tracking
-pip install "ww_trainer[mlflow]"
-
-# With voice conversion (CPU)
-pip install "ww_trainer[vc-onnx]"
-
-# With hyperparameter search
-pip install "ww_trainer[sweep]"
-
-# Full research stack
-pip install "ww_trainer[datagen,mlflow,vc-onnx,sweep,viz]"
+pip install ww_trainer                                      # minimal
+pip install "ww_trainer[datagen]"                          # +TTS dataset generation
+pip install "ww_trainer[datagen,mlflow,vc-onnx,sweep,viz]" # full research stack
 ```
 
 ---
 
-## Core Concepts
+## Core concept — two ONNX files always required
 
-**Every model produces two ONNX files — both required for inference:**
-- `<name>_featurizer.onnx` — feature extractor (MFCC, SincNet, FilterBank, …)
-- `<name>.onnx` — classifier head (GRU, FFN, CNN, …)
+Every trained model exports two files. Both are required for inference:
+- `*_featurizer.onnx` — feature extractor (MFCC, FilterBank, SincNet, …)
+- `*.onnx` — classifier head (GRU, FFN, EfficientNet, Mamba, …)
 
 ```python
 from ww_trainer.inference import OnnxWakeWordInferencer
@@ -47,231 +31,190 @@ score = model.infer(wav_float32_array)  # float in [0, 1]
 
 ---
 
-## 1. Zero-to-ONNX (quickstart)
+## CLI entry points
 
-The fastest path from a wake-word string to a deployable ONNX model:
+All installed by `pip install ww_trainer`:
 
-```python
-from ww_trainer.quickstart import train_from_wakeword
+| Command | Purpose |
+|---------|---------|
+| `ww_trainer-quickstart` | Full pipeline: datagen → train → ONNX export |
+| `ww_trainer-train` | Train on an existing CSV dataset |
+| `ww_trainer-datagen` | Generate a dataset only (no training) |
+| `ww_trainer-infer` | Score a WAV file with a trained ONNX model |
+| `ww_trainer-benchmark` | Latency/RTF benchmark across tiers |
 
-result = train_from_wakeword(
-    "hey jarvis",          # wake-word phrase
-    "./hey_jarvis",        # output directory
-    tier="small",          # hardware tier (see §Tiers)
-    epochs=50,
-    device="auto",         # "auto" picks cuda > mps > cpu
-    n_positive=500,        # TTS samples to synthesise
-    lang="en",             # BCP-47 language code
-    download_augmentation=True,  # download bg-noise/music/RIR from HF
-    reuse_dataset=True,    # skip datagen if dataset already exists
-)
-
-print(result.best_onnx_path)   # path to head ONNX
-print(result.metrics)          # {"f1": ..., "precision": ..., "recall": ...}
+### ww_trainer-quickstart (most common)
+```bash
+ww_trainer-quickstart \
+  --wake-word "hey jarvis" \
+  --output-dir ./hey_jarvis \
+  --tier small \
+  --epochs 50 \
+  --n-positive 1000 \
+  --reuse-dataset          # skip datagen if dataset exists
 ```
 
-`train_from_wakeword` handles everything: dataset download/synthesis → training → ONNX export. It is safe to re-run — if the dataset already exists it is reused.
-
-**CLI equivalent:**
+### ww_trainer-train (BYO dataset)
 ```bash
-ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis --tier small --epochs 50
+ww_trainer-train \
+  --wake-word "hey jarvis" \
+  --metadata dataset/train.csv \
+  --test-metadata dataset/test.csv \
+  --tier small \
+  --epochs 50 \
+  --arch gru \
+  --loss-type focal \
+  --export-onnx \
+  --output-dir ./model
+```
+
+Key flags: `--arch` (gru/ffn/cnn/bcresnet/tcresnet/dscnn/matchboxnet/res15/kwt/conformer/crnn/efficientnet/mamba), `--loss-type` (bce/focal/arcface/supcon/ntxent/rppl/triplet), `--device` (auto/cpu/cuda), `--calibrate`, `--use-vad`, `--export-c` (ESP32 C header).
+
+### ww_trainer-datagen
+```bash
+ww_trainer-datagen \
+  --wake-word "hey jarvis" \
+  --output-dir ./dataset \
+  --n-positive 1000 \
+  --lang en \
+  --vc-refs ./donor_voices/   # optional voice conversion positives
+```
+
+### ww_trainer-infer
+```bash
+ww_trainer-infer \
+  --featurizer model/best_f1_featurizer.onnx \
+  --model      model/best_f1.onnx \
+  --audio      sample.wav \
+  --threshold  0.5
+# exits 0 if detected, 1 if not
+```
+
+### ww_trainer-benchmark
+```bash
+ww_trainer-benchmark --tiers micro small filterbank_small --device cpu
 ```
 
 ---
 
-## 2. Dataset generation only
+## Python API
 
+### 1. Zero-to-ONNX
+```python
+from ww_trainer.quickstart import train_from_wakeword
+
+result = train_from_wakeword(
+    "hey jarvis",
+    "./hey_jarvis",
+    tier="small",
+    epochs=50,
+    n_positive=1000,
+    lang="en",
+    reuse_dataset=True,    # skip datagen if dataset exists
+    device="auto",
+)
+print(result.best_onnx_path)  # path to head ONNX
+print(result.metrics)         # {"f1": ..., "precision": ..., "recall": ...}
+```
+
+### 2. Dataset generation only
 ```python
 from ww_trainer.datagen import DatagenConfig, run_datagen_pipeline
 
 result = run_datagen_pipeline(DatagenConfig(
     wake_word="hey jarvis",
     output_dir="./dataset",
-    n_positive=500,
+    n_positive=1000,
     lang="en",
-    adversarial=True,           # add phonetically-similar hard negatives
-    vad_trim=True,              # strip silence with Silero VAD
-    download_augmentation=True, # bg-noise, music, RIR from HF
-    seed=42,
+    adversarial=True,           # phonetically-similar hard negatives
+    vad_trim=True,
+    download_augmentation=True, # bg-noise/music/RIR from HF
 ))
-
-# result.train_csv, result.test_csv  — metadata CSVs
-# result.bg_noise_dir, result.music_dir, result.rir_dir  — augmentation dirs
+# result.train_csv, result.test_csv, result.bg_noise_dir
 ```
 
-Known wake words with pre-built HF datasets (downloaded instead of synthesised):
+Pre-built HF datasets (skips TTS synthesis):
 `alexa`, `hey_mycroft`, `hey_siri`, `wake_up`, `hey_computer`, `voice_assistant`, `home_assistant`
 
----
-
-## 3. Hardware tiers
-
-Pick based on target deployment. Tiers control both the feature extractor and classifier architecture.
-
-| Tier | Extractor | Params | Target |
-|------|-----------|--------|--------|
-| `esp32_nano` | MFCC-13 | ~5 K | ESP32 / ATmega |
-| `esp32_sweet` | MFCC-20 | ~15 K | ESP32 with more flash |
-| `esp32_max` | MFCC-26 | ~30 K | ESP32-S3 |
-| `micro` | MFCC-20 | ~50 K | RPi Zero / MCU |
-| `delta_micro` | MFCC+Δ+ΔΔ | ~75 K | MCU with more flash |
-| `small` | MFCC-40 | ~200 K | RPi 3/4 |
-| `filterbank_small` | FilterBank | ~250 K | Embedded SBC |
-| `gammatone_small` | Gammatone | ~250 K | Embedded SBC |
-| `sincnet_small` | SincNet | ~350 K | Low-power x86 |
-| `hubert_small` | HuBERT (frozen) | ~100 M | GPU server |
-| `hubert_medium` | HuBERT (frozen) | ~300 M | GPU server |
-
-**CPU-safe tiers** (no GPU required): `esp32_*`, `micro`, `delta_micro`, `small`, `filterbank_small`, `gammatone_small`, `sincnet_small`
-
----
-
-## 4. Genetic hyperparameter search
-
-When a single training run isn't enough — searches over lr, batch_size, hidden_dim, and optionally featurizer/arch/loss:
-
-```python
-from ww_trainer.sweep import run_genetic_search, run_two_stage_genetic_search
-
-# Single-stage
-results = run_genetic_search(
-    "dataset/train/metadata.csv",
-    population_size=20,
-    generations=10,
-    fitness_fn="exp_f1",   # "f1" | "exp_f1" | "double_exp_f1"
-    n_demes=2,             # parallel island populations
-    target_f1=0.90,        # early stop when reached
-)
-
-# Two-stage (broad coarse → fine-tune)
-results = run_two_stage_genetic_search(
-    "dataset/train/metadata.csv",
-    population_size=20, generations=10,
-    stage2_population=10, stage2_generations=5,
-)
-
-print(results["best_config"], results["best_score"])
-```
-
----
-
-## 5. Multi-tier experiment grid
-
-Compare tiers, losses, and augmentation levels systematically — each cell writes a JSON result and is resumable:
-
-```python
-import json
-from pathlib import Path
-from ww_trainer.quickstart import train_from_wakeword
-
-results = []
-for tier in ["micro", "small", "filterbank_small"]:
-    for loss in ["bce", "focal", "rppl"]:
-        result_file = Path(f"results/{tier}_{loss}.json")
-        if result_file.exists():
-            results.append(json.loads(result_file.read_text()))
-            continue
-        r = train_from_wakeword(
-            "hey jarvis", f"./models/{tier}_{loss}",
-            tier=tier, epochs=30,
-            losses_cfg=[{"name": loss, "weight": 1.0}],
-            reuse_dataset=True,
-        )
-        row = {"tier": tier, "loss": loss, **r.metrics}
-        result_file.parent.mkdir(parents=True, exist_ok=True)
-        result_file.write_text(json.dumps(row))
-        results.append(row)
-```
-
----
-
-## 6. Loss functions
-
-| Name | When to use |
-|------|-------------|
-| `bce` | Default baseline |
-| `focal` | Class-imbalanced datasets |
-| `arcface` | Metric-learning style; improves with large NWW pools |
-| `supcon` | Supervised contrastive; good positive diversity helps |
-| `ntxent` | NT-Xent contrastive |
-| `rppl` | RPPL — best for large NWW pools + hard-negative mining |
-| `triplet` | Triplet margin loss |
-| `size_aware` | ESP32 targets — penalises model size |
-
-Configure in trainer:
-```python
-losses_cfg=[{"name": "focal", "weight": 1.0}]
-# or combine:
-losses_cfg=[{"name": "bce", "weight": 0.5}, {"name": "arcface", "weight": 0.5}]
-```
-
----
-
-## 7. Inference
-
+### 3. Inference
 ```python
 from ww_trainer.inference import OnnxWakeWordInferencer
 import numpy as np
 
 model = OnnxWakeWordInferencer("featurizer.onnx", "head.onnx")
+wav = np.zeros(16000, dtype=np.float32)
+score = model.infer(wav)              # float [0,1]
 
-# Single clip
-wav = np.zeros(16000, dtype=np.float32)  # 1 s of silence at 16 kHz
-score = model.infer(wav)                 # float in [0, 1]
-
-# Streaming (chunk by chunk)
+# Streaming
 for chunk in audio_stream:
-    score = model.infer_stream(chunk)
+    score, cache = model.infer_streaming(chunk, cache)
     if score > 0.5:
-        print("Wake word detected!")
+        print("detected")
 ```
 
----
-
-## 8. Evaluation
-
+### 4. Genetic hyperparameter search
 ```python
-from ww_trainer.evaluation import compute_fitness_score, compute_readiness
+from ww_trainer.sweep import run_genetic_search, run_two_stage_genetic_search
 
-fitness = compute_fitness_score(model, test_data)   # F1, EER, AUC
-readiness = compute_readiness(model, test_data)     # pass/fail deployment check
-```
-
-Key metrics: `f1`, `precision`, `recall`, `eer` (Equal Error Rate), `auc`, `far` (False Accept Rate per hour).
-
----
-
-## 9. ONNX export (manual)
-
-```python
-from ww_trainer.trainer import WakeWordTrainer
-
-trainer = WakeWordTrainer(arch="gru", featurizer_type="mfcc", ...)
-trainer.train(output_dir="./model", train_data=..., test_data=..., epochs=50)
-
-# Export featurizer separately (always required for inference)
-trainer.model.load_checkpoint("./model/best_f1.pt")
-trainer.model.feature_extractor.export_to_onnx("./model/best_f1_featurizer.onnx")
+results = run_genetic_search(
+    "dataset/train.csv",
+    population_size=20, generations=10,
+    fitness_fn="exp_f1",  # "f1" | "exp_f1" | "double_exp_f1"
+    n_demes=2,
+    target_f1=0.90,
+)
+print(results["best_config"], results["best_score"])
 ```
 
 ---
 
-## 10. Notebooks (if repo cloned)
+## Hardware tiers
 
-| Notebook | Purpose |
-|----------|---------|
-| `notebooks/kaggle_quickstart.ipynb` | Zero-to-ONNX, Kaggle/Colab-ready |
-| `notebooks/kaggle_experiments.ipynb` | Resumable experiment grid with plots |
-| `notebooks/kaggle_infinite.ipynb` | Infinite training: smoke test, full run, VC synthesis, pool ablation |
-| `notebooks/genetic_search.ipynb` | Genetic HP search + multi-tier benchmark |
-| `notebooks/distill.ipynb` | HuBERT → TinyHuBERT distillation |
+Pass `tier=` to quickstart/train. Controls both extractor and head architecture.
+
+| Tier | Extractor | Approx params | Target |
+|------|-----------|---------------|--------|
+| `esp32_nano` | MFCC-13 + FFN-16 | ~241 | ESP32 / ATmega |
+| `esp32_sweet` | MFCC-13 + FFN-64 | ~1 K | ESP32 |
+| `esp32_max` | MFCC-13 + FFN-128 | ~2 K | ESP32-S3 |
+| `micro` | MFCC-40 + FFN | ~50 K | RPi Zero / MCU |
+| `delta_micro` | MFCC-13 Δ+ΔΔ + FFN | ~55 K | MCU |
+| `small` | MFCC-40 + GRU | ~200 K | RPi 3/4 |
+| `filterbank_small` | FilterBank + GRU | ~200 K | Embedded SBC |
+| `gammatone_small` | Gammatone + GRU | ~200 K | Embedded SBC |
+| `sincnet_small` | SincNet + GRU | ~300 K | Low-power x86 |
+| `efficientnet_small` | FilterBank + EfficientNet-B0 | ~4 M | RPi 4 / x86 |
+| `mamba_small` | MFCC-40 + Mamba SSM | ~500 K | RPi 4 / x86 |
+| `medium` | HuBERT-ONNX + FFN | ~90 M feat | RPi 4 / laptop |
+| `large` | HuBERT + bidir GRU | ~300 M feat | GPU server |
+
+**CPU-safe** (no GPU required): all tiers except `medium` and `large`.
 
 ---
 
-## Common pitfalls
+## Loss functions
 
-- **Two ONNX files required**: `OnnxWakeWordInferencer` takes two positional args — featurizer path first, then head path. Passing one raises `TypeError`.
-- **16 kHz mono float32**: all audio must be resampled to 16 000 Hz, mono, float32 before calling `infer()`.
-- **HuBERT / Wav2Vec2 tiers need GPU**: `hubert_small` / `hubert_medium` are impractical on CPU.
-- **`reuse_dataset=True`**: always set this when re-running training; datagen re-synthesis is slow.
-- **`trust_remote_code` removed in datasets ≥ 3.x**: do not pass it to `load_dataset`.
+| Name | When to use |
+|------|-------------|
+| `bce` | Default baseline |
+| `focal` | Class-imbalanced datasets |
+| `arcface` | Metric learning; large NWW pools |
+| `supcon` | Supervised contrastive |
+| `ntxent` | NT-Xent contrastive |
+| `rppl` | Best for large NWW pools + hard-negative mining |
+| `triplet` | Triplet margin |
+| `size_aware` | ESP32 — penalises model size |
+
+Combine: `losses_cfg=[{"name": "bce", "weight": 0.5}, {"name": "arcface", "weight": 0.5}]`
+
+---
+
+## Pitfalls
+
+- **Two ONNX files required** — featurizer path first, head path second. One arg → `TypeError`.
+- **16 kHz mono float32** — resample before `infer()`.
+- **`reuse_dataset=True`** — always set on re-runs; TTS synthesis is slow.
+- **`medium`/`large` tiers need GPU** — HuBERT is impractical on CPU.
+- **`mamba` head needs `mamba-ssm`** (GPU) or `mamba2-minimal` (CPU): `pip install mamba-ssm`.
+- **`efficientnet` head needs `torchvision`**: `pip install torchvision`.
+- **`trust_remote_code` removed in datasets ≥ 3.x** — do not pass to `load_dataset`.
