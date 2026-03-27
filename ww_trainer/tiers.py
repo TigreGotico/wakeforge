@@ -112,16 +112,7 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         approx_params="~4M",
         target_hardware="RPi 4 / x86 laptop",
     ),
-    "mamba_small": TierConfig(
-        name="mamba_small",
-        extractor_type="mfcc",
-        head_arch="mamba",
-        hidden_dim=128,
-        description="MFCC + Mamba SSM — causal streaming, O(T) compute",
-        approx_params="~500K",
-        target_hardware="RPi 4 / x86 (GPU for training)",
-    ),
-    # --- ESP32 tiers (520 KB RAM, 4 MB flash) ---
+# --- ESP32 tiers (520 KB RAM, 4 MB flash) ---
     "esp32_nano": TierConfig(
         name="esp32_nano",
         extractor_type="mfcc",

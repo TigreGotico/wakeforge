@@ -187,6 +187,37 @@ trainer = WakeWordTrainer(
 
 ---
 
+## ONNX-Exportability — Hard Requirement
+
+**Every feature extractor and classifier head added to ww-trainer MUST export cleanly
+via `export_to_onnx()` using only standard ONNX ops (opset 18).**
+
+This is a core design constraint. Production inference uses only `onnxruntime` + `numpy`
+— no PyTorch, no custom CUDA kernels, no HuggingFace transformers at runtime.
+
+### What this means when adding new components
+
+- **No custom CUDA kernels** — rules out `mamba-ssm`, any torch extension with `.cu` ops.
+- **No non-traceable control flow** — avoid Python loops over dynamic lengths in `forward()`;
+  use `torch.stft` (not `torchaudio.compliance.kaldi`), buffer-registered filterbanks, etc.
+- **No in-place ops on inputs** — ONNX tracer cannot handle aliased mutation.
+- **Test export before merging**: run `extractor.export_to_onnx("test.onnx")` and
+  `onnx.checker.check_model(onnx.load("test.onnx"))` as part of any new component PR.
+
+### Accepted exceptions (large SSL models)
+
+`HubertExtractor`, `Wav2Vec2Extractor`, `Wav2Vec2BertExtractor`, `TorchAudioHubertExtractor`
+raise `NotImplementedError` on `export_to_onnx()` by design — these are training-only
+wrappers. Their ONNX equivalents are obtained via `optimum-cli` and loaded as
+`OnnxFeatureExtractor`. This exception applies **only** to models ≥ 90 M params that
+have a documented `optimum` export path.
+
+### Components dropped for ONNX violation
+
+- `MambaHead` — removed; `mamba-ssm` CUDA kernels not ONNX-registerable.
+
+---
+
 ## Safe Extractor / Tier Choices
 
 | Extractor | RAM at load | Safe locally? |

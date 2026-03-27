@@ -44,7 +44,7 @@ from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
     TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
     KWTHead, ConformerHead, CRNNHead, MixConvHead,
-    EfficientNetHead, MambaHead,
+    EfficientNetHead,
     BaseWakeModel,
 )
 
@@ -80,7 +80,6 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
     "efficientnet": (EfficientNetHead, {"dropout"}),
-    "mamba": (MambaHead, {"d_model", "n_layers", "dropout"}),
 }
 
 

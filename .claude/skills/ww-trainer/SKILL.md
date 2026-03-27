@@ -184,7 +184,6 @@ Pass `tier=` to quickstart/train. Controls both extractor and head architecture.
 | `gammatone_small` | Gammatone + GRU | ~200 K | Embedded SBC |
 | `sincnet_small` | SincNet + GRU | ~300 K | Low-power x86 |
 | `efficientnet_small` | FilterBank + EfficientNet-B0 | ~4 M | RPi 4 / x86 |
-| `mamba_small` | MFCC-40 + Mamba SSM | ~500 K | RPi 4 / x86 |
 | `medium` | HuBERT-ONNX + FFN | ~90 M feat | RPi 4 / laptop |
 | `large` | HuBERT + bidir GRU | ~300 M feat | GPU server |
 
@@ -215,6 +214,5 @@ Combine: `losses_cfg=[{"name": "bce", "weight": 0.5}, {"name": "arcface", "weigh
 - **16 kHz mono float32** — resample before `infer()`.
 - **`reuse_dataset=True`** — always set on re-runs; TTS synthesis is slow.
 - **`medium`/`large` tiers need GPU** — HuBERT is impractical on CPU.
-- **`mamba` head needs `mamba-ssm`** (GPU) or `mamba2-minimal` (CPU): `pip install mamba-ssm`.
 - **`efficientnet` head needs `torchvision`**: `pip install torchvision`.
 - **`trust_remote_code` removed in datasets ≥ 3.x** — do not pass to `load_dataset`.

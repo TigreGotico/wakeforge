@@ -30,18 +30,15 @@ the existing 1D `CnnClassifierHead` and the heavier transformer heads.
 
 ---
 
-### ~~Mamba / SSM-based head — `MambaHead(ClassifierHead)`~~ ✓ DONE
-**Priority: Medium** | Effort: High | Research interest: High
+### Mamba / SSM-based head — DROPPED (not ONNX-exportable)
+**Status: Will not implement until ONNX export is viable**
 
-State Space Models (Mamba, S4) outperform GRU at similar parameter counts for
-streaming sequence modelling and have not been applied to wake-word detection in the
-literature. Genuinely novel contribution — whitepaper-worthy if paired with a
-benchmark vs. GRU/Conformer at matched params.
+`mamba-ssm` uses custom CUDA kernels not registered as ONNX ops.
+`mamba2-minimal` parallel scan uses control flow untraceable by torch.onnx.
+All ww-trainer heads must export cleanly via `export_to_onnx()`.
 
-- Add `MambaHead(ClassifierHead)` to `model.py`
-- Strictly causal (no future context) — required for streaming deployment
-- Dependency: `mamba-ssm` (CUDA) or `mamba2-minimal` (CPU-compatible reference impl)
-- Potential whitepaper angle: first systematic comparison of SSM vs. RNN/Transformer heads for on-device KWS
+Revisit if: (a) mamba-ssm adds official ONNX support, or (b) a pure-PyTorch
+ONNX-safe SSM implementation (e.g. Hawk/Griffin-style linear RNN) becomes available.
 
 ---
 

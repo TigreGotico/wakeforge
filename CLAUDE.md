@@ -97,6 +97,27 @@ trainer = WakeWordTrainer(
 Arrow cache lives in `~/.cache/huggingface/datasets/` (non-streaming mode).
 Streaming mode bypasses the Arrow cache — prefer non-streaming.
 
+## ONNX-Exportability — Core Requirement
+
+Every `BaseExtractor` and `ClassifierHead` **must** export cleanly via
+`export_to_onnx()` using standard ONNX opset 18. Production inference runs on
+`onnxruntime` + `numpy` only — no PyTorch at runtime.
+
+**Rules when adding components:**
+- No custom CUDA kernels (rules out `mamba-ssm` and similar)
+- No non-traceable control flow in `forward()` — use `torch.stft` + buffer-registered
+  filterbanks; never `torchaudio.compliance.kaldi` or `torchaudio.transforms` in forward
+- Test: `extractor.export_to_onnx("test.onnx")` + `onnx.checker.check_model(...)` must pass
+
+**Accepted exceptions** (training-only, export via `optimum`):
+`HubertExtractor`, `Wav2Vec2Extractor`, `Wav2Vec2BertExtractor`, `TorchAudioHubertExtractor`
+— these raise `NotImplementedError` on `export_to_onnx()` by design. Load their
+exported versions via `OnnxFeatureExtractor`.
+
+**Dropped for ONNX violation:** `MambaHead` (mamba-ssm CUDA kernels not ONNX-registerable).
+
+---
+
 ## Known Issues / Quirks
 
 - **datagen.py AudioDecoder (datasets ≥ 3.x):** `samples.data` is
