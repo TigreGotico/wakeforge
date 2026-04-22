@@ -67,6 +67,9 @@ class WakeWordTrainer:
         self.scaler = torch.amp.GradScaler(enabled=use_amp) if use_amp else None
         self.arch = arch
         self.training_params = model_kwargs
+        # Pass keyword so factory can store it on the model and text featurizers
+        # can use it for metadata; text_featurizer / text_emb_dim flow via model_kwargs
+        model_kwargs.setdefault("keyword", self.wake_word)
         self.model = self.create_model(
             arch, featurizer, feature_dim,
             featurizer_type=featurizer_type,

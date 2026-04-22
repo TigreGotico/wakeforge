@@ -113,16 +113,27 @@ class OnnxWakeWordInferencer:
 
     This class has no dependency on PyTorch. Only numpy and onnxruntime are required.
 
+    A text featurizer ONNX can optionally be supplied alongside the audio featurizer.
+    When present, :meth:`infer` accepts ``text_token_ids`` and appends the resulting
+    text embedding as extra feature channels before running the classifier head —
+    exactly the same pattern used for the optional VAD channel.
+
     Args:
-        extractor_path: Path to the feature extractor ONNX file.
+        extractor_path: Path to the audio feature extractor ONNX file.
         head_path: Path to the classifier head ONNX file.
         vad_path: Optional path to a VAD ONNX file (e.g. Silero VAD).
+        text_extractor_path: Optional path to a text-encoder ONNX file.
+            The ONNX must accept ``[1, seq_len]`` int64 token IDs and return
+            ``[1, 1, D]`` or ``[1, D]`` float32 embeddings.
+        text_emb_dim: Output embedding dimension of the text featurizer (``D``).
         sample_rate: Expected audio sample rate in Hz (default 16000).
-        device: "cpu", "cuda", or "auto" (selects CUDA if available).
+        device: ``"cpu"``, ``"cuda"``, or ``"auto"`` (selects CUDA if available).
     """
 
     def __init__(self, extractor_path: str, head_path: str,
-                 vad_path: str | None = None,
+                 vad_path: Optional[str] = None,
+                 text_extractor_path: Optional[str] = None,
+                 text_emb_dim: int = 128,
                  sample_rate: int = 16000, device: str = "auto") -> None:
         if device == "auto":
             available = ort.get_available_providers()
@@ -132,16 +143,33 @@ class OnnxWakeWordInferencer:
         self.extractor = ort.InferenceSession(extractor_path, providers=providers)
         self.head = ort.InferenceSession(head_path, providers=providers)
         self.vad = ort.InferenceSession(vad_path, providers=providers) if vad_path else None
+        self.text_ext = (
+            ort.InferenceSession(text_extractor_path, providers=providers)
+            if text_extractor_path else None
+        )
+        self._text_emb_dim = text_emb_dim
         self.sample_rate = sample_rate
 
         self._ext_input = self.extractor.get_inputs()[0].name
         self._ext_output = self.extractor.get_outputs()[0].name
         self._head_input = self.head.get_inputs()[0].name
         self._head_output = self.head.get_outputs()[0].name
-        
+
         if self.vad:
             self._vad_input = self.vad.get_inputs()[0].name
             self._vad_output = self.vad.get_outputs()[0].name
+        if self.text_ext:
+            self._text_input = self.text_ext.get_inputs()[0].name
+            self._text_output = self.text_ext.get_outputs()[0].name
+
+    def _run_text(self, token_ids: "list[int]", target_t: int) -> np.ndarray:
+        """Encode token IDs and expand to ``[1, target_t, D]``."""
+        ids = np.array([token_ids], dtype=np.int64)  # [1, seq_len]
+        out = self.text_ext.run([self._text_output], {self._text_input: ids})[0]
+        # out may be [1, 1, D] or [1, D]
+        if out.ndim == 2:
+            out = out[:, np.newaxis, :]   # [1, 1, D]
+        return np.repeat(out, target_t, axis=1)  # [1, target_t, D]
 
     def _run_vad(self, wav: np.ndarray, target_t: int) -> np.ndarray:
         """Run VAD and interpolate to match target time dimension."""
@@ -181,11 +209,15 @@ class OnnxWakeWordInferencer:
             
         return aligned
 
-    def infer(self, audio: np.ndarray) -> float:
+    def infer(self, audio: np.ndarray,
+              text_token_ids: "Optional[list[int]]" = None) -> float:
         """Infer wake word probability for a single audio waveform.
 
         Args:
-            audio: 1-D float32 numpy array at self.sample_rate.
+            audio: 1-D float32 numpy array at ``self.sample_rate``.
+            text_token_ids: Optional list of integer token IDs for the keyword.
+                Required when ``text_extractor_path`` was supplied at init.
+                The token scheme must match whatever the text-encoder ONNX expects.
 
         Returns:
             Sigmoid probability in [0, 1].
@@ -196,10 +228,14 @@ class OnnxWakeWordInferencer:
         feats = self.extractor.run(
             [self._ext_output], {self._ext_input: wav}
         )[0]  # [1, T, F]
-        
+
         if self.vad:
             vad_probs = self._run_vad(wav, feats.shape[1])
             feats = np.concatenate([feats, vad_probs], axis=-1)
+
+        if self.text_ext is not None and text_token_ids is not None:
+            text_feats = self._run_text(text_token_ids, feats.shape[1])
+            feats = np.concatenate([feats, text_feats], axis=-1)  # [1, T, F+D]
 
         logit = self.head.run(
             [self._head_output], {self._head_input: feats}
@@ -207,23 +243,31 @@ class OnnxWakeWordInferencer:
         logit_val = float(np.asarray(logit).ravel()[0])
         return float(1.0 / (1.0 + np.exp(-logit_val)))
 
-    def infer_batch(self, audio_batch: np.ndarray) -> np.ndarray:
+    def infer_batch(self, audio_batch: np.ndarray,
+                    text_token_ids: "Optional[list[int]]" = None) -> np.ndarray:
         """Infer for a batch of equal-length waveforms.
 
         Args:
-            audio_batch: float32 array of shape [B, T].
+            audio_batch: float32 array of shape ``[B, T]``.
+            text_token_ids: Optional token IDs shared across the batch.
 
         Returns:
-            Sigmoid probabilities array of shape [B].
+            Sigmoid probabilities array of shape ``[B]``.
         """
         if audio_batch.ndim != 2:
             raise ValueError("audio_batch must be a 2-D numpy array [B, T]")
         wav = audio_batch.astype(np.float32)
         feats = self.extractor.run([self._ext_output], {self._ext_input: wav})[0]
-        
+
         if self.vad:
             vad_probs = self._run_vad(wav, feats.shape[1])
             feats = np.concatenate([feats, vad_probs], axis=-1)
+
+        if self.text_ext is not None and text_token_ids is not None:
+            B = feats.shape[0]
+            text_feats = self._run_text(text_token_ids, feats.shape[1])  # [1, T, D]
+            text_feats = np.repeat(text_feats, B, axis=0)               # [B, T, D]
+            feats = np.concatenate([feats, text_feats], axis=-1)
 
         logits = self.head.run([self._head_output], {self._head_input: feats})[0]
         logits = np.asarray(logits).ravel()

@@ -91,7 +91,9 @@ class BaseWakeModel(nn.Module):
                  feature_extractor: BaseExtractor,
                  classifier: ClassifierHead,
                  sample_rate: int = 16000,
-                 device: str = "auto") -> None:
+                 device: str = "auto",
+                 text_extractor: Optional["OnnxTextExtractor"] = None,
+                 keyword: Optional[str] = None) -> None:
         super().__init__()
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -99,17 +101,39 @@ class BaseWakeModel(nn.Module):
         self.sample_rate = sample_rate
         self.feature_extractor = feature_extractor
         self.classifier = classifier
+        self.text_extractor = text_extractor  # Optional[OnnxTextExtractor]
+        self.keyword = keyword                # stored for metadata / export only
         self.to(self.device)
 
-    # --- abstract methods ---
+    def _apply_text_conditioning(self, feats: torch.Tensor, wavs: list) -> torch.Tensor:
+        """Append text embedding channels to audio features if text_extractor is set.
+
+        Args:
+            feats: Audio features ``[B, T, F]``.
+            wavs: Original wav list — used only for batch-size inference inside
+                  :class:`~ww_trainer.feats.OnnxTextExtractor`.
+
+        Returns:
+            ``[B, T, F]`` when no text extractor, ``[B, T, F+D]`` otherwise.
+        """
+        if self.text_extractor is None:
+            return feats
+        text_emb = self.text_extractor(wavs)                          # [B, 1, D]
+        text_emb = text_emb.to(feats.device)                          # align devices
+        text_emb = text_emb.expand(-1, feats.shape[1], -1)           # [B, T, D]
+        return torch.cat([feats, text_emb], dim=-1)                   # [B, T, F+D]
+
+    # --- forward / embed ---
     def forward(self, wavs: WavInput) -> torch.Tensor:
         wavs = ensure_wav_list(wavs)
         feats = self.feature_extractor(wavs)
+        feats = self._apply_text_conditioning(feats, wavs)
         return self.classifier.forward(feats)
 
     def embed(self, wavs: WavInput) -> torch.Tensor:
         wavs = ensure_wav_list(wavs)
         feats = self.feature_extractor(wavs)
+        feats = self._apply_text_conditioning(feats, wavs)
         return self.classifier.embed(feats)
 
     # --- convenience ---

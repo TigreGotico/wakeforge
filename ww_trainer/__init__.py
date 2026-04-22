@@ -24,6 +24,7 @@ from ww_trainer.feats import (
     SlidingFeatureCacheTensor,
     MarkovTransitionExtractor,
     HMMStateExtractor,
+    OnnxTextExtractor,
 )
 
 # --- Classifier Heads ---
