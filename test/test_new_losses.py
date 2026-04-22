@@ -12,6 +12,7 @@ from ww_trainer.loss import (
     SupConLoss,
     ProxyNCALoss,
     MultiSimilarityLoss,
+    HALOLoss,
     LossManager,
 )
 
@@ -160,12 +161,61 @@ class TestMultiSimilarityLoss:
         assert embeds.grad is not None
 
 
+class TestHALOLoss:
+    """Tests for Hyperbolic Anchor Loss Optimization (HALO)."""
+
+    def test_output_scalar(self):
+        loss_fn = HALOLoss(emb_dims=64, num_classes=2)
+        embeds = torch.randn(8, 64)
+        targets = torch.randint(0, 2, (8,))
+        out = loss_fn(embeds, targets)
+        assert out.ndim == 0
+        assert out.item() > 0
+
+    def test_gradients_flow(self):
+        loss_fn = HALOLoss(emb_dims=32, num_classes=2)
+        embeds = torch.randn(4, 32, requires_grad=True)
+        targets = torch.tensor([0, 1, 0, 1])
+        out = loss_fn(embeds, targets)
+        out.backward()
+        assert embeds.grad is not None
+
+    def test_centroids_are_learnable(self):
+        loss_fn = HALOLoss(emb_dims=32, num_classes=2, learn_gamma=True)
+        params = list(loss_fn.parameters())
+        assert any(p.requires_grad for p in params)
+
+    def test_no_distill_mode(self):
+        loss_fn = HALOLoss(emb_dims=32, num_classes=2, distill=False)
+        embeds = torch.randn(4, 32)
+        targets = torch.tensor([0, 1, 0, 1])
+        out = loss_fn(embeds, targets)
+        assert out.item() > 0
+
+    def test_reduction_none(self):
+        loss_fn = HALOLoss(emb_dims=32, num_classes=2, reduction="none")
+        embeds = torch.randn(4, 32)
+        targets = torch.tensor([0, 1, 0, 1])
+        out = loss_fn(embeds, targets)
+        assert out.shape == (4,)
+
+    def test_binary_classification(self):
+        """K=2 (wake / non-wake) is the primary use case."""
+        loss_fn = HALOLoss(emb_dims=128, num_classes=2)
+        wake = torch.randn(4, 128)
+        non_wake = torch.randn(4, 128)
+        embeds = torch.cat([wake, non_wake])
+        targets = torch.cat([torch.ones(4, dtype=torch.long), torch.zeros(4, dtype=torch.long)])
+        out = loss_fn(embeds, targets)
+        assert torch.isfinite(out)
+
+
 class TestLossManagerNewLosses:
     """Test that new losses are properly registered in LossManager."""
 
     @pytest.mark.parametrize("name", [
         "focal", "label_smoothing_bce", "arcface", "center",
-        "ntxent", "supcon", "proxy_nca", "multi_similarity",
+        "ntxent", "supcon", "proxy_nca", "multi_similarity", "halo",
     ])
     def test_loss_manager_registers(self, name):
         cfg = {"name": name, "weight": 1.0, "embed_dim": 32}

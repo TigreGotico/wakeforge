@@ -863,6 +863,126 @@ class MultiSimilarityLoss(nn.Module):
         return loss
 
 
+class HALOLoss(nn.Module):
+    """Hyperbolic Anchor Loss Optimization (HALO).
+
+    Distance-based cross-entropy loss that replaces dot-product similarity with
+    squared Euclidean distance between embeddings and learnable class centroids.
+    Adds an origin "abstain" sink (K+1 class) and a geometric radial regularizer.
+
+    Compared to BCE, HALO yields better-calibrated probabilities and improved
+    out-of-distribution detection — useful for rejecting non-wake-word audio.
+
+    Reference: https://github.com/4rtemi5/halo — pisoni.ai/posts/halo/
+
+    Args:
+        emb_dims: Embedding dimension (must match ``model.embed()`` output).
+        num_classes: Number of classes (2 for binary wake-word detection).
+        learn_gamma: Whether temperature ``gamma`` is a learnable parameter.
+        distill: Use teacher-free self-distillation for soft targets.
+        label_smoothing: Soft-target spread (0 = hard labels).
+        reduction: ``"mean"`` or ``"none"``.
+    """
+
+    def __init__(
+        self,
+        emb_dims: int,
+        num_classes: int = 2,
+        learn_gamma: bool = True,
+        distill: bool = True,
+        label_smoothing: float = 0.1,
+        reduction: str = "mean",
+    ) -> None:
+        super().__init__()
+        self.D = emb_dims
+        self.K = num_classes
+        self.distill = distill
+        self.label_smoothing = label_smoothing
+        self.reduction = reduction
+
+        # Learnable class centroids [K, D]
+        self.centroids = nn.Parameter(torch.randn(num_classes, emb_dims))
+
+        # Learnable temperature (initialized analytically)
+        r_sq_init = 2.0
+        r_sq_target = 1.0 - (2.0 / emb_dims)
+        init_gamma = 20.0 / max(r_sq_init - r_sq_target, 1e-6)
+        raw_gamma = torch.log(torch.expm1(torch.tensor(init_gamma)))
+        if learn_gamma:
+            self.gamma_raw = nn.Parameter(raw_gamma)
+        else:
+            self.register_buffer("gamma_raw", raw_gamma)
+
+        # Fixed abstain-class bias (computed once from label_smoothing & K)
+        r_sq_target_val = float(r_sq_target)
+        if label_smoothing > 0:
+            max_prob = 1.0 - label_smoothing + label_smoothing / num_classes
+            min_prob = label_smoothing / num_classes
+        else:
+            max_prob, min_prob = 0.99, 0.01 / num_classes
+        margin_ce = float(torch.log(torch.tensor(max_prob / min_prob)))
+        t_ideal = init_gamma * (1.0 - r_sq_target_val)
+        self.register_buffer("abstain_bias", torch.tensor(t_ideal - margin_ce))
+
+    def forward(
+        self,
+        embeddings: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute HALO loss.
+
+        Args:
+            embeddings: ``[B, D]`` — output of ``model.embed()``, not normalized.
+            targets: ``[B]`` long tensor of class indices.
+
+        Returns:
+            Scalar loss (if ``reduction="mean"``) or ``[B]`` tensor.
+        """
+        B, D = embeddings.shape
+        gamma = F.softplus(self.gamma_raw)
+        c = self.centroids  # [K, D]
+
+        # Shifted logits: 2*(x·c)/D - ||c||²/D  (softmax-shift trick)
+        x_sq = embeddings.pow(2).mean(dim=-1, keepdim=True)       # [B, 1]
+        y_sq = c.pow(2).mean(dim=-1, keepdim=True)                # [K, 1]
+        dot = (embeddings @ c.T) / D                               # [B, K]
+        logits_k = gamma * (2.0 * dot - y_sq.T)                   # [B, K]
+
+        # Abstain class logit (origin sink, no parameters)
+        abstain = self.abstain_bias.expand(B, 1)                   # [B, 1]
+        logits_kp1 = torch.cat([logits_k, abstain], dim=1)        # [B, K+1]
+
+        # Soft target distillation
+        if self.distill and self.label_smoothing > 0:
+            logits_k_true = torch.clamp(logits_k - gamma * x_sq, max=0.0)
+            is_correct = torch.zeros(B, self.K, device=embeddings.device, dtype=torch.bool)
+            is_correct[torch.arange(B), targets] = True
+            margin = logits_k_true / max(self.label_smoothing, 1e-8)
+            target_logits = torch.where(is_correct, torch.zeros_like(margin), margin)
+            target_probs_k = F.softmax(target_logits, dim=-1)
+            # Append near-zero weight for abstain class
+            abstain_prob = torch.zeros(B, 1, device=embeddings.device)
+            target_probs = torch.cat([target_probs_k, abstain_prob], dim=1)
+            target_probs = target_probs / target_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            loss_ce = F.cross_entropy(logits_kp1, target_probs, reduction=self.reduction)
+        else:
+            loss_ce = F.cross_entropy(logits_kp1, targets, reduction=self.reduction)
+
+        # Geometric radial regularizer ("soap bubble" term)
+        c_true = c[targets]  # [B, D]
+        r_sq = (embeddings - c_true).pow(2).mean(dim=-1)  # [B]
+        r_sq = r_sq.clamp(min=1e-8)
+        volume_coeff = 0.5 - 1.0 / D
+        radial_nll = -(volume_coeff * torch.log(r_sq) - 0.5 * r_sq)
+
+        if self.reduction == "mean":
+            reg = radial_nll.mean()
+        else:
+            reg = radial_nll
+
+        return loss_ce + reg
+
+
 class SizeAwareLoss(nn.Module):
     """Wraps a base loss with L1 sparsity and parameter-count penalties.
 
@@ -1062,6 +1182,15 @@ class LossManager:
                     proto_ema_alpha=cfg.get("proto_ema_alpha", 0.05),
                     hard_div_threshold=cfg.get("hard_div_threshold", 0.1),
                     consistency_mode=cfg.get("consistency_mode", "proto"),
+                ).to(self.device)
+            elif name == "halo":
+                crit = HALOLoss(
+                    emb_dims=cfg.get("embed_dim", 128),
+                    num_classes=cfg.get("num_classes", 2),
+                    learn_gamma=cfg.get("learn_gamma", True),
+                    distill=cfg.get("distill", True),
+                    label_smoothing=cfg.get("label_smoothing", 0.1),
+                    reduction=cfg.get("reduction", "mean"),
                 ).to(self.device)
             elif name == "size_aware":
                 base = nn.BCEWithLogitsLoss().to(self.device)
@@ -1268,6 +1397,9 @@ class LossManager:
                         "Skipping %s — batch has no %s samples; no gradient this step.",
                         name, "positive" if not (labs == 1).any() else "negative",
                     )
+
+            elif name == "halo":
+                loss_val = crit(embeds, labels.to(self.device).view(-1))
 
             elif name == "size_aware":
                 # SizeAwareLoss needs the model reference
