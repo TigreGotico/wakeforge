@@ -112,6 +112,8 @@ class BaseWakeModel(nn.Module):
         self.classifier = classifier
         self.text_extractor = text_extractor  # Optional[OnnxTextExtractor]
         self.keyword = keyword                # stored for metadata / export only
+        # Cache inspect result — classifier is fixed after init
+        self._classifier_takes_phoneme_ids: bool = _accepts_phoneme_ids(classifier.forward)
         self.to(self.device)
 
     def _apply_text_conditioning(
@@ -159,7 +161,7 @@ class BaseWakeModel(nn.Module):
         feats = self.feature_extractor(wavs)
         feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
         # PhonMatchHead takes phoneme_ids directly; all other heads ignore the kwarg
-        if _accepts_phoneme_ids(self.classifier.forward):
+        if self._classifier_takes_phoneme_ids:
             return self.classifier.forward(feats, phoneme_ids=text_token_ids)
         return self.classifier.forward(feats)
 
@@ -177,7 +179,7 @@ class BaseWakeModel(nn.Module):
         wavs = ensure_wav_list(wavs)
         feats = self.feature_extractor(wavs)
         feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
-        if _accepts_phoneme_ids(self.classifier.forward):
+        if self._classifier_takes_phoneme_ids:
             return self.classifier.embed(feats, phoneme_ids=text_token_ids)
         return self.classifier.embed(feats)
 

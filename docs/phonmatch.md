@@ -177,7 +177,7 @@ score = model.infer(wav_array, text_token_ids=keyword_ids)
 **Fixed-keyword inference optimisation** — call `precompute()` once to cache the embedding:
 
 ```python
-model.text_ext.precompute(keyword_ids)
+model.text_extractor.precompute(keyword_ids)
 score = model.infer(wav_array)  # no text_token_ids needed after precompute
 ```
 

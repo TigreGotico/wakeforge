@@ -1422,13 +1422,15 @@ class LossManager:
                 # Robust Prototype and Diversity Loss
                 aug_embeds = None
                 if dataset_ref is not None and hasattr(dataset_ref, "get_augmented"):
-                    # Batch augmented forward pass — gradients flow (no no_grad wrapper)
-                    aug_wavs = [dataset_ref.get_augmented(w).to(self.device) for w in wavs]
-                    max_len = max(a.shape[-1] for a in aug_wavs)
-                    aug_padded = torch.stack(
-                        [F.pad(a.view(-1), (0, max_len - a.shape[-1])) for a in aug_wavs]
-                    )  # (B, T)
-                    aug_embeds = model.embed(aug_padded)  # gradients flow
+                    aug_embeds_list = []
+                    with torch.no_grad():
+                        for i, w in enumerate(wavs):
+                            aug_w = dataset_ref.get_augmented(w).to(self.device)
+                            kw = text_token_ids[i:i+1] if text_token_ids is not None else None
+                            emb = model.embed(aug_w.unsqueeze(0), text_token_ids=kw).squeeze(0)  # (D,)
+                            aug_embeds_list.append(emb)
+                    aug_embeds = torch.stack(aug_embeds_list, dim=0)
+                    aug_embeds = F.normalize(aug_embeds, p=2, dim=1)
 
                 loss_val = crit(logits, labels.view(-1), embeds, aug_embeds)
                 # Log RPPL sub-components
