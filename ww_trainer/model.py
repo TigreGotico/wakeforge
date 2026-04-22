@@ -1,4 +1,5 @@
 import abc
+import inspect
 import logging
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,14 @@ from ww_trainer.feats import WavInput, ensure_wav_list, BaseExtractor
 from ww_trainer.utils import embed_onnx_metadata
 
 logger = logging.getLogger(__name__)
+
+
+def _accepts_phoneme_ids(fn) -> bool:
+    """Return True if *fn* has a ``phoneme_ids`` parameter (duck-typing check)."""
+    try:
+        return "phoneme_ids" in inspect.signature(fn).parameters
+    except (ValueError, TypeError):
+        return False
 
 
 class ClassifierHead(torch.nn.Module):
@@ -105,35 +114,71 @@ class BaseWakeModel(nn.Module):
         self.keyword = keyword                # stored for metadata / export only
         self.to(self.device)
 
-    def _apply_text_conditioning(self, feats: torch.Tensor, wavs: list) -> torch.Tensor:
+    def _apply_text_conditioning(
+        self,
+        feats: torch.Tensor,
+        wavs: list,
+        text_token_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Append text embedding channels to audio features if text_extractor is set.
 
         Args:
             feats: Audio features ``[B, T, F]``.
-            wavs: Original wav list — used only for batch-size inference inside
-                  :class:`~ww_trainer.feats.OnnxTextExtractor`.
+            wavs: Original wav list — used only to determine ``B`` when
+                ``token_ids`` is ``None`` (inference with cached embedding).
+            text_token_ids: Optional ``[B, seq_len]`` int64 keyword phoneme IDs.
+                When provided, the ONNX encoder runs per-batch (training / zero-shot).
+                When ``None``, falls back to the cached embedding from
+                :meth:`~ww_trainer.feats.OnnxTextExtractor.precompute`.
 
         Returns:
             ``[B, T, F]`` when no text extractor, ``[B, T, F+D]`` otherwise.
         """
         if self.text_extractor is None:
             return feats
-        text_emb = self.text_extractor(wavs)                          # [B, 1, D]
-        text_emb = text_emb.to(feats.device)                          # align devices
-        text_emb = text_emb.expand(-1, feats.shape[1], -1)           # [B, T, D]
-        return torch.cat([feats, text_emb], dim=-1)                   # [B, T, F+D]
+        text_emb = self.text_extractor(wavs, token_ids=text_token_ids)  # [B, 1, D]
+        text_emb = text_emb.to(feats.device)                             # align devices
+        text_emb = text_emb.expand(-1, feats.shape[1], -1)              # [B, T, D]
+        return torch.cat([feats, text_emb], dim=-1)                      # [B, T, F+D]
 
     # --- forward / embed ---
-    def forward(self, wavs: WavInput) -> torch.Tensor:
+    def forward(self, wavs: WavInput,
+                text_token_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Run the full model: extract features, optionally condition on text, classify.
+
+        Args:
+            wavs: Audio input — list of 1-D tensors or a padded ``[B, T]`` tensor.
+            text_token_ids: Optional ``[B, seq_len]`` int64 phoneme IDs.
+                Pass per-batch keyword IDs during multi-keyword training; omit
+                for single-keyword inference (uses precomputed cache).
+
+        Returns:
+            ``[B]`` raw logits (pre-sigmoid).
+        """
         wavs = ensure_wav_list(wavs)
         feats = self.feature_extractor(wavs)
-        feats = self._apply_text_conditioning(feats, wavs)
+        feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
+        # PhonMatchHead takes phoneme_ids directly; all other heads ignore the kwarg
+        if _accepts_phoneme_ids(self.classifier.forward):
+            return self.classifier.forward(feats, phoneme_ids=text_token_ids)
         return self.classifier.forward(feats)
 
-    def embed(self, wavs: WavInput) -> torch.Tensor:
+    def embed(self, wavs: WavInput,
+              text_token_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Return embeddings for metric losses.
+
+        Args:
+            wavs: Audio input.
+            text_token_ids: Optional per-batch keyword phoneme IDs.
+
+        Returns:
+            ``[B, D]`` embeddings.
+        """
         wavs = ensure_wav_list(wavs)
         feats = self.feature_extractor(wavs)
-        feats = self._apply_text_conditioning(feats, wavs)
+        feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
+        if _accepts_phoneme_ids(self.classifier.forward):
+            return self.classifier.embed(feats, phoneme_ids=text_token_ids)
         return self.classifier.embed(feats)
 
     # --- convenience ---

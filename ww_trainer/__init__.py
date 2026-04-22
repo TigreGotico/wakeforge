@@ -75,9 +75,13 @@ from ww_trainer.tiers import HARDWARE_TIERS, TierConfig
 
 # --- PhonMatchNet text encoder + cross-attention head ---
 from ww_trainer.phonmatch import (
-    PHONEME_VOCAB,
+    IPA_VOCAB,
+    ARPABET_TO_IPA,
+    PHONEME_VOCAB,   # alias for IPA_VOCAB — backward compat
     VOCAB_SIZE,
-    phonemes_to_ids,
+    ipa_to_ids,
+    arpabet_to_ids,
+    phonemes_to_ids,  # alias for arpabet_to_ids — backward compat
     PhonMatchTextEncoder,
     PhonMatchHead,
 )

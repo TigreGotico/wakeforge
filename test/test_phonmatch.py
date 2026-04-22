@@ -1,13 +1,16 @@
 """Tests for PhonMatchNet concrete implementation (phonmatch.py)."""
-import tempfile
 from pathlib import Path
 
 import pytest
 import torch
 
 from ww_trainer.phonmatch import (
+    IPA_VOCAB,
+    ARPABET_TO_IPA,
     PHONEME_VOCAB,
     VOCAB_SIZE,
+    ipa_to_ids,
+    arpabet_to_ids,
     phonemes_to_ids,
     PhonMatchTextEncoder,
     PhonMatchHead,
@@ -20,23 +23,42 @@ from ww_trainer.factory import create_model, HEAD_REGISTRY
 # ---------------------------------------------------------------------------
 
 class TestPhonemeVocab:
-    def test_vocab_size_constant(self):
-        assert VOCAB_SIZE == len(PHONEME_VOCAB) + 1
+    def test_ipa_vocab_size_constant(self):
+        assert VOCAB_SIZE == len(IPA_VOCAB) + 1
 
-    def test_no_zero_index_in_vocab(self):
-        assert 0 not in PHONEME_VOCAB.values()
+    def test_no_zero_index_in_ipa_vocab(self):
+        assert 0 not in IPA_VOCAB.values()
 
-    def test_phonemes_to_ids_known(self):
-        ids = phonemes_to_ids(["HH", "EY", "M", "AY"])
+    def test_phoneme_vocab_is_ipa_vocab(self):
+        assert PHONEME_VOCAB is IPA_VOCAB
+
+    def test_ipa_to_ids_known(self):
+        ids = ipa_to_ids(["h", "eɪ", "m", "aɪ"])
         assert all(i > 0 for i in ids)
         assert len(ids) == 4
 
-    def test_phonemes_to_ids_unknown_maps_to_zero(self):
-        ids = phonemes_to_ids(["UNKNOWN_PHONEME"])
-        assert ids == [0]
+    def test_ipa_to_ids_unknown_maps_to_zero(self):
+        assert ipa_to_ids(["NOT_A_PHONEME"]) == [0]
 
-    def test_phonemes_to_ids_case_insensitive(self):
-        assert phonemes_to_ids(["hh"]) == phonemes_to_ids(["HH"])
+    def test_arpabet_to_ids_strips_stress(self):
+        # HH EY1 M AY1 → h eɪ m aɪ — all should resolve
+        ids = arpabet_to_ids(["HH", "EY1", "M", "AY1"])
+        assert all(i > 0 for i in ids)
+        assert len(ids) == 4
+
+    def test_arpabet_to_ids_nostress_same_as_stressed(self):
+        assert arpabet_to_ids(["EY"]) == arpabet_to_ids(["EY1"]) == arpabet_to_ids(["EY2"])
+
+    def test_arpabet_to_ids_unknown_maps_to_zero(self):
+        assert arpabet_to_ids(["NOTARPABET"]) == [0]
+
+    def test_phonemes_to_ids_is_arpabet_compat_alias(self):
+        assert phonemes_to_ids(["HH", "EY1"]) == arpabet_to_ids(["HH", "EY1"])
+
+    def test_arpabet_to_ipa_table_complete(self):
+        """Every ARPAbet symbol in ARPABET_TO_IPA should map to a valid IPA entry."""
+        for arp, ipa in ARPABET_TO_IPA.items():
+            assert ipa in IPA_VOCAB, f"IPA symbol {ipa!r} (from ARPAbet {arp!r}) missing in IPA_VOCAB"
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +68,9 @@ class TestPhonemeVocab:
 class TestPhonMatchTextEncoder:
     def test_forward_shape(self):
         enc = PhonMatchTextEncoder(emb_dim=64)
-        ids = torch.tensor([[43, 37, 55, 21, 53, 67, 9, 41, 70]], dtype=torch.long)
+        # "hey mycroft" in IPA
+        ids = torch.tensor([ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])],
+                           dtype=torch.long)
         out = enc(ids)
         assert out.shape == (1, 1, 64)
 
@@ -57,21 +81,18 @@ class TestPhonMatchTextEncoder:
         assert out.shape == (4, 1, 32)
 
     def test_padding_excluded_from_pool(self):
-        """Padding tokens (id=0) should not affect the pooled embedding."""
+        """Padding tokens (id=0) must not change the pooled embedding."""
         enc = PhonMatchTextEncoder(emb_dim=32)
         enc.eval()
         ids_no_pad = torch.tensor([[1, 2, 3]], dtype=torch.long)
         ids_padded = torch.tensor([[1, 2, 3, 0, 0]], dtype=torch.long)
         with torch.no_grad():
-            out_no_pad = enc(ids_no_pad)
-            out_padded = enc(ids_padded)
-        assert torch.allclose(out_no_pad, out_padded, atol=1e-5)
+            assert torch.allclose(enc(ids_no_pad), enc(ids_padded), atol=1e-5)
 
     def test_gradients_flow(self):
         enc = PhonMatchTextEncoder(emb_dim=32)
         ids = torch.randint(1, VOCAB_SIZE, (2, 6))
-        out = enc(ids)
-        out.sum().backward()
+        enc(ids).sum().backward()
         for p in enc.parameters():
             if p.requires_grad:
                 assert p.grad is not None
@@ -80,8 +101,7 @@ class TestPhonMatchTextEncoder:
     def test_export_to_onnx(self, tmp_path):
         enc = PhonMatchTextEncoder(emb_dim=32)
         out_path = str(tmp_path / "text_enc.onnx")
-        enc.export_to_onnx(out_path, seq_len=8)
-        assert Path(out_path).exists()
+        enc.export_to_onnx(out_path, seq_len=10)
         assert Path(out_path).stat().st_size > 0
 
     def test_onnx_output_matches_pytorch(self, tmp_path):
@@ -91,9 +111,9 @@ class TestPhonMatchTextEncoder:
         enc = PhonMatchTextEncoder(emb_dim=32)
         enc.eval()
         out_path = str(tmp_path / "text_enc.onnx")
-        enc.export_to_onnx(out_path, seq_len=8)
+        enc.export_to_onnx(out_path, seq_len=10)
 
-        ids = torch.randint(1, VOCAB_SIZE, (1, 8))
+        ids = torch.randint(1, VOCAB_SIZE, (1, 10))
         with torch.no_grad():
             pt_out = enc(ids).numpy()
 
@@ -106,90 +126,107 @@ class TestPhonMatchTextEncoder:
 
         enc = PhonMatchTextEncoder(emb_dim=32)
         out_path = str(tmp_path / "text_enc.onnx")
-        enc.export_to_onnx(out_path, seq_len=8)
+        enc.export_to_onnx(out_path, seq_len=10)
 
         ext = OnnxTextExtractor(out_path, emb_dim=32)
-        ids = phonemes_to_ids(["HH", "EY", "M", "AY", "K", "R", "AH", "F"])
+        ids = ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])
         ext.precompute(ids)
 
-        dummy_wavs = [torch.zeros(16000)] * 3
-        out = ext(dummy_wavs)
+        out = ext([torch.zeros(16000)] * 3)
         assert out.shape == (3, 1, 32)
+
+    def test_arpabet_compat_path(self, tmp_path):
+        """ARPAbet IDs (via arpabet_to_ids) work with the encoder."""
+        from ww_trainer.feats import OnnxTextExtractor
+
+        enc = PhonMatchTextEncoder(emb_dim=32)
+        out_path = str(tmp_path / "text_enc.onnx")
+        enc.export_to_onnx(out_path, seq_len=10)
+
+        ext = OnnxTextExtractor(out_path, emb_dim=32)
+        ids = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
+        ext.precompute(ids)
+        out = ext([torch.zeros(16000)])
+        assert out.shape == (1, 1, 32)
 
 
 # ---------------------------------------------------------------------------
 # PhonMatchHead (cross-attention classifier)
 # ---------------------------------------------------------------------------
 
-HEY_MYCROFT_IDS = phonemes_to_ids(["HH", "EY", "M", "AY", "K", "R", "AH", "F", "T"])
+HEY_MYCROFT_IPA = ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])
+_IDS_T = torch.tensor([HEY_MYCROFT_IPA], dtype=torch.long)  # [1, P]
+_IDS_BATCH = _IDS_T.expand(4, -1)                            # [4, P]
 
 
 class TestPhonMatchHead:
-    def test_forward_shape(self):
-        head = PhonMatchHead(
-            input_size=40,
-            keyword_token_ids=HEY_MYCROFT_IDS,
-            hidden_dim=32,
-            device="cpu",
-        )
-        feats = torch.randn(4, 100, 40)
-        out = head(feats)
+    def test_forward_shape_batch_ids(self):
+        """Per-batch [B, P] phoneme IDs."""
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        out = head(torch.randn(4, 100, 40), phoneme_ids=_IDS_BATCH)
         assert out.shape == (4,)
 
+    def test_forward_shape_shared_ids(self):
+        """Shared [P] phoneme IDs broadcast across batch."""
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        ids_1d = torch.tensor(HEY_MYCROFT_IPA, dtype=torch.long)  # [P]
+        out = head(torch.randn(3, 100, 40), phoneme_ids=ids_1d)
+        assert out.shape == (3,)
+
     def test_embed_shape(self):
-        head = PhonMatchHead(input_size=40, keyword_token_ids=HEY_MYCROFT_IDS, hidden_dim=32, device="cpu")
-        feats = torch.randn(2, 50, 40)
-        emb = head.embed(feats)
-        assert emb.shape == (2, 32)
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        assert head.embed(torch.randn(2, 50, 40), phoneme_ids=_IDS_T.expand(2, -1)).shape == (2, 32)
 
     def test_gradients_flow(self):
-        head = PhonMatchHead(input_size=40, keyword_token_ids=HEY_MYCROFT_IDS, hidden_dim=32, device="cpu")
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
         feats = torch.randn(2, 100, 40, requires_grad=True)
-        out = head(feats)
-        out.sum().backward()
+        head(feats, phoneme_ids=_IDS_T.expand(2, -1)).sum().backward()
         assert feats.grad is not None
 
-    def test_phoneme_ids_stored_as_buffer(self):
-        head = PhonMatchHead(input_size=40, keyword_token_ids=HEY_MYCROFT_IDS, hidden_dim=32, device="cpu")
-        assert hasattr(head, "phoneme_ids")
-        assert isinstance(head.phoneme_ids, torch.Tensor)
-        assert head.phoneme_ids.tolist() == HEY_MYCROFT_IDS
+    def test_no_fixed_buffer(self):
+        """Head must not have a baked-in phoneme_ids buffer."""
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        assert not hasattr(head, 'phoneme_ids') or 'phoneme_ids' not in dict(head.named_buffers())
+
+    def test_forward_raises_without_ids(self):
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        with pytest.raises(ValueError):
+            head(torch.randn(2, 100, 40))
 
     def test_different_keywords_different_outputs(self):
-        """Two heads with different keywords should produce different logits on the same audio."""
-        ids_a = phonemes_to_ids(["HH", "EY"])
-        ids_b = phonemes_to_ids(["AH", "L", "EH", "K", "S", "AH"])
-        head_a = PhonMatchHead(input_size=40, keyword_token_ids=ids_a, hidden_dim=32, device="cpu")
-        head_b = PhonMatchHead(input_size=40, keyword_token_ids=ids_b, hidden_dim=32, device="cpu")
-        feats = torch.randn(2, 100, 40)
+        ids_a = torch.tensor([ipa_to_ids(["h", "eɪ"])], dtype=torch.long)
+        ids_b = torch.tensor([ipa_to_ids(["ɑ", "l", "ɛ", "k", "s", "ʌ"])], dtype=torch.long)
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
+        feats = torch.randn(1, 100, 40)
         with torch.no_grad():
-            out_a = head_a(feats)
-            out_b = head_b(feats)
-        assert not torch.allclose(out_a, out_b)
+            assert not torch.allclose(head(feats, phoneme_ids=ids_a), head(feats, phoneme_ids=ids_b))
 
     def test_export_to_onnx(self, tmp_path):
-        head = PhonMatchHead(input_size=40, keyword_token_ids=HEY_MYCROFT_IDS, hidden_dim=32, device="cpu")
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
         out_path = str(tmp_path / "phonmatch_head.onnx")
         head.export_to_onnx(out_path)
-        assert Path(out_path).exists()
         assert Path(out_path).stat().st_size > 0
 
-    def test_export_phoneme_ids_baked_in(self, tmp_path):
-        """Exported ONNX takes only audio features — no token_ids input."""
-        import onnxruntime as ort
+    def test_export_has_two_inputs(self, tmp_path):
+        """ONNX graph must have audio features AND phoneme_ids as inputs."""
         import numpy as np
+        import onnxruntime as ort
 
-        head = PhonMatchHead(input_size=40, keyword_token_ids=HEY_MYCROFT_IDS, hidden_dim=32, device="cpu")
+        head = PhonMatchHead(input_size=40, hidden_dim=32, device="cpu")
         out_path = str(tmp_path / "phonmatch_head.onnx")
-        head.export_to_onnx(out_path)
+        head.export_to_onnx(out_path, seq_len=9)
 
         session = ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
         input_names = [i.name for i in session.get_inputs()]
-        assert input_names == ["input_features"], f"Expected only audio input, got: {input_names}"
+        assert "input_features" in input_names
+        assert "phoneme_ids" in input_names
 
-        feats = np.random.randn(2, 100, 40).astype(np.float32)
-        logits = session.run(None, {"input_features": feats})[0]
-        assert logits.shape == (2,)
+        ph_ids = np.array([HEY_MYCROFT_IPA], dtype=np.int64)
+        logits = session.run(None, {
+            "input_features": np.random.randn(1, 100, 40).astype(np.float32),
+            "phoneme_ids": ph_ids,
+        })[0]
+        assert logits.shape == (1,)
 
 
 # ---------------------------------------------------------------------------
@@ -200,24 +237,32 @@ class TestPhonMatchFactory:
     def test_registered_in_head_registry(self):
         assert "phonmatch" in HEAD_REGISTRY
 
-    def test_create_model_phonmatch(self):
+    def test_create_model_phonmatch_forward(self):
         model = create_model(
             "phonmatch", "mfcc", featurizer_type="mfcc", device="cpu",
-            keyword_token_ids=HEY_MYCROFT_IDS,
             hidden_dim=32,
         )
-        assert model is not None
         wavs = [torch.randn(16000) for _ in range(2)]
-        logits = model(wavs)
+        ids = torch.tensor([HEY_MYCROFT_IPA, HEY_MYCROFT_IPA], dtype=torch.long)
+        logits = model(wavs, text_token_ids=ids)
         assert logits.shape == (2,)
         assert torch.isfinite(logits).all()
+
+    def test_create_model_phonmatch_arpabet_compat(self):
+        ids_list = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
+        ids = torch.tensor([ids_list] * 2, dtype=torch.long)
+        model = create_model(
+            "phonmatch", "mfcc", featurizer_type="mfcc", device="cpu",
+            hidden_dim=32,
+        )
+        logits = model([torch.randn(16000)] * 2, text_token_ids=ids)
+        assert logits.shape == (2,)
 
     def test_embed_via_factory(self):
         model = create_model(
             "phonmatch", "mfcc", featurizer_type="mfcc", device="cpu",
-            keyword_token_ids=HEY_MYCROFT_IDS,
             hidden_dim=32,
         )
-        wavs = [torch.randn(16000) for _ in range(3)]
-        embs = model.embed(wavs)
+        ids = torch.tensor([HEY_MYCROFT_IPA] * 3, dtype=torch.long)
+        embs = model.embed([torch.randn(16000)] * 3, text_token_ids=ids)
         assert embs.shape == (3, 32)

@@ -30,7 +30,7 @@ def test_dataset_getitem(tmp_path):
     from ww_trainer.dataset import AudioDataset
     samples = _make_samples(tmp_path, n=4)
     ds = AudioDataset(samples, aug_prob=0.0)
-    wav, label, path = ds[0]
+    wav, label, path, kw_ids = ds[0]
     assert isinstance(wav, torch.Tensor)
     assert wav.ndim == 1
     assert isinstance(label, int)
@@ -44,7 +44,7 @@ def test_dataset_getitem_all_labels(tmp_path):
     ds = AudioDataset(samples, aug_prob=0.0)
     labels_seen = set()
     for i in range(len(ds)):
-        _, label, _ = ds[i]
+        _, label, _, _ = ds[i]
         labels_seen.add(label)
     assert labels_seen == {0, 1}
 
@@ -54,11 +54,12 @@ def test_collate_fn_pads_to_max_length(tmp_path):
     samples = _make_samples(tmp_path, n=4, sample_rate=16000)
     ds = AudioDataset(samples, aug_prob=0.0)
     batch = [ds[i] for i in range(4)]
-    padded, labels_t, paths = collate_fn(batch, device="cpu")
+    padded, labels_t, paths, kw_ids = collate_fn(batch, device="cpu")
     max_len = max(ds[i][0].shape[-1] for i in range(4))
     assert padded.shape == (4, max_len)
     assert labels_t.shape == (4,)
     assert len(paths) == 4
+    assert kw_ids is None  # no keyword IDs in 3-tuple batch
 
 
 def test_collate_fn_different_lengths(tmp_path):
@@ -67,9 +68,10 @@ def test_collate_fn_different_lengths(tmp_path):
     wav_short = torch.zeros(800)
     wav_long = torch.zeros(1600)
     batch = [(wav_short, 0, "a"), (wav_long, 1, "b")]
-    padded, labels_t, _ = collate_fn(batch, device="cpu")
+    padded, labels_t, _, kw_ids = collate_fn(batch, device="cpu")
     assert padded.shape == (2, 1600)
     assert padded[0, 800:].sum() == 0.0  # padding is zero
+    assert kw_ids is None
 
 
 def test_mix_background_peak():

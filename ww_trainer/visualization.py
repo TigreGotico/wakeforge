@@ -448,7 +448,7 @@ def _collect_embeddings(
     embeddings, labels, confs = [], [], []
     model.eval()
     with torch.no_grad():
-        for wavs, lbls, _ in loader:
+        for wavs, lbls, *_ in loader:
             emb = model.embed(wavs)
             logits = model(wavs)
             probs = torch.sigmoid(logits).cpu().numpy().flatten()
@@ -734,7 +734,7 @@ def log_embeddings_stats(model, dataset, epoch: int, device, batch_size: int = 1
                         collate_fn=lambda b: collate_fn(b, device))
     embeds_all, labels_all = [], []
     with torch.no_grad():
-        for wavs, labels, _ in loader:
+        for wavs, labels, *_ in loader:
             embeds = model.embed(wavs)
             embeds_all.append(embeds.cpu())
             labels_all.append(labels.cpu())

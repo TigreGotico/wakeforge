@@ -60,12 +60,25 @@ class TestOnnxTextExtractor:
         ext = OnnxTextExtractor(onnx_path, emb_dim=64)
         assert ext.feature_dim == 64
 
-    def test_forward_raises_without_precompute(self, tmp_path):
+    def test_forward_raises_without_precompute_or_ids(self, tmp_path):
         onnx_path = str(tmp_path / "text_enc.onnx")
         _build_dummy_text_onnx(onnx_path, emb_dim=32)
         ext = OnnxTextExtractor(onnx_path, emb_dim=32)
-        with pytest.raises(RuntimeError, match="precompute"):
+        with pytest.raises(RuntimeError):
             ext([torch.zeros(16000)])
+
+    def test_forward_with_per_batch_token_ids(self, tmp_path):
+        """Pass token_ids=[B, seq] to bypass precompute — training mode."""
+        from ww_trainer.phonmatch import PhonMatchTextEncoder, ipa_to_ids
+
+        enc = PhonMatchTextEncoder(emb_dim=32)
+        onnx_path = str(tmp_path / "text_enc.onnx")
+        enc.export_to_onnx(onnx_path, seq_len=5)
+
+        ext = OnnxTextExtractor(onnx_path, emb_dim=32)
+        ids = torch.tensor([[1, 2, 3, 4, 0], [5, 6, 7, 0, 0], [1, 0, 0, 0, 0]], dtype=torch.long)
+        out = ext([torch.zeros(16000)] * 3, token_ids=ids)
+        assert out.shape == (3, 1, 32)
 
     def test_export_to_onnx_raises(self, tmp_path):
         onnx_path = str(tmp_path / "text_enc.onnx")

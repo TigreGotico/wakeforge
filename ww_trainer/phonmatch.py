@@ -1,15 +1,22 @@
 """PhonMatchNet text encoder — concrete implementation of the text featurizer.
 
-Implements the text encoder from PhonMatchNet (INTERSPEECH 2023, ncsoft/PhonMatchNet).
-Converts a phoneme sequence (as ARPAbet token IDs) to a fixed-size embedding that can
-be exported as ONNX and used as the ``text_featurizer`` for :class:`OnnxTextExtractor`.
+Implements the text encoder from PhonMatchNet (INTERSPEECH 2023, ncsoft/PhonMatchNet),
+extended to use the **International Phonetic Alphabet (IPA)** instead of ARPAbet.
+IPA covers all world languages with a single consistent symbol set; ARPAbet is
+English-only and a strictly inferior choice for multilingual wake-word detection.
+
+Primary vocabulary: :data:`IPA_VOCAB` — 159 IPA symbols (index 1–159).
+Index 0 is reserved as the unknown/padding token.
+
+An :data:`ARPABET_TO_IPA` table is provided for users migrating from ARPAbet-based G2P
+tools (e.g. g2p_en); use :func:`arpabet_to_ids` for that path.
 
 Usage (train + export)::
 
-    from ww_trainer.phonmatch import PhonMatchTextEncoder, phonemes_to_ids, PHONEME_VOCAB
+    from ww_trainer.phonmatch import PhonMatchTextEncoder, ipa_to_ids
 
-    # Phoneme IDs produced externally (e.g. via g2p_en or any other G2P tool)
-    ids = phonemes_to_ids(["HH", "EY", "M", "AY", "K", "R", "AH", "F", "T"])
+    # IPA phonemes produced externally (espeak-ng, phonemizer, gruut, etc.)
+    ids = ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])
 
     encoder = PhonMatchTextEncoder(emb_dim=128)
     encoder.export_to_onnx("phoneme_encoder.onnx")
@@ -19,13 +26,13 @@ Usage (train + export)::
     text_ext = OnnxTextExtractor("phoneme_encoder.onnx", emb_dim=128)
     text_ext.precompute(ids)
 
-Phoneme vocabulary is the 70-token ARPAbet set used by PhonMatchNet.  Unknown phonemes
-map to index 0 (treated as padding/unknown — not used in mean-pool).
+    # ARPAbet compat (e.g. output of g2p_en):
+    from ww_trainer.phonmatch import arpabet_to_ids
+    ids = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
 """
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
@@ -35,49 +42,149 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# ARPAbet vocabulary — 70 phonemes as used by PhonMatchNet
-# Index 0 is reserved as the unknown/padding token.
+# IPA vocabulary — 159 symbols covering major world languages
+# Organised by IPA chart section for readability.
+# Index 0 is reserved as unknown/padding (excluded from mean-pool).
 # ---------------------------------------------------------------------------
 
-PHONEME_VOCAB: Dict[str, int] = {
-    "AA": 1, "AA0": 2, "AA1": 3, "AA2": 4,
-    "AE": 5, "AE0": 6, "AE1": 7, "AE2": 8,
-    "AH": 9, "AH0": 10, "AH1": 11, "AH2": 12,
-    "AO": 13, "AO0": 14, "AO1": 15, "AO2": 16,
-    "AW": 17, "AW0": 18, "AW1": 19, "AW2": 20,
-    "AY": 21, "AY0": 22, "AY1": 23, "AY2": 24,
-    "B": 25, "CH": 26, "D": 27, "DH": 28,
-    "EH": 29, "EH0": 30, "EH1": 31, "EH2": 32,
-    "ER": 33, "ER0": 34, "ER1": 35, "ER2": 36,
-    "EY": 37, "EY0": 38, "EY1": 39, "EY2": 40,
-    "F": 41, "G": 42, "HH": 43, "IH": 44,
-    "IH0": 45, "IH1": 46, "IH2": 47, "IY": 48,
-    "IY0": 49, "IY1": 50, "IY2": 51, "JH": 52,
-    "K": 53, "L": 54, "M": 55, "N": 56,
-    "NG": 57, "OW": 58, "OW0": 59, "OW1": 60,
-    "OW2": 61, "OY": 62, "OY0": 63, "OY1": 64,
-    "OY2": 65, "P": 66, "R": 67, "S": 68,
-    "SH": 69, "T": 70, "TH": 71, "UH": 72,
-    "UH0": 73, "UH1": 74, "UH2": 75, "UW": 76,
-    "UW0": 77, "UW1": 78, "UW2": 79, "V": 80,
-    "W": 81, "Y": 82, "Z": 83, "ZH": 84,
+IPA_VOCAB: Dict[str, int] = {
+    # --- Pulmonic consonants: plosives ---
+    "p": 1,   "b": 2,   "t": 3,   "d": 4,   "ʈ": 5,   "ɖ": 6,
+    "c": 7,   "ɟ": 8,   "k": 9,   "ɡ": 10,  "q": 11,  "ɢ": 12,
+    "ʔ": 13,
+    # --- Nasals ---
+    "m": 14,  "ɱ": 15,  "n": 16,  "ɳ": 17,  "ɲ": 18,  "ŋ": 19,  "ɴ": 20,
+    # --- Trills ---
+    "ʙ": 21,  "r": 22,  "ʀ": 23,
+    # --- Taps/flaps ---
+    "ⱱ": 24,  "ɾ": 25,  "ɽ": 26,
+    # --- Fricatives ---
+    "ɸ": 27,  "β": 28,  "f": 29,  "v": 30,  "θ": 31,  "ð": 32,
+    "s": 33,  "z": 34,  "ʃ": 35,  "ʒ": 36,  "ʂ": 37,  "ʐ": 38,
+    "ç": 39,  "ʝ": 40,  "x": 41,  "ɣ": 42,  "χ": 43,  "ʁ": 44,
+    "ħ": 45,  "ʕ": 46,  "h": 47,  "ɦ": 48,
+    # --- Lateral fricatives ---
+    "ɬ": 49,  "ɮ": 50,
+    # --- Approximants ---
+    "ʋ": 51,  "ɹ": 52,  "ɻ": 53,  "j": 54,  "ɰ": 55,
+    # --- Lateral approximants ---
+    "l": 56,  "ɭ": 57,  "ʎ": 58,  "ʟ": 59,
+    # --- Affricates (common) ---
+    "tʃ": 60,  "dʒ": 61,  "ts": 62,  "dz": 63,  "tɕ": 64,  "dʑ": 65,
+    "ʈʂ": 66,  "ɖʐ": 67,  "pf": 68,  "bv": 69,
+    # --- Close vowels ---
+    "i": 70,  "y": 71,  "ɨ": 72,  "ʉ": 73,  "ɯ": 74,  "u": 75,
+    # --- Near-close vowels ---
+    "ɪ": 76,  "ʏ": 77,  "ʊ": 78,
+    # --- Close-mid vowels ---
+    "e": 79,  "ø": 80,  "ɘ": 81,  "ɵ": 82,  "ɤ": 83,  "o": 84,
+    # --- Mid vowels ---
+    "e̞": 85,  "ə": 86,  "ɵ̞": 87,
+    # --- Open-mid vowels ---
+    "ɛ": 88,  "œ": 89,  "ɜ": 90,  "ɞ": 91,  "ʌ": 92,  "ɔ": 93,
+    # --- Near-open vowels ---
+    "æ": 94,  "ɐ": 95,
+    # --- Open vowels ---
+    "a": 96,  "ɶ": 97,  "ä": 98,  "ɑ": 99,  "ɒ": 100,
+    # --- Common diphthongs (English, German, …) ---
+    "eɪ": 101,  "aɪ": 102,  "ɔɪ": 103,  "aʊ": 104,  "əʊ": 105,
+    "oʊ": 106,  "ɪə": 107,  "eə": 108,  "ʊə": 109,
+    # --- Suprasegmentals ---
+    "ˈ": 110,  "ˌ": 111,  "ː": 112,  "ˑ": 113,
+    # --- Tone letters (common) ---
+    "˥": 114,  "˦": 115,  "˧": 116,  "˨": 117,  "˩": 118,
+    # --- Click consonants ---
+    "ʘ": 119,  "ǀ": 120,  "ǃ": 121,  "ǂ": 122,  "ǁ": 123,
+    # --- Voiced implosives ---
+    "ɓ": 124,  "ɗ": 125,  "ʄ": 126,  "ɠ": 127,  "ʛ": 128,
+    # --- Additional consonants in major languages ---
+    "w": 129,  "ɥ": 130,  "ʍ": 131,   # labial-velars
+    "ɕ": 132,  "ʑ": 133,               # alveolopalatal fricatives (Mandarin, Polish…)
+    "ɺ": 134,                           # lateral flap (Japanese)
+    "ʈ͡ʂ": 135, "ɖ͡ʐ": 136,             # retroflex affricates
+    "n̪": 137,  "t̪": 138,  "d̪": 139,   # dental variants
+    "ɫ": 140,                           # velarised l (Russian, Portuguese…)
+    "ʲ": 141,                           # palatalisation diacritic
+    # --- Rhotic vowels (English) ---
+    "ɚ": 142,  "ɝ": 143,
+    # --- Nasalised vowels (French, Portuguese, …) ---
+    "ã": 144,  "ẽ": 145,  "ĩ": 146,  "õ": 147,  "ũ": 148,
+    "ɑ̃": 149,  "ɛ̃": 150,  "œ̃": 151,  "ɔ̃": 152,
+    # --- Extra approximants ---
+    "ɴ̥": 153,
+    # --- Lateral click ---
+    "ʗ": 154,
+    # --- Additional affricates ---
+    "tθ": 155, "dð": 156,
+    # --- Syllabic consonants ---
+    "n̩": 157, "l̩": 158, "m̩": 159,
 }
 
-VOCAB_SIZE: int = len(PHONEME_VOCAB) + 1  # +1 for index-0 unknown/padding
+VOCAB_SIZE: int = len(IPA_VOCAB) + 1  # +1 for index-0 unknown/padding
+
+# ---------------------------------------------------------------------------
+# ARPAbet → IPA conversion table (English, for g2p_en / CMUdict users)
+# Stress digits (0/1/2) are stripped before lookup.
+# ---------------------------------------------------------------------------
+
+ARPABET_TO_IPA: Dict[str, str] = {
+    "AA": "ɑ",  "AE": "æ",  "AH": "ʌ",  "AO": "ɔ",
+    "AW": "aʊ", "AY": "aɪ", "B":  "b",   "CH": "tʃ",
+    "D":  "d",  "DH": "ð",  "EH": "ɛ",  "ER": "ɝ",
+    "EY": "eɪ", "F":  "f",  "G":  "ɡ",  "HH": "h",
+    "IH": "ɪ",  "IY": "i",  "JH": "dʒ", "K":  "k",
+    "L":  "l",  "M":  "m",  "N":  "n",  "NG": "ŋ",
+    "OW": "oʊ", "OY": "ɔɪ", "P":  "p",  "R":  "ɹ",
+    "S":  "s",  "SH": "ʃ",  "T":  "t",  "TH": "θ",
+    "UH": "ʊ",  "UW": "u",  "V":  "v",  "W":  "w",
+    "Y":  "j",  "Z":  "z",  "ZH": "ʒ",
+}
+
+# Backward-compat alias (the original PhonMatchNet ARPAbet vocab is superseded)
+PHONEME_VOCAB = IPA_VOCAB
 
 
-def phonemes_to_ids(phonemes: List[str]) -> List[int]:
-    """Map a sequence of ARPAbet phoneme strings to integer token IDs.
+# ---------------------------------------------------------------------------
+# Lookup helpers
+# ---------------------------------------------------------------------------
 
-    Unknown phonemes silently map to 0 (padding index).
+def ipa_to_ids(phonemes: List[str]) -> List[int]:
+    """Map a sequence of IPA symbols to integer token IDs.
+
+    Unknown symbols (including stress marks if not in vocab) silently map to 0
+    (the padding index, excluded from mean-pool).
 
     Args:
-        phonemes: List of ARPAbet phoneme strings, e.g. ``["HH", "EY1", "M"]``.
+        phonemes: List of IPA symbol strings, e.g. ``["h", "eɪ", "m", "aɪ"]``.
 
     Returns:
         List of integer IDs, same length as ``phonemes``.
     """
-    return [PHONEME_VOCAB.get(p.upper(), 0) for p in phonemes]
+    return [IPA_VOCAB.get(p, 0) for p in phonemes]
+
+
+def arpabet_to_ids(phonemes: List[str]) -> List[int]:
+    """Convert ARPAbet phoneme strings (e.g. from g2p_en) to IPA token IDs.
+
+    Stress digits (0/1/2) appended to vowels are stripped before conversion.
+    Unknown ARPAbet symbols map to 0.
+
+    Args:
+        phonemes: List of ARPAbet strings, e.g. ``["HH", "EY1", "M", "AY1"]``.
+
+    Returns:
+        List of IPA integer IDs.
+    """
+    ids = []
+    for p in phonemes:
+        base = p.rstrip("012").upper()
+        ipa = ARPABET_TO_IPA.get(base)
+        ids.append(IPA_VOCAB.get(ipa, 0) if ipa else 0)
+    return ids
+
+
+# Backward-compat alias
+phonemes_to_ids = arpabet_to_ids
 
 
 # ---------------------------------------------------------------------------
@@ -184,17 +291,10 @@ class PhonMatchTextEncoder(nn.Module):
 class PhonMatchHead(nn.Module):
     """Full PhonMatchNet classifier head with phoneme-audio cross-attention.
 
-    Unlike the simple text-featurizer path (which appends a pooled text embedding
-    to audio features), this head faithfully replicates PhonMatchNet's
-    cross-modal attention: phoneme embeddings act as *queries* over audio frame
-    *keys/values*, producing phoneme-aligned attended representations that are
-    then passed through a GRU discriminator.
-
-    This head is registered in :data:`~ww_trainer.factory.HEAD_REGISTRY` as
-    ``"phonmatch"`` and is instantiated by :func:`~ww_trainer.factory.create_model`
-    when ``arch="phonmatch"``.  The wake word phoneme IDs are passed at init
-    time via ``keyword_token_ids``; from that point the head is audio-only (the
-    phoneme buffer is baked in and treated as a fixed learned query).
+    Phoneme IDs are passed **per batch** at forward time — not stored as a
+    fixed buffer.  This enables true multi-keyword training: each batch may
+    contain samples from different keywords, each carrying its own IPA phoneme
+    sequence.  At inference, pass the target keyword's IPA IDs to classify.
 
     Architecture:
     - ``audio_proj``: Linear(F, D) — projects audio features to attention dim
@@ -206,8 +306,6 @@ class PhonMatchHead(nn.Module):
 
     Args:
         input_size: Audio feature dimension ``F`` (from the extractor).
-        keyword_token_ids: Pre-tokenised phoneme IDs for the target keyword.
-            Produced by :func:`phonemes_to_ids`.  Stored as a buffer.
         hidden_dim: Attention and GRU dimension ``D``.
         n_heads: Number of attention heads.
         gru_layers: Number of GRU layers in the discriminator.
@@ -219,7 +317,6 @@ class PhonMatchHead(nn.Module):
     def __init__(
         self,
         input_size: int,
-        keyword_token_ids: List[int],
         hidden_dim: int = 128,
         n_heads: int = 1,
         gru_layers: int = 2,
@@ -234,10 +331,6 @@ class PhonMatchHead(nn.Module):
         self.sample_rate = sample_rate
         self.input_size = input_size
         self.hidden_dim = hidden_dim
-
-        # Phoneme query buffer — fixed after init, baked into ONNX export
-        ids = torch.tensor(keyword_token_ids, dtype=torch.long)
-        self.register_buffer("phoneme_ids", ids)  # [P]
 
         # Layers
         self.audio_proj = nn.Linear(input_size, hidden_dim)
@@ -254,90 +347,125 @@ class PhonMatchHead(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.to(self.device)
 
-    def _attend(self, feats: torch.Tensor) -> torch.Tensor:
+    def _attend(self, feats: torch.Tensor, phoneme_ids: torch.Tensor) -> torch.Tensor:
         """Cross-attend phoneme queries against audio frame keys/values.
 
         Args:
             feats: Audio features ``[B, T, F]``.
+            phoneme_ids: ``[B, P]`` or ``[P]`` int64 keyword phoneme IDs.
+                1-D input is broadcast across the batch.
 
         Returns:
             Attended representation ``[B, hidden_dim]``.
         """
         B = feats.shape[0]
 
+        # Broadcast [P] → [B, P] when a single sequence is shared
+        if phoneme_ids.dim() == 1:
+            phoneme_ids = phoneme_ids.unsqueeze(0).expand(B, -1)  # [B, P]
+
         # Project audio: [B, T, F] → [B, T, D]
         audio = F.relu(self.audio_proj(feats))
 
-        # Build phoneme queries: [P] → [B, P, D]
+        # Build phoneme queries: [B, P] → [B, P, D]
         ph_emb = F.relu(self.phoneme_proj(
-            self.phoneme_emb(self.phoneme_ids)  # [P, D]
-        )).unsqueeze(0).expand(B, -1, -1)       # [B, P, D]
+            self.phoneme_emb(phoneme_ids)  # [B, P, D]
+        ))                                 # [B, P, D]
 
-        # Key-padding mask: silence padding tokens in audio (all-zero frames)
-        # No explicit padding mask here — rely on the model to learn it.
         attended, _ = self.cross_attn(ph_emb, audio, audio)  # [B, P, D]
 
-        # Mean-pool over phoneme dimension → [B, D]
-        return self.drop(attended.mean(dim=1))
+        # Mean-pool over phoneme dimension (mask padding zeros)
+        pad_mask = (phoneme_ids == 0)  # [B, P] — True where padding
+        attended = attended.masked_fill(pad_mask.unsqueeze(-1), 0.0)
+        n_valid = (~pad_mask).sum(dim=1, keepdim=True).clamp(min=1).float()  # [B, 1]
+        pooled = attended.sum(dim=1) / n_valid                               # [B, D]
+        return self.drop(pooled)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor,
+                phoneme_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Classify audio via phoneme-guided attention.
 
         Args:
             feats: ``[B, T, F]`` audio features from the extractor.
+            phoneme_ids: ``[B, P]`` or ``[P]`` int64 IPA token IDs for the
+                keyword(s) in this batch.
 
         Returns:
             ``[B]`` raw logits (pre-sigmoid).
-        """
-        h = self._attend(feats).unsqueeze(1)      # [B, 1, D]
-        out, _ = self.gru(h)                       # [B, 1, D]
-        return self.fc(out.squeeze(1)).squeeze(-1)  # [B]
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        """Return the attended phoneme-aligned embedding for metric losses.
+        Raises:
+            ValueError: If ``phoneme_ids`` is ``None``.
+        """
+        if phoneme_ids is None:
+            raise ValueError(
+                "PhonMatchHead.forward() requires phoneme_ids — "
+                "pass keyword IPA token IDs as a [B, P] or [P] int64 tensor."
+            )
+        h = self._attend(feats, phoneme_ids).unsqueeze(1)  # [B, 1, D]
+        out, _ = self.gru(h)                                # [B, 1, D]
+        return self.fc(out.squeeze(1)).squeeze(-1)          # [B]
+
+    def embed(self, feats: torch.Tensor,
+              phoneme_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Return phoneme-aligned embeddings for metric losses.
 
         Args:
             feats: ``[B, T, F]`` audio features.
+            phoneme_ids: ``[B, P]`` or ``[P]`` int64 keyword phoneme IDs.
 
         Returns:
             ``[B, hidden_dim]`` embeddings.
+
+        Raises:
+            ValueError: If ``phoneme_ids`` is ``None``.
         """
-        return self._attend(feats)
+        if phoneme_ids is None:
+            raise ValueError(
+                "PhonMatchHead.embed() requires phoneme_ids."
+            )
+        return self._attend(feats, phoneme_ids)
 
     def export_to_onnx(
         self,
         out: str,
+        seq_len: int = 16,
         quantize: bool = False,
         dynamo: bool = False,
         metadata: Optional[dict] = None,
     ) -> None:
-        """Export the head (with phoneme buffer baked in) to ONNX.
+        """Export to ONNX with two dynamic inputs: audio features and phoneme IDs.
 
-        The exported graph accepts only audio features ``[B, T, F]`` — the
-        phoneme IDs are constants embedded in the graph at export time.
+        The exported graph accepts:
+        - ``input_features``: ``[B, T, F]`` float32 audio features
+        - ``phoneme_ids``:    ``[B, P]`` int64 IPA token IDs
+
+        Both ``B`` and ``T``/``P`` are dynamic axes.
 
         Args:
             out: Output ``.onnx`` file path.
+            seq_len: Phoneme sequence length for the export dummy input.
             quantize: Apply INT8 dynamic quantization.
             dynamo: Use ``torch.export``-based exporter (experimental).
             metadata: Optional string metadata dict to embed in the ONNX file.
         """
-        import onnx
         from ww_trainer.utils import embed_onnx_metadata
 
         self.eval()
-        dummy = torch.zeros(1, 100, self.input_size, device=self.device)
+        dummy_feats = torch.zeros(1, 100, self.input_size, device=self.device)
+        dummy_ids = torch.ones(1, seq_len, dtype=torch.long, device=self.device)
         torch.onnx.export(
             self,
-            (dummy,),
+            (dummy_feats, dummy_ids),
             out,
-            input_names=["input_features"],
+            input_names=["input_features", "phoneme_ids"],
             output_names=["logits"],
             dynamic_axes={
                 "input_features": {0: "batch_size", 1: "T_features"},
-                "logits": {0: "batch_size"},
+                "phoneme_ids":    {0: "batch_size", 1: "seq_len"},
+                "logits":         {0: "batch_size"},
             },
             opset_version=17,
+            dynamo=False,
         )
         if metadata:
             embed_onnx_metadata(out, metadata)

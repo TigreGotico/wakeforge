@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import inspect
 from typing import List, Dict, Any, Optional, Tuple
 
 import torch
@@ -1283,21 +1284,23 @@ class LossManager:
         return None
 
     @timed
-    def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor, dataset_ref: Optional[AudioDataset] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """
-        Compute total loss and per-loss values based on the configured criteria.
+    def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor,
+                     dataset_ref: Optional[AudioDataset] = None,
+                     text_token_ids: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Compute total loss and per-loss values based on the configured criteria.
 
         Args:
-            model: The wake word model (must have `embed` method for metric losses).
+            model: The wake word model (must have ``embed`` for metric losses).
             wavs: Input audio waveforms (list of tensors or padded tensor).
-            labels: Ground truth labels (B,).
-            dataset_ref: A reference to the dataset or data loader for optional
-                         features like augmentation (e.g., for RPPL consistency loss).
+            labels: Ground truth labels ``(B,)``.
+            dataset_ref: Optional dataset reference for augmentation-based losses.
+            text_token_ids: Optional ``[B, seq_len]`` int64 keyword phoneme IDs.
+                When provided (multi-keyword training), passed to
+                ``model.forward`` and ``model.embed`` so the text extractor
+                runs per-batch.  ``None`` falls back to the precomputed cache.
 
         Returns:
-            A tuple containing:
-            1. The total weighted loss (torch.Tensor).
-            2. A dictionary of per-loss values {"loss_name": value} (Dict[str, float]).
+            ``(total_loss, {"loss_name": float, ...})``
         """
         results: Dict[str, float] = {}
         total = torch.tensor(0.0, device=self.device)
@@ -1307,12 +1310,22 @@ class LossManager:
             from ww_trainer.feats import ensure_wav_list
             wavs_list = ensure_wav_list(wavs)
             feats = model.feature_extractor(wavs_list)
+            if hasattr(model, '_apply_text_conditioning'):
+                feats = model._apply_text_conditioning(feats, wavs_list, text_token_ids)
             feats = self.spec_augment(feats)
-            logits = model.classifier.forward(feats)
-            embeds = model.classifier.embed(feats)
+            if "phoneme_ids" in inspect.signature(model.classifier.forward).parameters:
+                logits = model.classifier.forward(feats, phoneme_ids=text_token_ids)
+                embeds = model.classifier.embed(feats, phoneme_ids=text_token_ids)
+            else:
+                logits = model.classifier.forward(feats)
+                embeds = model.classifier.embed(feats)
         else:
-            logits = model(wavs)
-            embeds = model.embed(wavs)
+            if text_token_ids is not None:
+                logits = model(wavs, text_token_ids=text_token_ids)
+                embeds = model.embed(wavs, text_token_ids=text_token_ids)
+            else:
+                logits = model(wavs)
+                embeds = model.embed(wavs)
         # Embedding normalization is performed inside the metric loss functions
         labels_float = labels.to(self.device).float().view(-1, 1)
 

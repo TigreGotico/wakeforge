@@ -113,7 +113,8 @@ def _run_batch_loop(
     optimizer.zero_grad()
 
     batch_bar = tqdm(loader, desc=f"  ep{ep+1} train", unit="batch", leave=False, position=1)
-    for batch_idx, (wavs, labels, _) in enumerate(batch_bar):
+    for batch_idx, batch in enumerate(batch_bar):
+        wavs, labels, _, text_token_ids = batch if len(batch) == 4 else (*batch, None)
         global_step = ep * len(loader) + batch_idx
         loss_manager.update_neg_weight(global_step, total_steps)
 
@@ -122,7 +123,9 @@ def _run_batch_loop(
             wavs, labels = Mixup.mix_batch(wavs, labels, beta_param=mixup_alpha)
 
         with torch.amp.autocast(device_type=device.type, enabled=effective_amp):
-            loss, loss_dict = loss_manager.compute_loss(model, wavs, labels, loader.dataset)
+            loss, loss_dict = loss_manager.compute_loss(
+                model, wavs, labels, loader.dataset, text_token_ids=text_token_ids
+            )
 
         loss_scaled = loss / max(1, accumulate_grad_batches)
         if scaler is not None:

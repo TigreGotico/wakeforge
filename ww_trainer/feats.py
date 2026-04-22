@@ -3,7 +3,7 @@ import logging
 import math
 import numpy as np
 from pathlib import Path
-from typing import List, Union, TypeAlias
+from typing import List, Optional, Union, TypeAlias
 from ww_trainer.utils import timed, embed_onnx_metadata
 import onnxruntime as ort
 import torch
@@ -2231,26 +2231,58 @@ class OnnxTextExtractor(BaseExtractor):
             t = t.unsqueeze(1)  # [1, D] → [1, 1, D]
         self._cached = t  # [1, 1, D]
 
-    def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor:
-        """Return the cached text embedding expanded to the current batch size.
+    def forward(self, wavs: WavInput,
+                token_ids: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
+        """Return text embeddings for the current batch.
 
-        ``wavs`` is accepted to satisfy the :class:`BaseExtractor` interface but
-        its audio content is ignored — only the batch size is read.
+        Two modes:
+
+        * **Training / zero-shot** — pass ``token_ids`` as a ``[B, seq_len]``
+          int64 tensor (one keyword per sample).  The ONNX session is run for
+          each sample individually and results are stacked.
+        * **Inference / fixed keyword** — omit ``token_ids``; the embedding
+          cached by :meth:`precompute` is expanded to the batch size.
+
+        ``wavs`` content is ignored; it is accepted only to satisfy the
+        :class:`BaseExtractor` interface (batch size is derived from ``token_ids``
+        or ``wavs``).
 
         Args:
-            wavs: Audio batch (used only to determine ``B``).
+            wavs: Audio batch (used only to determine ``B`` when ``token_ids``
+                is ``None``).
+            token_ids: Optional ``[B, seq_len]`` int64 tensor of per-sample
+                keyword phoneme IDs.  When provided, the cache is bypassed.
 
         Returns:
-            Tensor of shape ``[B, 1, D]``.
+            ``[B, 1, D]`` float32 tensor.
 
         Raises:
-            RuntimeError: If :meth:`precompute` has not been called yet.
+            RuntimeError: When both ``token_ids`` and the precomputed cache are
+                absent.
         """
+        import numpy as np
+        B = len(wavs) if isinstance(wavs, list) else wavs.shape[0]
+        input_name = self.session.get_inputs()[0].name
+
+        if token_ids is not None:
+            # Per-sample mode: run ONNX once per sample, stack results.
+            # This avoids requiring the ONNX to support dynamic batch size.
+            ids_np = token_ids.cpu().numpy().astype(np.int64)  # [B, seq_len]
+            results = []
+            for i in range(ids_np.shape[0]):
+                row = ids_np[i:i+1]  # [1, seq_len]
+                out = self.session.run(None, {input_name: row})[0]  # [1, 1, D] or [1, D]
+                t = torch.tensor(out, dtype=torch.float32, device=self.device)
+                if t.dim() == 2:
+                    t = t.unsqueeze(1)  # [1, D] → [1, 1, D]
+                results.append(t)
+            return torch.cat(results, dim=0)  # [B, 1, D]
+
         if self._cached is None:
             raise RuntimeError(
-                "OnnxTextExtractor.precompute(token_ids) must be called before forward()."
+                "OnnxTextExtractor: pass token_ids or call precompute() first."
             )
-        B = len(wavs) if isinstance(wavs, list) else wavs.shape[0]
         return self._cached.expand(B, 1, self._emb_dim)  # [B, 1, D]
 
     def export_to_onnx(self, out: str, quantize: bool = False,
