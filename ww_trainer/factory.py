@@ -44,6 +44,7 @@ from ww_trainer.model import (
     EfficientNetHead,
     BaseWakeModel,
 )
+from ww_trainer.phonmatch import PhonMatchHead
 
 EXTRACTOR_REGISTRY: Dict[str, type] = {
     "onnx": OnnxFeatureExtractor,
@@ -73,6 +74,7 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
     "efficientnet": (EfficientNetHead, {"dropout"}),
+    "phonmatch": (PhonMatchHead, {"hidden_dim", "n_heads", "gru_layers", "dropout"}),
 }
 
 

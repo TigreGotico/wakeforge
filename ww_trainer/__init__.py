@@ -73,6 +73,15 @@ from ww_trainer.dataset import AudioDataset, collate_fn
 # --- Tiers ---
 from ww_trainer.tiers import HARDWARE_TIERS, TierConfig
 
+# --- PhonMatchNet text encoder + cross-attention head ---
+from ww_trainer.phonmatch import (
+    PHONEME_VOCAB,
+    VOCAB_SIZE,
+    phonemes_to_ids,
+    PhonMatchTextEncoder,
+    PhonMatchHead,
+)
+
 # --- Distillation ---
 from ww_trainer.distill import CnnLstmExtractor, KnowledgeDistillationTrainer
 
