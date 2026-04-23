@@ -149,6 +149,27 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         max_params=51200,
         max_size_kb=50.0,
     ),
+    # Aliases for backwards compatibility
+    "medium": TierConfig(
+        name="medium",
+        extractor_type="onnx",
+        head_arch="ffn",
+        hidden_dim=256,
+        description="Alias: SSL ONNX featurizer + FFN head (medium resource)",
+        approx_params="depends on featurizer + ~500K head",
+        target_hardware="x86 / GPU server",
+    ),
+    "large": TierConfig(
+        name="large",
+        extractor_type="hubert",
+        head_arch="gru",
+        hidden_dim=256,
+        bidirectional=True,
+        gru_n_layers=2,
+        description="Alias: HuBERT featurizer + bidirectional GRU (large, GPU)",
+        approx_params="depends on featurizer + ~2M head",
+        target_hardware="GPU server",
+    ),
 }
 
 

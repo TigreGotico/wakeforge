@@ -97,7 +97,7 @@ def mine_hard_negatives(
             wake_embeds = []
             model.eval()
             with torch.no_grad():
-                for wavs, _, _ in wake_loader:
+                for wavs, *_ in wake_loader:
                     wake_embeds.append(model.embed(wavs))
             if wake_embeds:
                 wake_proto = torch.cat(wake_embeds, dim=0).mean(0, keepdim=True)
@@ -153,39 +153,6 @@ def mine_hard_negatives(
     above_threshold = {p for p, c in new_conf.items() if c >= neg_threshold}
     hard_negatives = [(p, "0") for p, _ in sorted_cache if p in above_threshold]
     easy_negatives = [(p, "0") for p, _ in sorted_cache if p not in above_threshold]
-
-    if use_embedding_mining and hasattr(model, "embed"):
-        wakes_subset = []
-        if wake_cache:
-            try:
-                wakes_subset = random.sample(wake_cache, min(len(wake_cache), 200))
-            except Exception:
-                wakes_subset = []
-
-        if wakes_subset:
-            wake_loader = DataLoader(AudioDataset(wakes_subset, aug_prob=0), batch_size=128, shuffle=True,
-                                     collate_fn=lambda b: collate_fn(b, device))
-            wake_embeds = []
-            with torch.no_grad():
-                for wavs, *__ in wake_loader:
-                    wake_embeds.append(model.embed(wavs))
-            wake_proto = torch.cat(wake_embeds, dim=0).mean(0, keepdim=True)
-
-            emb_loader = DataLoader(AudioDataset(subset, aug_prob=0), batch_size=128, shuffle=True,
-                                    collate_fn=lambda b: collate_fn(b, device))
-            emb_sims: Dict[str, float] = {}
-            with torch.no_grad():
-                for wavs, _, paths, *__ in emb_loader:
-                    emb = model.embed(wavs)
-                    sim = torch.nn.functional.cosine_similarity(emb, wake_proto)
-                    for path, s in zip(paths, sim):
-                        emb_sims[path] = float(s.cpu())
-
-            for path, s in emb_sims.items():
-                hardness_cache[path] = 0.5 * hardness_cache.get(path, 0.0) + 0.5 * s
-
-            top_embed = sorted(hardness_cache.items(), key=lambda kv: kv[1], reverse=True)[:embed_top_k]
-            hard_negatives = [(p, "0") for p, _ in top_embed]
 
     logger.info("Mined %d hard and %d easy negatives (subset=%d)", len(hard_negatives), len(easy_negatives), sample_size)
     return hard_negatives, easy_negatives, hardness_cache

@@ -138,6 +138,8 @@ def test_embed_onnx_metadata(tmp_path):
         assert props[k] == v
 
 def test_markov_transition_extractor_onnx_parity(tmp_path):
+    torch.manual_seed(0)
+    np.random.seed(0)
     base = MfccExtractor(n_mfcc=13, sr=16000)
     ext = MarkovTransitionExtractor(base, n_codes=8, order=1)
     ext.to("cpu")

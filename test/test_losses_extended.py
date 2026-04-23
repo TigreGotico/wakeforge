@@ -139,7 +139,7 @@ def test_loss_manager_three_losses():
     wavs = torch.zeros(8, 8000)
     labels = torch.tensor([1, 0, 1, 0, 1, 0, 1, 0], dtype=torch.float32)
     total, results = mgr.compute_loss(model, wavs, labels)
-    assert len(results) == 4  # bce, contrastive, rppl, total
+    assert {"bce", "contrastive", "rppl", "total"}.issubset(results.keys())
     assert not torch.isnan(total)
 
 

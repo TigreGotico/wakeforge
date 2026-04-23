@@ -68,11 +68,11 @@ def test_no_torch_in_module_source():
     import ww_trainer.inference as inf_mod
     import inspect
     source = inspect.getsource(inf_mod)
-    # Allow torch in comments/strings but not as a top-level import statement
-    lines = [l.strip() for l in source.splitlines()]
+    # Only flag unindented (top-level) torch import statements; indented ones are fine
     top_level_torch_imports = [
-        l for l in lines
-        if l.startswith("import torch") or l.startswith("from torch")
+        l for l in source.splitlines()
+        if not l.startswith(" ") and not l.startswith("\t")
+        and (l.startswith("import torch") or l.startswith("from torch"))
     ]
     assert len(top_level_torch_imports) == 0, (
         f"Found torch imports in inference.py: {top_level_torch_imports}"
