@@ -12,9 +12,9 @@ import soundfile as sf
 from ww_trainer.quickstart import (
     QuickstartConfig,
     QuickstartResult,
-    _read_csv,
     _train_from_datagen_result,
 )
+from ww_trainer.utils import read_dataset_csv as _read_csv
 
 
 # ---------------------------------------------------------------------------
