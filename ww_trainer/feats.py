@@ -3,7 +3,7 @@ import logging
 import math
 import numpy as np
 from pathlib import Path
-from typing import List, Union, TypeAlias
+from typing import List, Optional, Union, TypeAlias
 from ww_trainer.utils import timed, embed_onnx_metadata
 import onnxruntime as ort
 import torch
@@ -2182,4 +2182,114 @@ class HMMStateExtractor(BaseExtractor):
         if metadata:
             embed_onnx_metadata(out, metadata)
         logger.info("Exported HMMStateExtractor to %s", out)
+
+
+class OnnxTextExtractor(BaseExtractor):
+    """Wraps an ONNX model that maps token IDs → ``[B, 1, D]`` text embeddings.
+
+    The ONNX model receives a 2-D ``int64`` tensor ``[B, seq_len]`` (token IDs).
+    Tokenisation is performed outside ww-trainer — the caller decides the scheme.
+
+    For a fixed wake word the embedding is precomputed once via :meth:`precompute`
+    and cached; subsequent :meth:`forward` calls return the cached tensor expanded
+    to the current batch size without re-running the ONNX session.
+
+    For zero-shot use, call :meth:`precompute` with new token IDs before each
+    :meth:`forward` call.
+
+    Args:
+        onnx_path: Path to the text-encoder ONNX file.
+        emb_dim: Output embedding dimension ``D``.
+        device: Device placement for the returned tensor.
+    """
+
+    def __init__(self, onnx_path: str, emb_dim: int, device: str = "auto") -> None:
+        super().__init__(device=device)
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] \
+            if torch.cuda.is_available() else ["CPUExecutionProvider"]
+        self.session = ort.InferenceSession(onnx_path, providers=providers)
+        self._emb_dim = emb_dim
+        self._cached: "Optional[torch.Tensor]" = None  # shape [1, 1, D] after precompute
+
+    @property
+    def feature_dim(self) -> int:
+        """Embedding dimension ``D`` (appended as extra feature channels)."""
+        return self._emb_dim
+
+    def precompute(self, token_ids: List[int]) -> None:
+        """Run the ONNX session once and cache the resulting embedding.
+
+        Args:
+            token_ids: 1-D list of integer token IDs for the target keyword.
+        """
+        import numpy as np
+        ids = np.array([token_ids], dtype=np.int64)  # [1, seq_len]
+        input_name = self.session.get_inputs()[0].name
+        out = self.session.run(None, {input_name: ids})[0]  # [1, 1, D] or [1, D]
+        t = torch.tensor(out, dtype=torch.float32, device=self.device)
+        if t.dim() == 2:
+            t = t.unsqueeze(1)  # [1, D] → [1, 1, D]
+        self._cached = t  # [1, 1, D]
+
+    def forward(self, wavs: WavInput,
+                token_ids: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
+        """Return text embeddings for the current batch.
+
+        Two modes:
+
+        * **Training / zero-shot** — pass ``token_ids`` as a ``[B, seq_len]``
+          int64 tensor (one keyword per sample).  The ONNX session is run for
+          each sample individually and results are stacked.
+        * **Inference / fixed keyword** — omit ``token_ids``; the embedding
+          cached by :meth:`precompute` is expanded to the batch size.
+
+        ``wavs`` content is ignored; it is accepted only to satisfy the
+        :class:`BaseExtractor` interface (batch size is derived from ``token_ids``
+        or ``wavs``).
+
+        Args:
+            wavs: Audio batch (used only to determine ``B`` when ``token_ids``
+                is ``None``).
+            token_ids: Optional ``[B, seq_len]`` int64 tensor of per-sample
+                keyword phoneme IDs.  When provided, the cache is bypassed.
+
+        Returns:
+            ``[B, 1, D]`` float32 tensor.
+
+        Raises:
+            RuntimeError: When both ``token_ids`` and the precomputed cache are
+                absent.
+        """
+        import numpy as np
+        B = len(wavs) if isinstance(wavs, list) else wavs.shape[0]
+        input_name = self.session.get_inputs()[0].name
+
+        if token_ids is not None:
+            # Per-sample mode: run ONNX once per sample, stack results.
+            # This avoids requiring the ONNX to support dynamic batch size.
+            ids_np = token_ids.cpu().numpy().astype(np.int64)  # [B, seq_len]
+            results = []
+            for i in range(ids_np.shape[0]):
+                row = ids_np[i:i+1]  # [1, seq_len]
+                out = self.session.run(None, {input_name: row})[0]  # [1, 1, D] or [1, D]
+                t = torch.tensor(out, dtype=torch.float32, device=self.device)
+                if t.dim() == 2:
+                    t = t.unsqueeze(1)  # [1, D] → [1, 1, D]
+                results.append(t)
+            return torch.cat(results, dim=0)  # [B, 1, D]
+
+        if self._cached is None:
+            raise RuntimeError(
+                "OnnxTextExtractor: pass token_ids or call precompute() first."
+            )
+        return self._cached.expand(B, 1, self._emb_dim)  # [B, 1, D]
+
+    def export_to_onnx(self, out: str, quantize: bool = False,
+                       dynamo: bool = False, metadata: dict = None) -> None:
+        """Not applicable — the underlying ONNX file is already the export artifact."""
+        raise NotImplementedError(
+            "OnnxTextExtractor wraps an existing ONNX file; "
+            "copy the source ONNX instead of re-exporting."
+        )
 

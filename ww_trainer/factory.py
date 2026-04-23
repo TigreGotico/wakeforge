@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from ww_trainer.feats import (
     OnnxFeatureExtractor,
+    OnnxTextExtractor,
     MfccExtractor,
     FilterbankExtractor,
     SincNetExtractor,
@@ -43,6 +44,7 @@ from ww_trainer.model import (
     EfficientNetHead,
     BaseWakeModel,
 )
+from ww_trainer.phonmatch import PhonMatchHead
 
 EXTRACTOR_REGISTRY: Dict[str, type] = {
     "onnx": OnnxFeatureExtractor,
@@ -72,6 +74,7 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "crnn": (CRNNHead, {"conv_channels", "gru_hidden", "gru_layers", "dropout"}),
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
     "efficientnet": (EfficientNetHead, {"dropout"}),
+    "phonmatch": (PhonMatchHead, {"hidden_dim", "n_heads", "gru_layers", "dropout"}),
 }
 
 
@@ -153,7 +156,11 @@ _plugins_loaded = False
 def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
                  featurizer_type: str = "onnx", sample_rate: int = 16000,
                  device: str = "auto",
-                 shared_extractor=None, **kwargs: Any) -> BaseWakeModel:
+                 shared_extractor=None,
+                 text_featurizer: Optional[str] = None,
+                 text_emb_dim: int = 128,
+                 keyword: Optional[str] = None,
+                 **kwargs: Any) -> BaseWakeModel:
     """Build a ``BaseWakeModel`` from architecture and featurizer names.
 
     Args:
@@ -164,6 +171,12 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
         sample_rate: Audio sample rate.
         device: Target device string.
         shared_extractor: Pre-built extractor instance (bypasses registry).
+        text_featurizer: Optional path to a text-encoder ONNX file. When
+            provided, text embeddings are appended to audio features before the
+            classifier head (see :class:`~ww_trainer.feats.OnnxTextExtractor`).
+        text_emb_dim: Output embedding dimension of the text featurizer.
+        keyword: Wake-word string stored as metadata on the model; also used
+            to identify the model during export and checkpoint naming.
         **kwargs: Forwarded to extractor and head constructors.
 
     Returns:
@@ -217,6 +230,15 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
     if feature_dim is None:
         feature_dim = extractor.feature_dim
 
+    # --- Optional text featurizer ---
+    text_ext = None
+    if text_featurizer is not None:
+        text_ext = OnnxTextExtractor(text_featurizer, emb_dim=text_emb_dim, device=device)
+        # Widen feature_dim so the head receives concatenated [audio | text] features
+        feature_dim = feature_dim + text_emb_dim
+        logger.info("Text featurizer enabled: %s (emb_dim=%d, total feature_dim=%d)",
+                    text_featurizer, text_emb_dim, feature_dim)
+
     # --- Build classifier head ---
     entry = HEAD_REGISTRY.get(arch_name)
     if entry is None:
@@ -232,5 +254,7 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
         feature_extractor=extractor,
         classifier=clf,
         sample_rate=sample_rate,
-        device=device
+        device=device,
+        text_extractor=text_ext,
+        keyword=keyword,
     )

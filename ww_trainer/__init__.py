@@ -24,6 +24,7 @@ from ww_trainer.feats import (
     SlidingFeatureCacheTensor,
     MarkovTransitionExtractor,
     HMMStateExtractor,
+    OnnxTextExtractor,
 )
 
 # --- Classifier Heads ---
@@ -71,6 +72,19 @@ from ww_trainer.dataset import AudioDataset, collate_fn
 
 # --- Tiers ---
 from ww_trainer.tiers import HARDWARE_TIERS, TierConfig
+
+# --- PhonMatchNet text encoder + cross-attention head ---
+from ww_trainer.phonmatch import (
+    IPA_VOCAB,
+    ARPABET_TO_IPA,
+    PHONEME_VOCAB,   # alias for IPA_VOCAB — backward compat
+    VOCAB_SIZE,
+    ipa_to_ids,
+    arpabet_to_ids,
+    phonemes_to_ids,  # alias for arpabet_to_ids — backward compat
+    PhonMatchTextEncoder,
+    PhonMatchHead,
+)
 
 # --- Distillation ---
 from ww_trainer.distill import CnnLstmExtractor, KnowledgeDistillationTrainer

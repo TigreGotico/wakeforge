@@ -122,7 +122,7 @@ def calibrate_model(
 
     model.eval()
     with torch.no_grad():
-        for wavs, labels, _ in loader:
+        for wavs, labels, *_ in loader:
             logits = model(wavs)
             all_logits.extend(logits.cpu().numpy().ravel())
             all_labels.extend(labels.numpy().ravel())

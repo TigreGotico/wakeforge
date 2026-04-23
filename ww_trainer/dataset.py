@@ -291,7 +291,9 @@ class AudioDataset(Dataset):
         return wav, sr
 
     def __getitem__(self, idx):
-        path, label = self.samples[idx]
+        entry = self.samples[idx]
+        path, label = entry[0], entry[1]
+        keyword_ids = entry[2] if len(entry) > 2 else None
 
         will_augment = self.aug_prob > 0 and random.random() < self.aug_prob
 
@@ -299,7 +301,7 @@ class AudioDataset(Dataset):
         if not will_augment and self.feature_cache is not None:
             cached = self.feature_cache.get(path)
             if cached is not None:
-                return torch.from_numpy(cached).float(), int(label), path
+                return torch.from_numpy(cached).float(), int(label), path, keyword_ids
 
         # 0. Apply Voice Conversion -> simulate a new speaker
         if label == "1" and self.vc is not None and random.random() < self.vc_prob:
@@ -330,9 +332,6 @@ class AudioDataset(Dataset):
             self.feature_cache.put(path, wav.numpy() if isinstance(wav, torch.Tensor) else wav)
 
         # Wake-word-over-speech: mix positives under a speech background at moderate SNR.
-        # Simulates "hey mycroft" spoken while TV / conversation is playing.
-        # Applied independently of aug_prob — runs whenever wow_files is populated
-        # and the sample is a positive.
         if self.wow_files and label == "1" and random.random() < self.wow_prob:
             donor_path = random.choice(self.wow_files)
             try:
@@ -344,21 +343,48 @@ class AudioDataset(Dataset):
             except Exception as exc:
                 logger.debug("WoW mixing failed for %s: %s", donor_path, exc)
 
-        return wav, int(label), path
+        return wav, int(label), path, keyword_ids
 
 
 def collate_fn(batch, device="auto"):
+    """Collate a batch of ``(wav, label, path[, keyword_ids])`` tuples.
+
+    ``keyword_ids`` is an optional list of int token IDs per sample (e.g. IPA
+    phoneme IDs for the keyword spoken in that sample).  When present, all
+    per-sample lists are stacked into a padded ``[B, max_seq]`` int64 tensor;
+    when absent (or all ``None``), ``None`` is returned as the fourth element.
+
+    Returns:
+        ``(wavs, labels, paths, keyword_ids_tensor_or_None)``
+    """
     if device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    wavs, labels, paths = zip(*batch)
+    has_kw = len(batch[0]) > 3
+    if has_kw:
+        wavs, labels, paths, kw_ids_list = zip(*batch)
+    else:
+        wavs, labels, paths = zip(*batch)
+        kw_ids_list = None
+
     max_len = max(w.shape[-1] for w in wavs)
     padded = torch.zeros(len(wavs), max_len)
     for i, w in enumerate(wavs):
         padded[i, :w.shape[-1]] = w
 
+    # Build padded keyword IDs tensor [B, max_seq] or None
+    kw_tensor = None
+    if kw_ids_list is not None and any(k is not None for k in kw_ids_list):
+        max_seq = max((len(k) for k in kw_ids_list if k is not None), default=0)
+        kw_arr = torch.zeros(len(kw_ids_list), max_seq, dtype=torch.long)
+        for i, k in enumerate(kw_ids_list):
+            if k is not None:
+                kw_arr[i, :len(k)] = torch.tensor(k, dtype=torch.long)
+        kw_tensor = kw_arr
+
     return (
         padded.to(device),
         torch.tensor(labels, dtype=torch.float32).to(device),
         paths,
+        kw_tensor,
     )

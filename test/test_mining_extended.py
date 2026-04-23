@@ -68,7 +68,6 @@ class TestMineWithEmbedding:
             model, nonwakes, device="cpu",
             dataset_fraction=1.0,
             use_embedding_mining=True,
-            embed_top_k=5,
             wake_cache=wakes,
         )
         assert isinstance(hard, list)

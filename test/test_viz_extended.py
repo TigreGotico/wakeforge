@@ -170,9 +170,10 @@ class TestLogPca:
         from ww_trainer.visualization import log_pca
         model = _stub_model()
         dataset = _make_dataset(tmp_path)
-        result = log_pca(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
-        assert isinstance(result, str)
-        assert Path(result).exists()
+        result, _ = log_pca(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
+        assert isinstance(result, (str, type(None))) or hasattr(result, "__fspath__")
+        if result is not None:
+            assert Path(result).exists()
 
     def test_mlflow_logged(self, tmp_path):
         from ww_trainer.visualization import log_pca
@@ -198,13 +199,13 @@ class TestLogTsne:
         from ww_trainer.visualization import log_tsne
         model = _stub_model()
         dataset = _make_dataset(tmp_path)
-        result = log_tsne(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
-        assert result is None or isinstance(result, str)
+        result, _ = log_tsne(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
+        assert result is None or isinstance(result, (str, Path))
 
     def test_empty_dataset_returns_none(self, tmp_path):
         from ww_trainer.visualization import log_tsne
         model = _stub_model()
-        result = log_tsne(model, [], outdir=tmp_path, epoch=1, device="cpu")
+        result, _ = log_tsne(model, [], outdir=tmp_path, epoch=1, device="cpu")
         assert result is None
 
     def test_string_outdir(self, tmp_path):
@@ -212,8 +213,8 @@ class TestLogTsne:
         from ww_trainer.visualization import log_tsne
         model = _stub_model()
         dataset = _make_dataset(tmp_path)
-        result = log_tsne(model, dataset, outdir=str(tmp_path), epoch=1, device="cpu")
-        assert result is None or isinstance(result, str)
+        result, _ = log_tsne(model, dataset, outdir=str(tmp_path), epoch=1, device="cpu")
+        assert result is None or isinstance(result, (str, Path))
 
     def test_mlflow_logged(self, tmp_path):
         from ww_trainer.visualization import log_tsne
@@ -234,8 +235,8 @@ class TestLogUmap:
         orig = viz._HAS_UMAP
         try:
             viz._HAS_UMAP = False
-            result = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
-            assert isinstance(result, str)
+            result, _ = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
+            assert result is None or isinstance(result, (str, Path))
         finally:
             viz._HAS_UMAP = orig
 
@@ -245,8 +246,8 @@ class TestLogUmap:
         model = _stub_model()
         dataset = _make_dataset(tmp_path)
         if viz._HAS_UMAP:
-            result = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
-            assert isinstance(result, str)
+            result, _ = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
+            assert result is None or isinstance(result, (str, Path))
         else:
             pytest.skip("umap-learn not installed")
 

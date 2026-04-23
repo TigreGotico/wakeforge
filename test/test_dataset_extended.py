@@ -176,7 +176,7 @@ class TestAudioDatasetGetitem:
         from ww_trainer.dataset import AudioDataset
         samples = _make_samples(tmp_path, n=2)
         ds = AudioDataset(samples, aug_prob=1.0)
-        wav, label, path = ds[0]
+        wav, label, path, kw_ids = ds[0]
         assert isinstance(wav, torch.Tensor)
         assert wav.ndim == 1
 
@@ -187,7 +187,7 @@ class TestAudioDatasetGetitem:
         path = _write_wav(tmp_path, "8k.wav", wav_8k, sr=8000)
         samples = [(path, "0")]
         ds = AudioDataset(samples, sample_rate=16000, aug_prob=0.0)
-        wav, label, p = ds[0]
+        wav, label, p, kw_ids = ds[0]
         assert isinstance(wav, torch.Tensor)
         # Resampled from 8k to 16k should be longer
         assert wav.shape[0] > len(wav_8k)
@@ -206,7 +206,7 @@ class TestAudioDatasetGetitem:
         # Make revoice raise an exception
         ds.vc.voice_convert.side_effect = RuntimeError("VC failed")
         with patch("random.random", return_value=0.0):  # ensure random < vc_prob
-            wav, label, path = ds[0]
+            wav, label, path, kw_ids = ds[0]
         assert isinstance(wav, torch.Tensor)
         assert label == 1
 
@@ -337,13 +337,28 @@ class TestCollateFn:
         """device='auto' selects cpu when no GPU available."""
         from ww_trainer.dataset import collate_fn
         batch = [(torch.zeros(100), 0, "a.wav"), (torch.zeros(200), 1, "b.wav")]
-        padded, labels, paths = collate_fn(batch, device="auto")
+        padded, labels, paths, kw_ids = collate_fn(batch, device="auto")
         assert padded.shape == (2, 200)
         assert labels.shape == (2,)
+        assert kw_ids is None
 
     def test_explicit_cpu_device(self):
         from ww_trainer.dataset import collate_fn
         batch = [(torch.ones(50), 1, "x.wav")]
-        padded, labels, paths = collate_fn(batch, device="cpu")
+        padded, labels, paths, kw_ids = collate_fn(batch, device="cpu")
         assert padded.shape == (1, 50)
         assert labels.item() == 1.0
+        assert kw_ids is None
+
+    def test_with_keyword_ids(self):
+        """4-tuple batch produces stacked [B, seq] keyword ID tensor."""
+        from ww_trainer.dataset import collate_fn
+        batch = [
+            (torch.zeros(100), 0, "a.wav", [1, 2, 3]),
+            (torch.zeros(200), 1, "b.wav", [4, 5, 6, 7]),
+        ]
+        padded, labels, paths, kw_ids = collate_fn(batch, device="cpu")
+        assert kw_ids is not None
+        assert kw_ids.shape == (2, 4)  # padded to longest
+        assert kw_ids[0, 3].item() == 0  # padding
+        assert kw_ids[1, 3].item() == 7

@@ -97,7 +97,7 @@ def mine_hard_negatives(
             wake_embeds = []
             model.eval()
             with torch.no_grad():
-                for wavs, _, _ in wake_loader:
+                for wavs, *_ in wake_loader:
                     wake_embeds.append(model.embed(wavs))
             if wake_embeds:
                 wake_proto = torch.cat(wake_embeds, dim=0).mean(0, keepdim=True)
@@ -115,7 +115,7 @@ def mine_hard_negatives(
     emb_sims: Dict[str, float] = {}   # cosine similarity to wake prototype
     model.eval()
     with torch.no_grad():
-        for wavs, _, paths in tqdm(loader, desc="Mining negatives", leave=False):
+        for wavs, _, paths, *__ in tqdm(loader, desc="Mining negatives", leave=False):
             logits = model(wavs)
             probs = torch.sigmoid(logits).cpu().numpy().flatten()
             for path, p in zip(paths, probs):
@@ -154,10 +154,7 @@ def mine_hard_negatives(
     hard_negatives = [(p, "0") for p, _ in sorted_cache if p in above_threshold]
     easy_negatives = [(p, "0") for p, _ in sorted_cache if p not in above_threshold]
 
-    logger.info(
-        "Mined %d hard (conf≥%.2f) and %d easy negatives (scanned=%d/%d)",
-        len(hard_negatives), neg_threshold, len(easy_negatives), sample_size, len(nonwakes),
-    )
+    logger.info("Mined %d hard and %d easy negatives (subset=%d)", len(hard_negatives), len(easy_negatives), sample_size)
     return hard_negatives, easy_negatives, hardness_cache
 
 

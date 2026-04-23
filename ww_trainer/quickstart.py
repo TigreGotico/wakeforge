@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ww_trainer.utils import read_dataset_csv
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +104,6 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
         :class:`~ww_trainer.datagen.DatagenResult` instance.
     """
     from ww_trainer.datagen import DatagenConfig, DatagenResult, normalize_wake_word, run_datagen_pipeline
-from ww_trainer.utils import read_dataset_csv
 
     slug = normalize_wake_word(cfg.wake_word)
     dataset_dir = Path(cfg.output_dir) / "dataset"

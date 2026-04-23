@@ -66,7 +66,7 @@ def evaluate_model(
     paths_all: List[str] = []
     model.eval()
     with torch.no_grad():
-        for wavs, labels, paths in tqdm(loader, desc="Evaluating", leave=False):
+        for wavs, labels, paths, *_ in tqdm(loader, desc="Evaluating", leave=False):
             logits = model(wavs)
             prob = torch.sigmoid(logits).cpu().numpy().flatten()
             pred = (prob > threshold).astype(int)
