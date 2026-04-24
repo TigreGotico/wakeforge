@@ -268,6 +268,143 @@ class FfnClassifierHead(ClassifierHead):
         return F.relu(self.sequential[0](pooled))
 
 
+class OCSVMHead(ClassifierHead):
+    """Two-stage wake-word head: FFN backbone + One-Class SVM decision boundary.
+
+    Stage 1 — normal training loop with BCE/focal loss; backbone learns discriminative embeddings.
+    Stage 2 — call :meth:`fit_ocsvm` after training to fit an OCSVM on positive embeddings.
+    The OCSVM decision function is stored as torch buffers so :meth:`export_to_onnx` works
+    without any sklearn dependency at inference time.
+
+    Args:
+        input_size: Feature dimension from the upstream extractor.
+        sample_rate: Audio sample rate (Hz).
+        device: Torch device string or ``"auto"``.
+        hidden_dim: Intermediate FFN width.
+        embed_dim: Output embedding dimension (input to OCSVM).
+        dropout: Dropout probability in the backbone.
+        nu: OCSVM ``nu`` parameter (upper bound on fraction of outliers).
+        kernel: OCSVM kernel type — only ``"rbf"`` is ONNX-exportable without override.
+        gamma: OCSVM kernel coefficient; ``"scale"`` → ``1 / embed_dim``.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        sample_rate: int = 16000,
+        device: str = "auto",
+        hidden_dim: int = 128,
+        embed_dim: int = 64,
+        dropout: float = 0.1,
+        nu: float = 0.1,
+        kernel: str = "rbf",
+        gamma: str = "scale",
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.embed_dim = embed_dim
+        self._nu = nu
+        self._kernel = kernel
+        self._gamma = gamma
+        self.backbone = nn.Sequential(
+            nn.Linear(input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, embed_dim),
+        )
+        # Support-vector buffers — populated by fit_ocsvm(); zeros = unfitted sentinel
+        # All-zero SVs produce a constant-zero decision score, which is safe before fitting.
+        self.register_buffer("_sv_vectors", torch.zeros(1, embed_dim))
+        self.register_buffer("_sv_weights", torch.zeros(1))
+        self.register_buffer("_rho", torch.zeros(1))
+
+    def _rbf_decision(self, emb: torch.Tensor) -> torch.Tensor:
+        """Pure-torch RBF kernel decision function — ONNX-safe.
+
+        Args:
+            emb: ``[B, embed_dim]`` embeddings.
+
+        Returns:
+            ``[B]`` decision scores (positive = inlier/wake-word).
+        """
+        gamma = 1.0 / self.embed_dim  # matches sklearn gamma="scale"
+        sq_x = (emb ** 2).sum(dim=1, keepdim=True)          # [B, 1]
+        sq_sv = (self._sv_vectors ** 2).sum(dim=1)           # [N]
+        dot = emb @ self._sv_vectors.T                        # [B, N]
+        sq_dist = sq_x + sq_sv - 2.0 * dot                   # [B, N]
+        kernel_vals = torch.exp(-gamma * sq_dist)             # [B, N]
+        return (kernel_vals * self._sv_weights).sum(dim=1) - self._rho.squeeze()
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        """Compute wake-word score.
+
+        Returns the OCSVM decision value once fitted; before fitting the
+        ``_sv_vectors`` buffer is all-zeros, producing a constant-zero score
+        that is ONNX-traceable without Python control flow.
+
+        Args:
+            feats: ``[B, T, F]`` feature frames.
+
+        Returns:
+            ``[B]`` scores (positive = inlier/wake-word after fitting).
+        """
+        emb = self.backbone(feats.mean(dim=1))  # [B, embed_dim]
+        return self._rbf_decision(emb)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        """Return backbone embeddings.
+
+        Args:
+            feats: ``[B, T, F]`` feature frames.
+
+        Returns:
+            ``[B, embed_dim]`` embeddings.
+        """
+        return self.backbone(feats.mean(dim=1))
+
+    def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader") -> None:
+        """Fit the OCSVM on positive-class embeddings from *dataloader*.
+
+        Requires ``scikit-learn``. After fitting, support vectors are stored
+        as torch buffers so subsequent ONNX export needs no sklearn.
+
+        Args:
+            dataloader: Yields ``(feats, labels, ...)`` batches where ``labels == 1``
+                        marks positive (wake-word) samples.
+        """
+        try:
+            from sklearn.svm import OneClassSVM
+        except ImportError as exc:
+            raise ImportError(
+                "scikit-learn is required for fit_ocsvm(). "
+                "Install with: pip install ww_trainer[ocsvm]"
+            ) from exc
+
+        self.eval()
+        embeds = []
+        with torch.no_grad():
+            for batch in dataloader:
+                feats, labels = batch[0], batch[1]
+                pos = feats[labels == 1]
+                if pos.shape[0]:
+                    embeds.append(self.embed(pos.to(self.device)).cpu())
+
+        if not embeds:
+            raise ValueError("No positive samples found in dataloader — cannot fit OCSVM.")
+
+        X = torch.cat(embeds, dim=0).numpy()
+        gamma_val = "scale" if self._gamma == "scale" else self._gamma
+        svm = OneClassSVM(nu=self._nu, kernel=self._kernel, gamma=gamma_val)
+        svm.fit(X)
+
+        sv = torch.tensor(svm.support_vectors_, dtype=torch.float32)
+        w = torch.tensor(svm.dual_coef_[0], dtype=torch.float32)
+        rho = torch.tensor([svm.offset_[0]], dtype=torch.float32)
+        self._sv_vectors = sv.to(self.device)
+        self._sv_weights = w.to(self.device)
+        self._rho = rho.to(self.device)
+        logger.info("OCSVMHead fitted: %d support vectors.", sv.shape[0])
+
+
 class CnnClassifierHead(ClassifierHead):
 
     def __init__(self, sample_rate: int = 16000,

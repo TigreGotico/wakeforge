@@ -682,6 +682,19 @@ def training_loop(
             logger.info("Early stopping — no new hard negatives for %d epochs.", patience)
             break
 
+    # Stage 2: fit OCSVM on positive embeddings if head supports it
+    if hasattr(trainer.model.classifier, "fit_ocsvm"):
+        try:
+            logger.info("OCSVMHead detected — fitting OCSVM on training positives.")
+            _ocsvm_loader = DataLoader(
+                AudioDataset(train_data, device=trainer.device.type, aug_prob=0.0),
+                batch_size=batch_size, shuffle=False,
+                collate_fn=lambda b: collate_fn(b, trainer.device),
+            )
+            trainer.model.classifier.fit_ocsvm(_ocsvm_loader)
+        except Exception as exc:
+            logger.warning("fit_ocsvm() failed (skipping): %s", exc)
+
     # Final save
     try:
         ckpt = output_dir / "final_model.pt"

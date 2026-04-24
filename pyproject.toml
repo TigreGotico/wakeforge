@@ -43,6 +43,12 @@ sweep = [
     "optuna",
 ]
 
+# ── One-Class SVM head ─────────────────────────────────────────────────────
+# Required only for OCSVMHead.fit_ocsvm() — not needed at inference time
+ocsvm = [
+    "scikit-learn>=1.3",
+]
+
 # ── Feature extractors ─────────────────────────────────────────────────────
 # HuBERT / Wav2Vec2 / Wav2Vec2-BERT extractors
 transformers = [
