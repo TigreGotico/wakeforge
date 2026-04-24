@@ -191,12 +191,36 @@ Conformer (Gulati et al. 2020). Convolution-augmented transformer: FFN -> MHSA -
 
 ---
 
+### OCSVMHead — `model.py`
+
+Two-stage head: FFN backbone maps pooled frame features to a fixed-size embedding, then a One-Class SVM decision boundary classifies embeddings as inlier (wake-word) or outlier. Inspired by Spoken-Keyword-Spotting (Vineeth S., 2021).
+
+**Architecture:** `[B,T,F]` → mean-pool → Linear(F→hidden) → ReLU → Dropout → Linear(hidden→embed_dim) → RBF-kernel OCSVM → `[B]` score.
+
+**Training stages:**
+1. Stage 1 — backbone trains via BCE/focal loss alongside all other heads.
+2. Stage 2 — `fit_ocsvm(dataloader)` (`OCSVMHead.fit_ocsvm` — `model.py`) fits `sklearn.svm.OneClassSVM` on positive-class embeddings; support vectors stored as torch buffers.
+
+**ONNX export:** RBF decision function is pure PyTorch — inherited `ClassifierHead.export_to_onnx` works without override. No sklearn at inference time.
+
+**Parameters:** `hidden_dim` (128), `embed_dim` (64), `dropout` (0.1), `nu` (0.1), `kernel` ("rbf"), `gamma` ("scale").
+
+**Optional dependency:** `fit_ocsvm()` requires `scikit-learn`. Install with `pip install ww_trainer[ocsvm]`.
+
+**Tier preset:** `ocsvm_small` — MFCC (40 bins) + OCSVMHead (hidden=128, embed=64).
+
+**When to use:** Few-shot / positive-only training; tight FAR control via `nu`; anomaly-detection framing of KWS.
+
+**When NOT to use:** When negatives are plentiful (binary heads train faster). Not for MCUs (SV buffer grows with training-set size).
+
+---
+
 ## Hardware Fit Summary
 
 | Hardware | Recommended Heads | Max Params |
 |----------|-------------------|------------|
 | MCU (Cortex-M) | FFN, DSCNN-S, BCResNet (tau=1-2) | <30K |
 | RPi Zero | DSCNN-M, BCResNet (tau=3), MatchboxNet-3x1x64, TCResNet8 | <50K |
-| RPi 3/4 | BCResNet (tau=6-8), GRU, CRNN, Res15 | <300K |
+| RPi 3/4 | BCResNet (tau=6-8), GRU, CRNN, Res15, OCSVMHead | <300K |
 | Laptop | KWT, Conformer, any | <500K |
 | Server | Conformer, KWT with large configs | Unlimited |
