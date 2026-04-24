@@ -75,7 +75,7 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
     "efficientnet": (EfficientNetHead, {"dropout"}),
     "phonmatch": (PhonMatchHead, {"hidden_dim", "n_heads", "gru_layers", "dropout"}),
-    "ocsvm": (OCSVMHead, {"hidden_dim", "embed_dim", "dropout", "nu", "kernel", "gamma"}),
+    "ocsvm": (OCSVMHead, {"hidden_dim", "embed_dim", "dropout", "nu", "kernel", "gamma", "degree", "coef0"}),
 }
 
 

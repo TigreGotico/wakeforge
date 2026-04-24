@@ -284,13 +284,18 @@ class OCSVMHead(ClassifierHead):
         embed_dim: Output embedding dimension (input to OCSVM).
         dropout: Dropout probability in the backbone.
         nu: OCSVM ``nu`` parameter (upper bound on fraction of outliers).
-        kernel: OCSVM kernel type — **must be ``"rbf"``**; other kernels are accepted by
-            sklearn but the torch decision function only implements RBF, so non-RBF kernels
-            will raise :exc:`ValueError` in :meth:`fit_ocsvm`.
-        gamma: RBF kernel coefficient passed to sklearn. ``"scale"`` (default) lets sklearn
-            compute ``1 / (n_features * X.var())`` from the training embeddings; that exact
-            value is stored as a buffer after fitting so inference is exact.
+        kernel: OCSVM kernel — ``"rbf"`` (default), ``"linear"``, ``"poly"``,
+            or ``"sigmoid"``. All four are implemented in pure PyTorch and are
+            ONNX-exportable. Kernel parameters are stored as buffers after
+            :meth:`fit_ocsvm` so no sklearn is needed at inference time.
+        gamma: Kernel coefficient passed to sklearn. ``"scale"`` (default) lets
+            sklearn compute ``1 / (n_features × X.var())`` from the training
+            embeddings; that exact value is stored as a buffer after fitting.
+        degree: Degree for the ``"poly"`` kernel (ignored for other kernels).
+        coef0: Independent term for ``"poly"`` and ``"sigmoid"`` kernels.
     """
+
+    _SUPPORTED_KERNELS = frozenset({"rbf", "linear", "poly", "sigmoid"})
 
     def __init__(
         self,
@@ -303,12 +308,21 @@ class OCSVMHead(ClassifierHead):
         nu: float = 0.1,
         kernel: str = "rbf",
         gamma: "Union[str, float]" = "scale",
+        degree: int = 3,
+        coef0: float = 0.0,
     ) -> None:
         super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        if kernel not in self._SUPPORTED_KERNELS:
+            raise ValueError(
+                f"kernel={kernel!r} is not supported. Choose from: "
+                + ", ".join(sorted(self._SUPPORTED_KERNELS))
+            )
         self.embed_dim = embed_dim
         self._nu = nu
         self._kernel = kernel
         self._gamma = gamma
+        self._degree_init = degree
+        self._coef0_init = coef0
         self.backbone = nn.Sequential(
             nn.Linear(input_size, hidden_dim),
             nn.ReLU(),
@@ -316,45 +330,53 @@ class OCSVMHead(ClassifierHead):
             nn.Linear(hidden_dim, embed_dim),
         )
         # Support-vector buffers — populated by fit_ocsvm(); zeros = unfitted sentinel.
-        # All-zero SVs produce a constant-zero decision score, safe before fitting.
+        # All-zero SVs produce constant-zero decision scores before fitting.
         self.register_buffer("_sv_vectors", torch.zeros(1, embed_dim))
         self.register_buffer("_sv_weights", torch.zeros(1))
         self.register_buffer("_rho", torch.zeros(1))
-        # Actual gamma computed by sklearn after fitting (1/(n_feat*X.var()) for "scale").
-        # Pre-fitting sentinel: 1/embed_dim (reasonable but unused since SVs are zero).
+        # Kernel parameter buffers — exact values stored after fitting.
+        # Sentinels are reasonable defaults but produce zero scores with zero SVs.
         self.register_buffer("_gamma_val", torch.tensor(1.0 / embed_dim))
+        self.register_buffer("_degree_val", torch.tensor(float(degree)))
+        self.register_buffer("_coef0_val", torch.tensor(coef0))
 
-    def _rbf_decision(self, emb: torch.Tensor) -> torch.Tensor:
-        """Pure-torch RBF kernel decision function — ONNX-safe.
+    def _kernel_vals(self, emb: torch.Tensor) -> torch.Tensor:
+        """Compute kernel matrix K(emb, support_vectors) — pure torch, ONNX-safe.
 
         Args:
             emb: ``[B, embed_dim]`` embeddings.
 
         Returns:
-            ``[B]`` decision scores (positive = inlier/wake-word).
+            ``[B, N]`` kernel evaluations against the N support vectors.
         """
-        sq_x = (emb ** 2).sum(dim=1, keepdim=True)          # [B, 1]
-        sq_sv = (self._sv_vectors ** 2).sum(dim=1)           # [N]
-        dot = emb @ self._sv_vectors.T                        # [B, N]
-        sq_dist = sq_x + sq_sv - 2.0 * dot                   # [B, N]
-        kernel_vals = torch.exp(-self._gamma_val * sq_dist)  # [B, N]
-        return (kernel_vals * self._sv_weights).sum(dim=1) - self._rho.squeeze()
+        dot = emb @ self._sv_vectors.T  # [B, N]
+        if self._kernel == "linear":
+            return dot
+        if self._kernel == "poly":
+            return (self._gamma_val * dot + self._coef0_val) ** self._degree_val
+        if self._kernel == "sigmoid":
+            return torch.tanh(self._gamma_val * dot + self._coef0_val)
+        # rbf (default)
+        sq_x = (emb ** 2).sum(dim=1, keepdim=True)   # [B, 1]
+        sq_sv = (self._sv_vectors ** 2).sum(dim=1)    # [N]
+        sq_dist = sq_x + sq_sv - 2.0 * dot            # [B, N]
+        return torch.exp(-self._gamma_val * sq_dist)
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
         """Compute wake-word score.
 
-        Returns the OCSVM decision value once fitted; before fitting the
-        ``_sv_vectors`` buffer is all-zeros, producing a constant-zero score
-        that is ONNX-traceable without Python control flow.
+        Before fitting, all SV buffers are zero, producing a constant-zero score.
+        After :meth:`fit_ocsvm`, returns the OCSVM decision value.
 
         Args:
             feats: ``[B, T, F]`` feature frames.
 
         Returns:
-            ``[B]`` scores (positive = inlier/wake-word after fitting).
+            ``[B]`` scores (positive = inlier / wake-word after fitting).
         """
-        emb = self.backbone(feats.mean(dim=1))  # [B, embed_dim]
-        return self._rbf_decision(emb)
+        emb = self.backbone(feats.mean(dim=1))           # [B, embed_dim]
+        k = self._kernel_vals(emb)                        # [B, N]
+        return (k * self._sv_weights).sum(dim=1) - self._rho.squeeze()
 
     def embed(self, feats: torch.Tensor) -> torch.Tensor:
         """Return backbone embeddings.
@@ -370,11 +392,13 @@ class OCSVMHead(ClassifierHead):
     def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader") -> None:
         """Fit the OCSVM on positive-class embeddings from *dataloader*.
 
-        Requires ``scikit-learn``. After fitting, support vectors and the exact
-        gamma value are stored as torch buffers so subsequent ONNX export needs
-        no sklearn. **Always call :meth:`export_to_onnx` after fitting** — an
-        ONNX graph exported before fitting bakes in the all-zero sentinel buffers
-        and will produce constant-zero scores regardless of the input.
+        Requires ``scikit-learn``. After fitting, all kernel parameters (support
+        vectors, dual coefficients, bias, gamma, degree, coef0) are stored as
+        torch buffers so subsequent ONNX export needs no sklearn.
+
+        **Always call :meth:`export_to_onnx` after fitting** — an ONNX graph
+        exported before fitting bakes in the all-zero sentinel buffers and will
+        produce constant-zero scores regardless of the input.
 
         Args:
             dataloader: Yields ``(feats, labels, ...)`` batches where ``labels == 1``
@@ -382,8 +406,6 @@ class OCSVMHead(ClassifierHead):
 
         Raises:
             ImportError: If ``scikit-learn`` is not installed.
-            ValueError: If :attr:`kernel` is not ``"rbf"`` (other kernels are not
-                ONNX-exportable via the pure-torch decision function).
             ValueError: If no positive-class samples are found in *dataloader*.
         """
         try:
@@ -393,12 +415,6 @@ class OCSVMHead(ClassifierHead):
                 "scikit-learn is required for fit_ocsvm(). "
                 "Install with: pip install ww_trainer[ocsvm]"
             ) from exc
-
-        if self._kernel != "rbf":
-            raise ValueError(
-                f"OCSVMHead only supports kernel='rbf' for ONNX-compatible inference; "
-                f"got kernel={self._kernel!r}. Use kernel='rbf'."
-            )
 
         self.eval()
         embeds = []
@@ -413,20 +429,22 @@ class OCSVMHead(ClassifierHead):
             raise ValueError("No positive samples found in dataloader — cannot fit OCSVM.")
 
         X = torch.cat(embeds, dim=0).numpy()
-        svm = OneClassSVM(nu=self._nu, kernel=self._kernel, gamma=self._gamma)
+        svm = OneClassSVM(
+            nu=self._nu, kernel=self._kernel, gamma=self._gamma,
+            degree=int(self._degree_val.item()), coef0=float(self._coef0_val.item()),
+        )
         svm.fit(X)
 
-        sv = torch.tensor(svm.support_vectors_, dtype=torch.float32)
-        w = torch.tensor(svm.dual_coef_[0], dtype=torch.float32)
-        rho = torch.tensor([svm.offset_[0]], dtype=torch.float32)
-        # svm._gamma holds the actual float used (resolves "scale"/"auto" to a number)
-        gamma_actual = torch.tensor(float(svm._gamma), dtype=torch.float32)
-        self._sv_vectors = sv.to(self.device)
-        self._sv_weights = w.to(self.device)
-        self._rho = rho.to(self.device)
-        self._gamma_val = gamma_actual.to(self.device)
+        self._sv_vectors = torch.tensor(svm.support_vectors_, dtype=torch.float32).to(self.device)
+        self._sv_weights = torch.tensor(svm.dual_coef_[0], dtype=torch.float32).to(self.device)
+        self._rho = torch.tensor([svm.offset_[0]], dtype=torch.float32).to(self.device)
+        # svm._gamma holds the actual float (resolves "scale"/"auto" from training data)
+        self._gamma_val = torch.tensor(float(svm._gamma), dtype=torch.float32).to(self.device)
+        self._degree_val = torch.tensor(float(svm.degree), dtype=torch.float32).to(self.device)
+        self._coef0_val = torch.tensor(float(svm.coef0), dtype=torch.float32).to(self.device)
         logger.info(
-            "OCSVMHead fitted: %d support vectors, gamma=%.6f.", sv.shape[0], svm._gamma
+            "OCSVMHead fitted: %d support vectors, kernel=%s, gamma=%.6f.",
+            self._sv_vectors.shape[0], self._kernel, svm._gamma,
         )
 
 

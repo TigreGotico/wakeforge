@@ -383,42 +383,65 @@ class TestOCSVMHead:
         ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
         np.testing.assert_allclose(torch_out, ort_out, rtol=1e-4, atol=1e-5)
 
-    def test_decision_scores_match_sklearn(self):
-        """Torch _rbf_decision must exactly match sklearn.decision_function after fitting."""
+    @pytest.mark.parametrize("kernel", ["rbf", "linear", "poly", "sigmoid"])
+    def test_decision_scores_match_sklearn(self, kernel):
+        """Torch kernel decision must exactly match sklearn.decision_function for all kernels."""
         pytest.importorskip("sklearn")
         from sklearn.svm import OneClassSVM
-        from sklearn.metrics.pairwise import rbf_kernel
-        head = self._make_head()
-        train_feats = torch.randn(16, 50, 40)
-        batches = [(train_feats, torch.ones(16, dtype=torch.long))]
+        torch.manual_seed(0)
+        head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                         kernel=kernel, device="cpu")
+        train_feats = torch.randn(32, 50, 40)
+        batches = [(train_feats, torch.ones(32, dtype=torch.long))]
         head.fit_ocsvm(batches)
 
-        # Compute sklearn decision scores directly on the raw embeddings
-        train_embeds = head.embed(train_feats).detach().numpy()
-        svm = OneClassSVM(nu=0.1, kernel="rbf", gamma="scale")
-        svm.fit(train_embeds)
+        # Fit a reference sklearn SVM on the same backbone embeddings
+        with torch.no_grad():
+            train_embeds = head.embed(train_feats).numpy()
+        ref_svm = OneClassSVM(nu=0.1, kernel=kernel, gamma="scale")
+        ref_svm.fit(train_embeds)
 
         test_feats = torch.randn(5, 50, 40)
-        test_embeds = head.embed(test_feats).detach().numpy()
-        sklearn_scores = svm.decision_function(test_embeds)
+        with torch.no_grad():
+            test_embeds = head.embed(test_feats).numpy()
+        sklearn_scores = ref_svm.decision_function(test_embeds)
 
-        # Re-fit head on same embeddings so buffers match this svm instance
-        head2 = self._make_head()
+        # Re-fit a fresh head on the same data so its buffers match ref_svm
+        head2 = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                          kernel=kernel, device="cpu")
         head2.backbone = head.backbone
-        head2.fit_ocsvm([(train_feats, torch.ones(16, dtype=torch.long))])
+        head2.fit_ocsvm([(train_feats, torch.ones(32, dtype=torch.long))])
         with torch.no_grad():
             torch_scores = head2(test_feats).numpy()
 
-        np.testing.assert_allclose(torch_scores, sklearn_scores, rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(torch_scores, sklearn_scores, rtol=1e-4, atol=1e-5,
+                                   err_msg=f"Score mismatch for kernel={kernel}")
 
-    def test_non_rbf_kernel_raises(self):
-        """fit_ocsvm() must raise ValueError for non-RBF kernels."""
+    @pytest.mark.parametrize("kernel", ["linear", "poly", "sigmoid"])
+    def test_non_rbf_kernels_fit_and_onnx_parity(self, tmp_path, kernel):
+        """All supported kernels must fit, produce correct [B] output, and export valid ONNX."""
         pytest.importorskip("sklearn")
+        import onnx, onnxruntime as ort
         head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
-                         kernel="linear", device="cpu")
-        batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
-        with pytest.raises(ValueError, match="kernel='rbf'"):
-            head.fit_ocsvm(batches)
+                         kernel=kernel, device="cpu")
+        batches = [(torch.randn(8, 50, 40), torch.ones(8, dtype=torch.long))]
+        head.fit_ocsvm(batches)
+        head.eval()
+        out_path = str(tmp_path / f"ocsvm_{kernel}.onnx")
+        head.export_to_onnx(out_path)
+        onnx.checker.check_model(out_path)
+        feats = torch.randn(3, 50, 40)
+        with torch.no_grad():
+            pt_out = head(feats).numpy()
+        sess = ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
+        ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
+        np.testing.assert_allclose(pt_out, ort_out, rtol=1e-4, atol=1e-5,
+                                   err_msg=f"ONNX parity failed for kernel={kernel}")
+
+    def test_unsupported_kernel_raises_at_init(self):
+        """Construction with an unsupported kernel must raise ValueError immediately."""
+        with pytest.raises(ValueError, match="not supported"):
+            OCSVMHead(input_size=40, kernel="precomputed", device="cpu")
 
     def test_registered_in_factory(self):
         from ww_trainer.factory import HEAD_REGISTRY
