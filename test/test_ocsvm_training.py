@@ -95,6 +95,25 @@ class TestOCSVMHeadUnit:
         assert head._sv_vectors.shape[1] == 16
         assert head._sv_weights.shape[0] >= 1
 
+    def test_fit_ocsvm_stores_correct_gamma(self):
+        """_gamma_val buffer must match sklearn's actual computed gamma, not 1/embed_dim."""
+        pytest.importorskip("sklearn")
+        from sklearn.svm import OneClassSVM
+        from ww_trainer.model import OCSVMHead
+        import torch
+        head = OCSVMHead(input_size=13, hidden_dim=32, embed_dim=16, device="cpu")
+        train_feats = torch.randn(20, 50, 13)
+        batches = [(train_feats, torch.ones(20, dtype=torch.long))]
+        head.fit_ocsvm(batches)
+        # Refit sklearn on the same embeddings to get the reference gamma
+        with torch.no_grad():
+            embeds = head.embed(train_feats).numpy()
+        ref_svm = OneClassSVM(nu=0.1, kernel="rbf", gamma="scale")
+        ref_svm.fit(embeds)
+        assert abs(head._gamma_val.item() - ref_svm._gamma) < 1e-6, (
+            f"_gamma_val {head._gamma_val.item()} != sklearn gamma {ref_svm._gamma}"
+        )
+
     def test_fit_ocsvm_changes_output(self):
         """Scores must change after fitting (SV buffers replace zero sentinel)."""
         pytest.importorskip("sklearn")

@@ -383,6 +383,43 @@ class TestOCSVMHead:
         ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
         np.testing.assert_allclose(torch_out, ort_out, rtol=1e-4, atol=1e-5)
 
+    def test_decision_scores_match_sklearn(self):
+        """Torch _rbf_decision must exactly match sklearn.decision_function after fitting."""
+        pytest.importorskip("sklearn")
+        from sklearn.svm import OneClassSVM
+        from sklearn.metrics.pairwise import rbf_kernel
+        head = self._make_head()
+        train_feats = torch.randn(16, 50, 40)
+        batches = [(train_feats, torch.ones(16, dtype=torch.long))]
+        head.fit_ocsvm(batches)
+
+        # Compute sklearn decision scores directly on the raw embeddings
+        train_embeds = head.embed(train_feats).detach().numpy()
+        svm = OneClassSVM(nu=0.1, kernel="rbf", gamma="scale")
+        svm.fit(train_embeds)
+
+        test_feats = torch.randn(5, 50, 40)
+        test_embeds = head.embed(test_feats).detach().numpy()
+        sklearn_scores = svm.decision_function(test_embeds)
+
+        # Re-fit head on same embeddings so buffers match this svm instance
+        head2 = self._make_head()
+        head2.backbone = head.backbone
+        head2.fit_ocsvm([(train_feats, torch.ones(16, dtype=torch.long))])
+        with torch.no_grad():
+            torch_scores = head2(test_feats).numpy()
+
+        np.testing.assert_allclose(torch_scores, sklearn_scores, rtol=1e-4, atol=1e-5)
+
+    def test_non_rbf_kernel_raises(self):
+        """fit_ocsvm() must raise ValueError for non-RBF kernels."""
+        pytest.importorskip("sklearn")
+        head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                         kernel="linear", device="cpu")
+        batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
+        with pytest.raises(ValueError, match="kernel='rbf'"):
+            head.fit_ocsvm(batches)
+
     def test_registered_in_factory(self):
         from ww_trainer.factory import HEAD_REGISTRY
         assert "ocsvm" in HEAD_REGISTRY

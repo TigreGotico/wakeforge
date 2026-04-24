@@ -2,7 +2,7 @@ import abc
 import inspect
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -284,8 +284,12 @@ class OCSVMHead(ClassifierHead):
         embed_dim: Output embedding dimension (input to OCSVM).
         dropout: Dropout probability in the backbone.
         nu: OCSVM ``nu`` parameter (upper bound on fraction of outliers).
-        kernel: OCSVM kernel type — only ``"rbf"`` is ONNX-exportable without override.
-        gamma: OCSVM kernel coefficient; ``"scale"`` → ``1 / embed_dim``.
+        kernel: OCSVM kernel type — **must be ``"rbf"``**; other kernels are accepted by
+            sklearn but the torch decision function only implements RBF, so non-RBF kernels
+            will raise :exc:`ValueError` in :meth:`fit_ocsvm`.
+        gamma: RBF kernel coefficient passed to sklearn. ``"scale"`` (default) lets sklearn
+            compute ``1 / (n_features * X.var())`` from the training embeddings; that exact
+            value is stored as a buffer after fitting so inference is exact.
     """
 
     def __init__(
@@ -298,7 +302,7 @@ class OCSVMHead(ClassifierHead):
         dropout: float = 0.1,
         nu: float = 0.1,
         kernel: str = "rbf",
-        gamma: str = "scale",
+        gamma: "Union[str, float]" = "scale",
     ) -> None:
         super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
         self.embed_dim = embed_dim
@@ -311,11 +315,14 @@ class OCSVMHead(ClassifierHead):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, embed_dim),
         )
-        # Support-vector buffers — populated by fit_ocsvm(); zeros = unfitted sentinel
-        # All-zero SVs produce a constant-zero decision score, which is safe before fitting.
+        # Support-vector buffers — populated by fit_ocsvm(); zeros = unfitted sentinel.
+        # All-zero SVs produce a constant-zero decision score, safe before fitting.
         self.register_buffer("_sv_vectors", torch.zeros(1, embed_dim))
         self.register_buffer("_sv_weights", torch.zeros(1))
         self.register_buffer("_rho", torch.zeros(1))
+        # Actual gamma computed by sklearn after fitting (1/(n_feat*X.var()) for "scale").
+        # Pre-fitting sentinel: 1/embed_dim (reasonable but unused since SVs are zero).
+        self.register_buffer("_gamma_val", torch.tensor(1.0 / embed_dim))
 
     def _rbf_decision(self, emb: torch.Tensor) -> torch.Tensor:
         """Pure-torch RBF kernel decision function — ONNX-safe.
@@ -326,12 +333,11 @@ class OCSVMHead(ClassifierHead):
         Returns:
             ``[B]`` decision scores (positive = inlier/wake-word).
         """
-        gamma = 1.0 / self.embed_dim  # matches sklearn gamma="scale"
         sq_x = (emb ** 2).sum(dim=1, keepdim=True)          # [B, 1]
         sq_sv = (self._sv_vectors ** 2).sum(dim=1)           # [N]
         dot = emb @ self._sv_vectors.T                        # [B, N]
         sq_dist = sq_x + sq_sv - 2.0 * dot                   # [B, N]
-        kernel_vals = torch.exp(-gamma * sq_dist)             # [B, N]
+        kernel_vals = torch.exp(-self._gamma_val * sq_dist)  # [B, N]
         return (kernel_vals * self._sv_weights).sum(dim=1) - self._rho.squeeze()
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
@@ -364,12 +370,21 @@ class OCSVMHead(ClassifierHead):
     def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader") -> None:
         """Fit the OCSVM on positive-class embeddings from *dataloader*.
 
-        Requires ``scikit-learn``. After fitting, support vectors are stored
-        as torch buffers so subsequent ONNX export needs no sklearn.
+        Requires ``scikit-learn``. After fitting, support vectors and the exact
+        gamma value are stored as torch buffers so subsequent ONNX export needs
+        no sklearn. **Always call :meth:`export_to_onnx` after fitting** — an
+        ONNX graph exported before fitting bakes in the all-zero sentinel buffers
+        and will produce constant-zero scores regardless of the input.
 
         Args:
             dataloader: Yields ``(feats, labels, ...)`` batches where ``labels == 1``
                         marks positive (wake-word) samples.
+
+        Raises:
+            ImportError: If ``scikit-learn`` is not installed.
+            ValueError: If :attr:`kernel` is not ``"rbf"`` (other kernels are not
+                ONNX-exportable via the pure-torch decision function).
+            ValueError: If no positive-class samples are found in *dataloader*.
         """
         try:
             from sklearn.svm import OneClassSVM
@@ -378,6 +393,12 @@ class OCSVMHead(ClassifierHead):
                 "scikit-learn is required for fit_ocsvm(). "
                 "Install with: pip install ww_trainer[ocsvm]"
             ) from exc
+
+        if self._kernel != "rbf":
+            raise ValueError(
+                f"OCSVMHead only supports kernel='rbf' for ONNX-compatible inference; "
+                f"got kernel={self._kernel!r}. Use kernel='rbf'."
+            )
 
         self.eval()
         embeds = []
@@ -392,17 +413,21 @@ class OCSVMHead(ClassifierHead):
             raise ValueError("No positive samples found in dataloader — cannot fit OCSVM.")
 
         X = torch.cat(embeds, dim=0).numpy()
-        gamma_val = "scale" if self._gamma == "scale" else self._gamma
-        svm = OneClassSVM(nu=self._nu, kernel=self._kernel, gamma=gamma_val)
+        svm = OneClassSVM(nu=self._nu, kernel=self._kernel, gamma=self._gamma)
         svm.fit(X)
 
         sv = torch.tensor(svm.support_vectors_, dtype=torch.float32)
         w = torch.tensor(svm.dual_coef_[0], dtype=torch.float32)
         rho = torch.tensor([svm.offset_[0]], dtype=torch.float32)
+        # svm._gamma holds the actual float used (resolves "scale"/"auto" to a number)
+        gamma_actual = torch.tensor(float(svm._gamma), dtype=torch.float32)
         self._sv_vectors = sv.to(self.device)
         self._sv_weights = w.to(self.device)
         self._rho = rho.to(self.device)
-        logger.info("OCSVMHead fitted: %d support vectors.", sv.shape[0])
+        self._gamma_val = gamma_actual.to(self.device)
+        logger.info(
+            "OCSVMHead fitted: %d support vectors, gamma=%.6f.", sv.shape[0], svm._gamma
+        )
 
 
 class CnnClassifierHead(ClassifierHead):
