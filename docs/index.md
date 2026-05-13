@@ -76,11 +76,11 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 
 | Name | Module | Description | Source |
 |------|--------|-------------|--------|
-| `run_genetic_search` | `sweep` | Island-model GA hyperparameter search | `sweep.py:543` |
-| `run_two_stage_genetic_search` | `sweep` | Broad stage 1 + focused stage 2 GA | `sweep.py:662` |
+| `run_genetic_search` | `sweep` | Island-model GA hyperparameter search | `sweep.py:744` |
+| `run_two_stage_genetic_search` | `sweep` | Broad stage 1 + focused stage 2 GA | `sweep.py:1029` |
 | `run_sweep` | `sweep` | Optuna Bayesian search | `sweep.py:91` |
-| `run_grid_search` | `sweep` | Exhaustive grid search | `sweep.py:202` |
-| `run_random_search` | `sweep` | Uniform random sampling | `sweep.py:276` |
+| `run_grid_search` | `sweep` | Exhaustive grid search | `sweep.py:299` |
+| `run_random_search` | `sweep` | Uniform random sampling | `sweep.py:374` |
 | `train_from_wakeword` | `quickstart` | String → trained ONNX in one call | `quickstart.py:231` |
 | `QuickstartConfig` | `quickstart` | All quickstart knobs with defaults | `quickstart.py:23` |
 | `QuickstartResult` | `quickstart` | Paths and metrics of a completed run | `quickstart.py:71` |
@@ -95,7 +95,7 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 | `infinite_training_loop` | `infinite_loop` | Goal-based training over unlimited NWW pool | `infinite_loop.py` |
 | `StoppingGoal` | `infinite_loop` | Configures F1/EER/FAR targets and plateau detection | `infinite_loop.py` |
 | `load_vc_backend` | `vc_helpers` | Factory for TTS/VC backends (onnx / torch / linacodec) | `vc_helpers.py` |
-| `RobustProtoDiversityLoss` | `loss` | RPPL: EMA prototype + warmup + hard-div + proto-consistency | `loss.py:281` |
+| `RobustProtoDiversityLoss` | `loss` | RPPL: EMA prototype + warmup + hard-div + proto-consistency | `loss.py:282` |
 | `LossManager.step_epoch` | `loss` | Notifies epoch-aware criteria (RPPL warmup scheduling) | `loss.py` |
 | `plot_rppl_dashboard` | `visualization` | 6-panel RPPL training dashboard → MLflow artifact | `visualization.py` |
 
@@ -116,7 +116,7 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 | Document | Description |
 |----------|-------------|
 | [extractors.md](extractors.md) | All 17 feature extractors: parameters, hardware fit |
-| [classifiers.md](classifiers.md) | All 11 classifier heads: architecture, param counts |
+| [classifiers.md](classifiers.md) | All 15 classifier heads: architecture, param counts |
 | [losses.md](losses.md) | All 17 loss functions and recommended combinations |
 | [enrichment.md](enrichment.md) | VAD, Pitch, SNRAware, MultiResolution wrappers |
 | [markov_hmm.md](markov_hmm.md) | Markov and HMM extractors |

@@ -1,6 +1,6 @@
 # Loss Functions
 
-All losses are managed by `LossManager` -- `ww_trainer/loss.py:761`. Multiple losses can be weighted and combined. The manager handles triplet mining, embedding extraction, and dispatch.
+All losses are managed by `LossManager` — `ww_trainer/loss.py:1078`. Multiple losses can be weighted and combined. The manager handles triplet mining, embedding extraction, and dispatch.
 
 ---
 
@@ -9,22 +9,24 @@ All losses are managed by `LossManager` -- `ww_trainer/loss.py:761`. Multiple lo
 | Loss | Class | Line | Input Type | Category |
 |------|-------|------|-----------|----------|
 | BCE | `nn.BCEWithLogitsLoss` | (PyTorch built-in) | logits, labels | Classification |
-| Focal | `FocalLoss` | `loss.py:395` | logits, labels | Classification |
-| LabelSmoothing | `LabelSmoothingBCE` | `loss.py:441` | logits, labels | Classification |
+| Focal | `FocalLoss` | `loss.py:482` | logits, labels | Classification |
+| LabelSmoothing | `LabelSmoothingBCE` | `loss.py:530` | logits, labels | Classification |
 | Triplet | `nn.TripletMarginLoss` | (PyTorch built-in) | anchor, pos, neg | Metric |
-| SoftTriplet | `SoftTripletLoss` | `loss.py:86` | anchor, pos, neg | Metric |
+| SoftTriplet | `SoftTripletLoss` | `loss.py:87` | anchor, pos, neg | Metric |
 | Pair | `nn.MarginRankingLoss` | (PyTorch built-in) | dist_ap, dist_an | Metric |
-| CN2+1Pair | `CN2Plus1PairLoss` | `loss.py:13` | anchor, pos, negatives | Metric |
-| Contrastive | `ContrastiveLoss` | `loss.py:126` | embeds, labels | Metric |
-| LiftedStructure | `LiftedStructureLoss` | `loss.py:170` | embeds, labels | Metric |
-| Angular | `AngularLoss` | `loss.py:221` | embeds, labels | Metric |
-| ArcFace | `ArcFaceLoss` | `loss.py:471` | embeds, labels | Metric (learnable) |
-| Center | `CenterLoss` | `loss.py:521` | embeds, labels | Metric (learnable) |
-| NTXent | `NTXentLoss` | `loss.py:551` | embeds, labels | Contrastive |
-| SupCon | `SupConLoss` | `loss.py:597` | embeds, labels | Contrastive |
-| ProxyNCA | `ProxyNCALoss` | `loss.py:645` | embeds, labels | Metric (learnable) |
-| MultiSimilarity | `MultiSimilarityLoss` | `loss.py:686` | embeds, labels | Metric |
-| RPPL | `RobustProtoDiversityLoss` | `loss.py:281` | logits, labels, embeds | Composite |
+| CN2+1Pair | `CN2Plus1PairLoss` | `loss.py:14` | anchor, pos, negatives | Metric |
+| Contrastive | `ContrastiveLoss` | `loss.py:127` | embeds, labels | Metric |
+| LiftedStructure | `LiftedStructureLoss` | `loss.py:171` | embeds, labels | Metric |
+| Angular | `AngularLoss` | `loss.py:222` | embeds, labels | Metric |
+| ArcFace | `ArcFaceLoss` | `loss.py:562` | embeds, labels | Metric (learnable) |
+| Center | `CenterLoss` | `loss.py:617` | embeds, labels | Metric (learnable) |
+| NTXent | `NTXentLoss` | `loss.py:652` | embeds, labels | Contrastive |
+| SupCon | `SupConLoss` | `loss.py:698` | embeds, labels | Contrastive |
+| ProxyNCA | `ProxyNCALoss` | `loss.py:746` | embeds, labels | Metric (learnable) |
+| MultiSimilarity | `MultiSimilarityLoss` | `loss.py:792` | embeds, labels | Metric |
+| HALO | `HALOLoss` | `loss.py:867` | embeds, labels | Classification |
+| SizeAware | `SizeAwareLoss` | `loss.py:987` | logits, labels, model | MCU-regularizer |
+| RPPL | `RobustProtoDiversityLoss` | `loss.py:282` | logits, labels, embeds | Composite |
 
 ---
 
@@ -42,7 +44,7 @@ Standard binary classification loss. Applied to raw logits via `BCEWithLogitsLos
 
 ---
 
-### FocalLoss -- `loss.py:395`
+### FocalLoss — `loss.py:482`
 
 Down-weights easy examples: `FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)`.
 
@@ -56,7 +58,7 @@ Down-weights easy examples: `FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)`.
 
 ---
 
-### LabelSmoothingBCE -- `loss.py:441`
+### LabelSmoothingBCE — `loss.py:530`
 
 Replaces hard labels {0, 1} with soft labels {smoothing, 1 - smoothing}. Prevents overconfident predictions.
 
@@ -72,7 +74,7 @@ Replaces hard labels {0, 1} with soft labels {smoothing, 1 - smoothing}. Prevent
 
 These operate on embeddings (from `model.embed()`). `LossManager` handles triplet mining via `sample_triplets()` or `sample_semihard_triplets()` from `ww_trainer/utils.py`.
 
-### Triplet -- `loss.py:788` (LossManager config)
+### Triplet — `LossManager` config (PyTorch `nn.TripletMarginLoss`)
 
 Standard triplet margin loss: `max(0, d(a,p) - d(a,n) + margin)`.
 
@@ -86,7 +88,7 @@ Mining type is set on `LossManager` init: `mining_type="semihard"` (default) or 
 
 ---
 
-### SoftTripletLoss -- `loss.py:86`
+### SoftTripletLoss — `loss.py:87`
 
 Soft margin variant: `log(1 + exp(d(a,p) - d(a,n)))` via softplus. Gradient flows even when the hard margin is satisfied.
 
@@ -98,7 +100,7 @@ Soft margin variant: `log(1 + exp(d(a,p) - d(a,n)))` via softplus. Gradient flow
 
 ---
 
-### Pair (MarginRankingLoss) -- `loss.py:792`
+### Pair (MarginRankingLoss) — PyTorch built-in
 
 Margin ranking loss on hard-mined anchor-positive vs anchor-negative distances. Uses `get_hard_pair_distances()`.
 
@@ -110,7 +112,7 @@ Margin ranking loss on hard-mined anchor-positive vs anchor-negative distances. 
 
 ---
 
-### CN2Plus1PairLoss -- `loss.py:13`
+### CN2Plus1PairLoss — `loss.py:14`
 
 (C_N,2 + 1)-pair loss (Lopez-Espejo et al., TASLP 2021). Considers all negative-negative pair distances in addition to anchor-positive and anchor-negative distances. Regularizes negative embedding spread.
 
@@ -126,7 +128,7 @@ Margin ranking loss on hard-mined anchor-positive vs anchor-negative distances. 
 
 These use all pairs in the batch -- no explicit mining needed.
 
-### ContrastiveLoss -- `loss.py:126`
+### ContrastiveLoss — `loss.py:127`
 
 Classic contrastive loss: pull same-label pairs together, push different-label pairs apart beyond margin.
 
@@ -140,7 +142,7 @@ Positive term: `d(i,j)^2` for same-label pairs. Negative term: `max(0, margin - 
 
 ---
 
-### LiftedStructureLoss -- `loss.py:170`
+### LiftedStructureLoss — `loss.py:171`
 
 Uses all positive and negative pairs via log-sum-exp. More informative gradients than contrastive loss by considering all negatives simultaneously.
 
@@ -152,7 +154,7 @@ Uses all positive and negative pairs via log-sum-exp. More informative gradients
 
 ---
 
-### AngularLoss -- `loss.py:221`
+### AngularLoss — `loss.py:222`
 
 Cosine-space margin loss: enforces `cos(A,P) > cos(A,N) + margin`. Uses semi-hard triplet mining on Euclidean distances, then applies angular constraint.
 
@@ -164,7 +166,7 @@ Cosine-space margin loss: enforces `cos(A,P) > cos(A,N) + margin`. Uses semi-har
 
 ---
 
-### NTXentLoss -- `loss.py:551`
+### NTXentLoss — `loss.py:652`
 
 SimCLR loss (Chen et al. 2020). Temperature-scaled cross-entropy treating each sample's same-label partners as positives and all others as negatives.
 
@@ -176,7 +178,7 @@ SimCLR loss (Chen et al. 2020). Temperature-scaled cross-entropy treating each s
 
 ---
 
-### SupConLoss -- `loss.py:597`
+### SupConLoss — `loss.py:698`
 
 Supervised Contrastive Loss (Khosla et al., NeurIPS 2020). Extension of SimCLR to supervised setting. All same-class samples are positives.
 
@@ -188,7 +190,7 @@ Supervised Contrastive Loss (Khosla et al., NeurIPS 2020). Extension of SimCLR t
 
 ---
 
-### MultiSimilarityLoss -- `loss.py:686`
+### MultiSimilarityLoss — `loss.py:792`
 
 Multi-Similarity Loss (Wang et al., CVPR 2019). Mines informative pairs using three similarity criteria. Computes weighted log-sum-exp over hard positives and hard negatives separately.
 
@@ -206,7 +208,7 @@ Multi-Similarity Loss (Wang et al., CVPR 2019). Mines informative pairs using th
 
 These losses have learnable parameters (class centers or proxies) updated during training.
 
-### ArcFaceLoss -- `loss.py:471`
+### ArcFaceLoss — `loss.py:562`
 
 Additive angular margin in cosine space (Deng et al., CVPR 2019). Adds angular penalty `margin` (radians) to the target class logit. Uses 2 class centers (wake/not-wake).
 
@@ -218,7 +220,7 @@ Additive angular margin in cosine space (Deng et al., CVPR 2019). Adds angular p
 
 ---
 
-### CenterLoss -- `loss.py:521`
+### CenterLoss — `loss.py:617`
 
 Penalizes distance from embeddings to their class center (Wen et al., ECCV 2016). Centers are learnable parameters.
 
@@ -230,7 +232,7 @@ Penalizes distance from embeddings to their class center (Wen et al., ECCV 2016)
 
 ---
 
-### ProxyNCALoss -- `loss.py:645`
+### ProxyNCALoss — `loss.py:746`
 
 Learnable proxies replace triplet mining (Movshovitz-Attias et al., ICCV 2017). Each sample is compared to all class proxies via softmax. Converges faster than triplet loss.
 
@@ -242,9 +244,31 @@ Learnable proxies replace triplet mining (Movshovitz-Attias et al., ICCV 2017). 
 
 ---
 
+### HALOLoss — `loss.py:867`
+
+Hyperbolic Anchor Loss Optimization. Distance-based cross-entropy that replaces dot-product similarity with squared Euclidean distance between embeddings and learnable class centroids. Adds an origin "abstain" sink (K+1 class) and a geometric radial regularizer.
+
+**Theory:** Standard cross-entropy uses `softmax(W^T e)` where similarity is linear. HALO uses `softmax(-||e - c_k||^2 / gamma)` where `c_k` are learnable centroids. This yields better-calibrated probabilities and improved OOD detection because distant embeddings are strongly pushed toward the abstain sink.
+
+**Config:**
+```python
+{"name": "halo", "weight": 1.0,
+ "emb_dims": 64,       # must match model.embed() output dimension
+ "num_classes": 2,
+ "learn_gamma": True,  # temperature as learnable parameter
+ "distill": True,      # self-distillation for soft targets
+ "label_smoothing": 0.1}
+```
+
+**When to use:** When you want better-calibrated confidence scores and improved rejection of non-wake-word audio. A strong alternative to BCE for production models.
+
+**When NOT to use:** When `emb_dims` doesn't match the model's embedding size — this raises a dimension mismatch at runtime. Requires the model to expose an `embed()` method.
+
+---
+
 ## Composite Loss
 
-### RobustProtoDiversityLoss (RPPL) -- `loss.py:281`
+### RobustProtoDiversityLoss (RPPL) — `loss.py:282`
 
 Five-component loss designed for binary fixed-keyword wake-word detection under severe class imbalance (~94 % NWW).
 
@@ -298,6 +322,20 @@ A 6-panel **RPPL dashboard** PNG is auto-generated every 5 epochs and at end-of-
 **When to use:** Hard-negative mining regime with a large NWW pool; infinite training mode; any scenario where you want per-epoch visibility into embedding structure.
 
 **When NOT to use:** Very small datasets where there are consistently < 2 wake samples per batch (EMA has no data to stabilise from). Use Focal or SupCon instead. The 5 weight hyperparameters can be hard to tune — `train_rppl.py` provides sane defaults.
+
+---
+
+### SizeAwareLoss — `loss.py:987`
+
+Regularizes the BCE loss by the model's parameter count. Penalizes large models so genetic search naturally selects smaller architectures without explicit constraints.
+
+**Theory:** `L = BCE(logits, labels) + lambda * log(n_params)`. The log term grows slowly, so small models get a bonus without completely overriding accuracy.
+
+**Config:** `{"name": "size_aware", "weight": 1.0, "lambda": 0.01}`
+
+**When to use:** MCU target with genetic search over architectures. The parameter count penalty biases the search toward smaller models. See `docs/esp32.md` for a full MCU workflow.
+
+**When NOT to use:** When model size is fixed (no benefit over BCE alone). When `lambda` is too large it overwhelms the classification signal — start at `0.001`.
 
 ---
 

@@ -57,6 +57,27 @@ print(result.metrics)          # {"f1": 0.923}
 
 `train_from_wakeword` accepts any `QuickstartConfig` field as a keyword argument.
 
+## Two-File ONNX Contract
+
+Production inference always requires **two** ONNX files:
+
+| File | Role |
+|------|------|
+| `best_f1_featurizer.onnx` | Feature extractor — input: `[B, T]` float32 waveform; output: `[B, T_frames, F]` |
+| `best_f1.onnx` | Classifier head — input: `[B, T_frames, F]`; output: `[B]` logit |
+
+The CLI exports both automatically when `--export-onnx` is on (default). Pass both paths to `OnnxWakeWordInferencer` — `ww_trainer/inference.py:8`:
+
+```python
+from ww_trainer.inference import OnnxWakeWordInferencer
+
+model = OnnxWakeWordInferencer(
+    "hey_jarvis/model/best_f1_featurizer.onnx",
+    "hey_jarvis/model/best_f1.onnx",
+)
+score = model.infer(wav_float32_array)  # float in [0, 1]
+```
+
 ## Output Layout
 
 ```
@@ -71,7 +92,8 @@ print(result.metrics)          # {"f1": 0.923}
     augmentation/rir/
   model/
     best_f1.pt
-    best_f1.onnx             # if export_onnx=True
+    best_f1_featurizer.onnx  # if export_onnx=True (featurizer)
+    best_f1.onnx             # if export_onnx=True (head)
     metrics_log.csv
 ```
 
@@ -90,8 +112,8 @@ The dataset directory must follow the layout above.
 
 ## Source References
 
-- `train_from_wakeword` — `ww_trainer/quickstart.py:205`
-- `QuickstartConfig` — `ww_trainer/quickstart.py:34`
-- `QuickstartResult` — `ww_trainer/quickstart.py:70`
-- `_run_or_load_datagen` — `ww_trainer/quickstart.py:105`
-- `_train_from_datagen_result` — `ww_trainer/quickstart.py:143`
+- `train_from_wakeword` — `ww_trainer/quickstart.py:231`
+- `QuickstartConfig` — `ww_trainer/quickstart.py:23`
+- `QuickstartResult` — `ww_trainer/quickstart.py:71`
+- `_run_or_load_datagen` — `ww_trainer/quickstart.py:97`
+- `_train_from_datagen_result` — `ww_trainer/quickstart.py:144`

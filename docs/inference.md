@@ -10,10 +10,12 @@ After exporting the extractor and head to ONNX, runtime inference requires only 
 
 This matters for deployment targets (RPi Zero, embedded Linux, Raspberry Pi) where PyTorch is heavy or unavailable.
 
-**What you need:**
-1. `extractor.onnx` — exported feature extractor. Input: `[B, T]` float32. Output: `[B, T_frames, F]` float32.
-2. `head.onnx` — exported classifier head. Input: `[B, T_frames, F]` float32. Output: scalar logit.
+**What you need (two files — both required):**
+1. `best_f1_featurizer.onnx` — exported feature extractor. Input: `[B, T]` float32. Output: `[B, T_frames, F]` float32.
+2. `best_f1.onnx` — exported classifier head. Input: `[B, T_frames, F]` float32. Output: `[B]` scalar logit.
 3. `vad.onnx` (Optional) — e.g. Silero VAD. Input: `[B, 512]` float32. Output: `[B, 1]` probability.
+
+Pass `featurizer_path` first, `head_path` second — order is mandatory. Swapping the arguments raises a shape mismatch at runtime.
 
 See [export.md](export.md) for how to produce these files.
 
@@ -79,7 +81,7 @@ if prob > 0.5:
 
 ---
 
-## 3. Batch Inference
+## 4. Batch Inference
 
 `OnnxWakeWordInferencer.infer_batch` — `inference.py:57`
 
@@ -102,7 +104,7 @@ Pads to equal length before passing to `infer_batch`. If your clips have differe
 
 ---
 
-## 4. Streaming Inference
+## 5. Streaming Inference
 
 `OnnxWakeWordInferencer.infer_streaming` — `inference.py:74`
 
@@ -150,7 +152,7 @@ process_audio_stream(stream)
 
 ---
 
-## 5. PyTorch Inference (Development)
+## 6. PyTorch Inference (Development)
 
 During development or testing you can use the PyTorch model directly without exporting to ONNX.
 
@@ -215,7 +217,7 @@ for i in range(20):
 
 ---
 
-## 6. Device Selection
+## 7. Device Selection
 
 For `OnnxWakeWordInferencer`:
 
@@ -235,7 +237,7 @@ For PyTorch `BaseWakeModel`:
 
 ---
 
-## 7. Latency Considerations
+## 8. Latency Considerations
 
 Feature extraction dominates latency. Rough comparisons for a single 1-second clip:
 

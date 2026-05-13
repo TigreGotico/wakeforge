@@ -40,8 +40,8 @@ This synthesises a dataset (TTS + negatives) and trains. Pass `--reuse-dataset` 
 
 ## Genetic Hyperparameter Search
 
-`run_genetic_search` — `ww_trainer/sweep.py:543`
-`run_two_stage_genetic_search` — `ww_trainer/sweep.py:662`
+`run_genetic_search` — `ww_trainer/sweep.py:744`
+`run_two_stage_genetic_search` — `ww_trainer/sweep.py:1029`
 
 ```python
 from ww_trainer.sweep import run_two_stage_genetic_search
@@ -252,9 +252,9 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 - **15 classifier heads**: FFN, OCSVM, GRU, CNN, BC-ResNet, TC-ResNet, DS-CNN, MatchboxNet, Res15, KWT, Conformer, MixConv, CRNN, EfficientNet, ConvAttention
 - **17 loss functions**: BCE, Focal, ArcFace, SupCon, NTXent, RPPL (with EMA prototype + hard-neg diversity + proto-consistency), Triplet, and more
 - **5 search strategies**: Optuna (Bayesian), Grid, Random, Genetic, Two-Stage Genetic
-- **Island model**: `n_demes` parallel populations with ring-topology migration — `sweep.py:620`
-- **Adaptive mutation**: `mutation_decay` parameter reduces mutation rate each generation — `sweep.py:530`
-- **Progress callbacks**: `on_generation` fires after every generation with live stats — `sweep.py:551`
+- **Island model**: `n_demes` parallel populations with ring-topology migration — `sweep.py:785`
+- **Adaptive mutation**: `mutation_decay` parameter reduces mutation rate each generation — `sweep.py:599`
+- **Progress callbacks**: `on_generation` fires after every generation with live stats — `sweep.py:576`
 - **ONNX-first deployment**: extractor and head export independently; inference via `OnnxWakeWordInferencer`
 - **Streaming inference**: `SlidingFeatureCacheTensor` for chunk-by-chunk real-time detection
 - **Knowledge distillation**, **QAT**, **multi-GPU (DDP)**, **confidence calibration**

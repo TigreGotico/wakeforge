@@ -90,27 +90,22 @@ A pre-exported version (40 coefficients, 16 kHz) is available at https://hugging
 
 ## 3. Exporting HuBERT and Wav2Vec2
 
-These extractors require `transformers` and should be exported once and then loaded via `OnnxFeatureExtractor` for all subsequent training and inference.
+`HubertExtractor` and `Wav2Vec2Extractor` training wrappers were removed in 0.2.0. Use the standalone export scripts to produce ONNX files once, then load with `OnnxFeatureExtractor` for all subsequent training and inference runs.
 
-```python
-from ww_trainer.feats import HubertExtractor
+```bash
+# Export HuBERT tiny to ONNX
+.venv/bin/python scripts/export_hubert.py --model voidful/hubert-tiny-v2 --out hubert_tiny.onnx
 
-extractor = HubertExtractor(
-    model_name="voidful/hubert-tiny-v2",
-    sample_rate=16000,
-    device="cpu",
-)
-extractor.export_to_onnx("hubert_tiny.onnx")
+# Export Wav2Vec2-BERT to ONNX
+.venv/bin/python scripts/export_w2vbert.py --out w2vbert.onnx
 ```
 
-The `scripts/export_w2vbert.py` script shows the same pattern for Wav2Vec2 (`scripts/export_w2vbert.py:84`–`87`).
-
-After export, load via `OnnxFeatureExtractor` for training:
+After export, load with `OnnxFeatureExtractor` — `ww_trainer/feats.py:157`:
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
 
-extractor = OnnxFeatureExtractor("hubert_tiny.onnx", sample_rate=16000, device="cuda")
+extractor = OnnxFeatureExtractor("hubert_tiny.onnx", sample_rate=16000, device="cpu")
 print(extractor.feature_dim)  # auto-detected from ONNX output shape
 ```
 

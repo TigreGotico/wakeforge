@@ -64,32 +64,32 @@ This modularity allows for "Best-of-Breed" component swapping (e.g., swapping a 
 CSV file: /path/audio.wav,1
      |
      v
-AudioDataset.__getitem__          dataset.py:269
+AudioDataset.__getitem__          dataset.py:293
   FeatureCache.get(path)?         cache.py (if cache hit + no augment → skip load)
   torchaudio.load(path)
-  resample to 16 kHz if needed    dataset.py:284-289
-  optional augmentation           dataset.py:295-296
+  resample to 16 kHz if needed
+  optional augmentation
   FeatureCache.put(path) if no augment
      |  wav: Tensor[T]  float32
      v
-collate_fn(batch, device)         dataset.py:301
+collate_fn(batch, device)         dataset.py:349
   zero-pad all wavs to max_len
   stack into Tensor[B, T]
   move to device
      |  wavs: Tensor[B, T]
      |  labels: Tensor[B]  float32
      v
-BaseWakeModel.forward(wavs)       model.py:86
+BaseWakeModel.forward(wavs)       model.py:147
   BaseExtractor.forward(wavs)
      |  feats: Tensor[B, T_frames, F]
   ClassifierHead.forward(feats)
      |  logits: Tensor[B]
      v
-BaseWakeModel.embed(wavs)         model.py:91
+BaseWakeModel.embed(wavs)         model.py:168
   (same extractor call, head.embed)
      |  embeds: Tensor[B, D]
      v
-LossManager.compute_loss(         loss.py:454
+LossManager.compute_loss(         loss.py:1287
   model, wavs, labels, dataset_ref)
   → total scalar loss
      v
