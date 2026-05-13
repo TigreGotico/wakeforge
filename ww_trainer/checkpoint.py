@@ -159,3 +159,85 @@ def load_checkpoint(
         logger.info("[Resume] Loaded model weights only (trainer state missing)")
 
     return start_epoch, metrics
+
+
+def average_checkpoints(
+    paths: "list[Path | str]",
+    out_path: "Optional[Path | str]" = None,
+) -> dict:
+    """Uniformly average the weights from a list of ``.pt`` checkpoints.
+
+    Stacks each parameter tensor across checkpoints and takes the mean.
+    Non-float buffers (e.g. ``num_batches_tracked``) are copied from the
+    first checkpoint. Ported from ``livekit/livekit-wakeword``'s
+    ``training/trainer.py`` checkpoint-averaging step.
+
+    Args:
+        paths: Paths to checkpoint files (each a ``state_dict``-like mapping
+               loadable by ``torch.load``).
+        out_path: Optional output path to save the averaged ``state_dict``.
+
+    Returns:
+        The averaged ``state_dict``. Empty dict if ``paths`` is empty.
+    """
+    if not paths:
+        return {}
+    states = [torch.load(str(p), map_location="cpu") for p in paths]
+    avg: dict = {}
+    for key in states[0].keys():
+        ref = states[0][key]
+        if torch.is_tensor(ref) and ref.is_floating_point():
+            avg[key] = torch.stack([s[key].float() for s in states]).mean(dim=0).to(ref.dtype)
+        else:
+            avg[key] = ref
+    if out_path is not None:
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(avg, str(out_path))
+        logger.info("Averaged %d checkpoints → %s", len(paths), out_path)
+    return avg
+
+
+def select_best_checkpoints(
+    history: "list[dict]",
+    fpph_pct: float = 10.0,
+    recall_pct: float = 90.0,
+    accuracy_pct: float = 90.0,
+) -> "list[dict]":
+    """Filter checkpoint metric records using LiveKit-style percentile gates.
+
+    A checkpoint qualifies iff **all** of:
+
+    - ``fpph`` <= ``fpph_pct``-th percentile across history,
+    - ``recall`` >= ``recall_pct``-th percentile,
+    - ``accuracy`` >= ``accuracy_pct``-th percentile.
+
+    If no checkpoint qualifies, falls back to the single record with the
+    highest ``recall``. Each entry in ``history`` must have ``fpph``,
+    ``recall``, ``accuracy``, and ``path`` keys.
+
+    Args:
+        history: List of per-checkpoint metric dicts.
+        fpph_pct: Max-percentile (lower is better).
+        recall_pct: Min-percentile (higher is better).
+        accuracy_pct: Min-percentile (higher is better).
+
+    Returns:
+        Filtered list of records (subset of ``history``).
+    """
+    if not history:
+        return []
+    import numpy as np  # local: keep top-level deps minimal
+    fpph = np.array([h["fpph"] for h in history], dtype=float)
+    recall = np.array([h["recall"] for h in history], dtype=float)
+    acc = np.array([h["accuracy"] for h in history], dtype=float)
+    fpph_thr = np.percentile(fpph, fpph_pct)
+    recall_thr = np.percentile(recall, recall_pct)
+    acc_thr = np.percentile(acc, accuracy_pct)
+    keep = [
+        h for h, f, r, a in zip(history, fpph, recall, acc)
+        if f <= fpph_thr and r >= recall_thr and a >= acc_thr
+    ]
+    if not keep:
+        keep = [max(history, key=lambda h: h["recall"])]
+    return keep

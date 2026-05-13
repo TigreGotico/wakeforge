@@ -1353,3 +1353,79 @@ class EfficientNetHead(ClassifierHead):
         return x.flatten(1)
 
 
+
+
+# ---------------------- ConvAttention head ----------------------
+
+
+class ConvAttentionHead(ClassifierHead):
+    """1D-convolution + self-attention classifier head.
+
+    Adapted from ``livekit/livekit-wakeword`` (Apache-2.0). Their docs report
+    "60x lower AUT and 100x fewer false positives per hour than openWakeWord"
+    using this head over the frozen Google-speech + openWakeWord embedding
+    front-end. The original implementation assumes a fixed ``(T=16, F=96)``
+    embedding shape and applies ``LayerNorm([layer_dim, n_timesteps])``; we
+    relax that to ``LayerNorm(layer_dim)`` over the channel axis so the head
+    works with any time length and exports to ONNX with a dynamic ``T_features``
+    axis (matches the rest of ``ww-trainer``).
+
+    Pipeline: ``Conv1d(F→D, k=3) → (Conv1d(D→D, k=3))^n_blocks →
+    MultiheadAttention(D, n_heads) + residual + LayerNorm → mean-pool(T) →
+    Linear(D, 1)``.
+
+    Args:
+        input_size: Feature dimension ``F`` (e.g. mel bins or embedding dim).
+        layer_dim: Internal channel width ``D``.
+        n_blocks: Number of additional Conv1d blocks after the projection.
+        n_heads: Self-attention heads. Auto-clipped to a divisor of ``layer_dim``.
+        dropout: Dropout after attention.
+        sample_rate: Metadata only.
+        device: Device placement.
+    """
+
+    def __init__(self, input_size: int = 96, layer_dim: int = 32,
+                 n_blocks: int = 1, n_heads: int = 4, dropout: float = 0.0,
+                 sample_rate: int = 16000, device: str = "auto") -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        self.layer_dim = layer_dim
+        # Conv stack: project F → D, then n_blocks of D → D.
+        conv: list[nn.Module] = [
+            nn.Conv1d(input_size, layer_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        ]
+        for _ in range(n_blocks):
+            conv += [
+                nn.Conv1d(layer_dim, layer_dim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+            ]
+        self.conv = nn.Sequential(*conv)
+        self.conv_norm = nn.LayerNorm(layer_dim)
+        heads = min(n_heads, layer_dim)
+        while heads > 1 and layer_dim % heads != 0:
+            heads -= 1
+        self.n_heads = heads
+        self.attention = nn.MultiheadAttention(
+            embed_dim=layer_dim, num_heads=heads,
+            dropout=dropout, batch_first=True,
+        )
+        self.attn_norm = nn.LayerNorm(layer_dim)
+        self.fc = nn.Linear(layer_dim, 1)
+
+    def _trunk(self, feats: torch.Tensor) -> torch.Tensor:
+        """``[B, T, F]`` → ``[B, D]`` (mean-pooled, post-attention)."""
+        # Conv1d expects [B, F, T].
+        x = feats.transpose(1, 2)
+        x = self.conv(x)
+        # Back to [B, T, D] for LayerNorm/Attention.
+        x = x.transpose(1, 2)
+        x = self.conv_norm(x)
+        attn_out, _ = self.attention(x, x, x, need_weights=False)
+        x = self.attn_norm(x + attn_out)
+        return x.mean(dim=1)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        return self.fc(self._trunk(feats)).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        return self._trunk(feats)

@@ -1,5 +1,25 @@
 # ww-trainer — FAQ
 
+## LiveKit-port additions
+
+**Q: What is `ConvAttentionHead`?**
+
+A small classifier head (Conv1d×N → MultiheadAttention + residual → mean-pool → Linear) ported from [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) (Apache-2.0). See `ConvAttentionHead` — `ww_trainer/model.py:1357`. Variable `T` and ONNX-exportable.
+
+**Q: What is the AUT metric and how is it different from AUC?**
+
+AUT (Area Under the DET curve) integrates FNR vs FPR via the trapezoidal rule; **lower is better** (0 = perfect). AUC integrates TPR vs FPR; **higher is better**. AUT is the operating metric LiveKit reports for wake-word models. See `area_under_det` — `ww_trainer/metrics.py`.
+
+**Q: How do I average several checkpoints?**
+
+```python
+from ww_trainer.checkpoint import select_best_checkpoints, average_checkpoints
+keep = select_best_checkpoints(metric_history)  # FPPH p10 / recall p90 / acc p90
+average_checkpoints([h["path"] for h in keep], out_path="best_avg.pt")
+```
+
+`select_best_checkpoints` gates by FPPH ≤ p10 ∧ recall ≥ p90 ∧ accuracy ≥ p90 (falls back to highest-recall ckpt if no entry passes all three). See `ww_trainer/checkpoint.py`.
+
 ## Genetic Search — Advanced (wakegp-inspired)
 
 **Q: What does `SEARCH_TWO_STAGE` do?**
