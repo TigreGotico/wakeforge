@@ -17,7 +17,7 @@ Read in order:
 1. The "What is a wake word?" section in [`../README.md`](../README.md).
 2. The "Newcomer questions" section in [`faq.md`](faq.md) — metric glossary
    (F1, EER, FAR, FRR, FA/hour), the two-ONNX-file contract, deployment scope.
-3. The pipeline diagram in [`architecture.md`](architecture.md).
+3. The pipeline diagram in [`architecture.md`](internals/architecture.md).
 
 You should now be able to explain: why a wake word must run on-device, why
 recall and FA/hour are in tension, and why the featurizer and head are
@@ -45,8 +45,8 @@ Then verify it loads and scores audio:
 .venv/bin/python examples/08_onnx_inference.py
 ```
 
-Where to look in the docs: [`quickstart.md`](quickstart.md) explains every CLI
-flag; [`inference.md`](inference.md) covers the `OnnxWakeWordInferencer` API.
+Where to look in the docs: [`quickstart.md`](getting_started/quickstart.md) explains every CLI
+flag; [`inference.md`](guides/inference.md) covers the `OnnxWakeWordInferencer` API.
 
 ---
 
@@ -58,12 +58,12 @@ Run these examples in order and read the matching doc for each:
 
 | Example | Pairs with | What you learn |
 |---|---|---|
-| `examples/01_mfcc_ffn_micro.py` | [`extractors.md`](extractors.md), [`classifiers.md`](classifiers.md) | MFCC, FFN, model sizing |
-| `examples/02_mfcc_gru_small.py` | [`classifiers.md`](classifiers.md) | Temporal modelling with GRU |
-| `examples/04_filterbank_cnn.py` | [`extractors.md`](extractors.md) | Log-mel filterbanks, 1D CNN |
-| `examples/05_sincnet_gru.py` | [`extractors.md`](extractors.md) | Learnable filterbank (SincNet) |
-| `examples/11_hardware_tiers.py` | [`hardware_guide.md`](hardware_guide.md), [`tiers.py`](../ww_trainer/tiers.py) | Tier presets and when to use each |
-| `examples/09_streaming_inference.py` | [`streaming.md`](streaming.md) | `SlidingFeatureCacheTensor` — real-time chunks |
+| `examples/01_mfcc_ffn_micro.py` | [`extractors.md`](reference/extractors.md), [`classifiers.md`](reference/classifiers.md) | MFCC, FFN, model sizing |
+| `examples/02_mfcc_gru_small.py` | [`classifiers.md`](reference/classifiers.md) | Temporal modelling with GRU |
+| `examples/04_filterbank_cnn.py` | [`extractors.md`](reference/extractors.md) | Log-mel filterbanks, 1D CNN |
+| `examples/05_sincnet_gru.py` | [`extractors.md`](reference/extractors.md) | Learnable filterbank (SincNet) |
+| `examples/11_hardware_tiers.py` | [`hardware_guide.md`](guides/embedded.md), [`tiers.py`](../ww_trainer/tiers.py) | Tier presets and when to use each |
+| `examples/09_streaming_inference.py` | [`streaming.md`](guides/inference.md) | `SlidingFeatureCacheTensor` — real-time chunks |
 
 At the end you should be able to look at any `WakeWordTrainer(...)`
 construction and predict the parameter count and ONNX size before running it.
@@ -75,14 +75,14 @@ construction and predict the parameter count and ONNX size before running it.
 **Goal:** train on real audio, measure the model honestly, and react to the
 numbers.
 
-1. **Data contract** — read [`data_contract.md`](data_contract.md). Build a
+1. **Data contract** — read [`data_contract.md`](guides/datasets.md). Build a
    real metadata CSV from your own recordings.
 2. **Augmentation** — point the trainer at background noise, music, and RIR
-   folders. See the "Augmentation" section in [`training.md`](training.md).
+   folders. See the "Augmentation" section in [`training.md`](guides/training.md).
 3. **Evaluation** — run `scripts/eval/eval_hey_mycroft.py` (or your own
    variant). Look at ROC, PR, DET curves and the FP/hour estimate.
 4. **Threshold tuning** — pick a threshold from the PR curve that matches your
-   product's FA/hour budget. See [`benchmarking.md`](benchmarking.md).
+   product's FA/hour budget. See [`benchmarking.md`](guides/evaluation.md).
 
 You should now have a model with measurable FAR/FRR on real data, not just a
 synthetic F1.
@@ -100,9 +100,9 @@ synthetic F1.
 | `examples/30_loss_combinations.py` | BCE + Focal + SupCon multi-loss composition |
 | `examples/31_arcface_training.py` | ArcFace angular margin for tight clusters |
 
-Docs to read: [`losses.md`](losses.md), [`rppl_whitepaper.md`](rppl_whitepaper.md)
+Docs to read: [`losses.md`](reference/losses.md), [`rppl_whitepaper.md`](research/rppl.md)
 (the in-house RPPL loss), and the "Hard-negative mining" section of
-[`training.md`](training.md).
+[`training.md`](guides/training.md).
 
 ---
 
@@ -117,7 +117,7 @@ Docs to read: [`losses.md`](losses.md), [`rppl_whitepaper.md`](rppl_whitepaper.m
 | `scripts/train/train_sincnet_genetic.py` | GA over SincNet/Gammatone featurizers |
 | `notebooks/genetic_search.ipynb` | End-to-end Kaggle-ready GA notebook |
 
-Pair with [`sweep.md`](sweep.md) and [`search_strategies.md`](search_strategies.md).
+Pair with [`sweep.md`](guides/search.md) and [`search_strategies.md`](guides/search.md).
 
 ---
 
@@ -131,7 +131,7 @@ Pair with [`sweep.md`](sweep.md) and [`search_strategies.md`](search_strategies.
 | `examples/35_esp32_genetic_search.py` | Sub-10 KB GA |
 | `examples/36_size_aware_training.py` | `SizeAwareLoss` — train with size penalty |
 
-Pair with [`esp32.md`](esp32.md) and [`hardware_guide.md`](hardware_guide.md),
+Pair with [`esp32.md`](guides/embedded.md) and [`hardware_guide.md`](guides/embedded.md),
 and `ww_trainer.export_c.export_to_c_header` for the actual C header output.
 
 ---
@@ -142,16 +142,16 @@ and `ww_trainer.export_c.export_to_c_header` for the actual C header output.
 
 | Topic | Entry point |
 |---|---|
-| Knowledge distillation | `examples/10_knowledge_distillation.py`, [`distillation.md`](distillation.md), [`tinyhubert_whitepaper.md`](tinyhubert_whitepaper.md) |
-| RPPL loss internals | [`rppl_whitepaper.md`](rppl_whitepaper.md), `scripts/train/train_rppl.py` |
+| Knowledge distillation | `examples/10_knowledge_distillation.py`, [`distillation.md`](guides/distillation.md), [`tinyhubert_whitepaper.md`](research/tinyhubert.md) |
+| RPPL loss internals | [`rppl_whitepaper.md`](research/rppl.md), `scripts/train/train_rppl.py` |
 | Pretrained ONNX featurizers | `examples/38_markov_onnx_blackbox.py`, `examples/39_silero_vad_wrapper.py`, `examples/40_multi_onnx_pipeline.py` |
-| PhonMatchNet (phoneme-conditioned) | `examples/42_phonmatch_training.py`, [`phonmatch.md`](phonmatch.md) |
-| OCSVM anomaly head | `examples/43_ocsvm_head.py`, [`classifiers.md`](classifiers.md) |
-| Markov / HMM features | `examples/33_markov_features.py`, `examples/37_hmm_advanced.py`, [`markov_hmm.md`](markov_hmm.md) |
+| PhonMatchNet (phoneme-conditioned) | `examples/42_phonmatch_training.py`, [`phonmatch.md`](reference/phonmatch.md) |
+| OCSVM anomaly head | `examples/43_ocsvm_head.py`, [`classifiers.md`](reference/classifiers.md) |
+| Markov / HMM features | `examples/33_markov_features.py`, `examples/37_hmm_advanced.py`, [`markov_hmm.md`](reference/extractors.md) |
 | Ablation grids | `notebooks/nb09_ablation.ipynb`, `scripts/train/train_ablation.py` |
 
-For framework contributions, read [`architecture.md`](architecture.md),
-[`audit.md`](audit.md) (known issues), and [`../TODO.md`](../TODO.md) (open
+For framework contributions, read [`architecture.md`](internals/architecture.md),
+[`audit.md`](internals/known_issues.md) (known issues), and [`../TODO.md`](../TODO.md) (open
 backlog) before starting.
 
 ---
@@ -159,7 +159,7 @@ backlog) before starting.
 ## Notebook curriculum (cloud / Kaggle / Colab)
 
 If you prefer notebooks over scripts, the same curriculum is mirrored in
-[`notebooks.md`](notebooks.md) with a hardware-tier decision tree.
+[`notebooks.md`](guides/notebooks.md) with a hardware-tier decision tree.
 
 ---
 
@@ -167,7 +167,7 @@ If you prefer notebooks over scripts, the same curriculum is mirrored in
 
 Every component in ww-trainer has an academic ancestor. The list below ties
 the code to the paper and (when available) a canonical reference
-implementation. Full bibliography in [`references.md`](references.md).
+implementation. Full bibliography in [`references.md`](research/references.md).
 
 ### Featurizers
 - **MFCC** — Davis & Mermelstein, IEEE TASSP 1980. <https://ieeexplore.ieee.org/document/1163420>
@@ -205,7 +205,7 @@ implementation. Full bibliography in [`references.md`](references.md).
 - **NT-Xent / SimCLR** — Chen et al., ICML 2020. ArXiv <https://arxiv.org/abs/2002.05709>
 - **Triplet loss** — Schroff et al., *FaceNet*, CVPR 2015. ArXiv <https://arxiv.org/abs/1503.03832>
 - **HALO** — Hou et al., *Regional Hard-Example mining for KWS*, ICASSP 2020. <https://ieeexplore.ieee.org/document/9053009>
-- **RPPL** — Robust Prototype Diversity Loss, ww-trainer in-house. See [`rppl_whitepaper.md`](rppl_whitepaper.md).
+- **RPPL** — Robust Prototype Diversity Loss, ww-trainer in-house. See [`rppl_whitepaper.md`](research/rppl.md).
 
 ### Search & training
 - **Optuna** — Akiba et al., KDD 2019. ArXiv <https://arxiv.org/abs/1907.10902> · GitHub <https://github.com/optuna/optuna>

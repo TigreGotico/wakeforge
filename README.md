@@ -17,10 +17,10 @@ ww-trainer is the toolchain to build that detector from a single phrase — synt
 
 | You are… | Start here |
 |---|---|
-| **Hobbyist** who wants to wake a Pi with their own phrase | [`docs/quickstart.md`](docs/quickstart.md) — one command, ONNX in 5 minutes |
-| **Embedded engineer** shipping to ESP32 / MCU | [`docs/esp32.md`](docs/esp32.md) + [`docs/hardware_guide.md`](docs/hardware_guide.md) |
-| **Voice-assistant integrator** (OVOS, Rhasspy, custom) | [`docs/inference.md`](docs/inference.md) + [`docs/streaming.md`](docs/streaming.md) |
-| **ML researcher** comparing architectures, losses, distillation | [`docs/sweep.md`](docs/sweep.md), [`docs/losses.md`](docs/losses.md), [`docs/rppl_whitepaper.md`](docs/rppl_whitepaper.md) |
+| **Hobbyist** who wants to wake a Pi with their own phrase | [`docs/getting_started/quickstart.md`](docs/getting_started/quickstart.md) — one command, ONNX in 5 minutes |
+| **Embedded engineer** shipping to ESP32 / MCU | [`docs/guides/embedded.md`](docs/guides/embedded.md) |
+| **Voice-assistant integrator** (OVOS, Rhasspy, custom) | [`docs/guides/inference.md`](docs/guides/inference.md) |
+| **ML researcher** comparing architectures, losses, distillation | [`docs/guides/search.md`](docs/guides/search.md), [`docs/reference/losses.md`](docs/reference/losses.md), [`docs/research/rppl.md`](docs/research/rppl.md) |
 | **Curious noob** who has never trained a model | [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) — runs free on Kaggle |
 
 ## Why this framework?
@@ -37,7 +37,7 @@ ww-trainer is the toolchain to build that detector from a single phrase — synt
 
 - **CPU-only training is supported but slow** for the largest tiers. Best UX is a single mid-range GPU.
 - **Synthetic-only datasets** are great smoke-tests but real users still need real recordings for top performance.
-- **ONNX export is mandatory** — features that cannot trace (custom CUDA kernels, dynamic control flow) are excluded from the framework (see [`docs/audit.md`](docs/audit.md)).
+- **ONNX export is mandatory** — features that cannot trace (custom CUDA kernels, dynamic control flow) are excluded from the framework (see [`docs/internals/known_issues.md`](docs/internals/known_issues.md)).
 - **Large SSL featurizers** (HuBERT, Wav2Vec2-BERT) are pre-exported to ONNX and used frozen — not fine-tuned at training time. This guarantees train/inference parity but limits SSL adaptation.
 
 ## Install
@@ -74,7 +74,7 @@ Or from the CLI:
 ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis
 ```
 
-This synthesises a dataset (TTS + negatives) and trains. Pass `--reuse-dataset` to skip datagen if a dataset already exists. See [`docs/quickstart.md`](docs/quickstart.md).
+This synthesises a dataset (TTS + negatives) and trains. Pass `--reuse-dataset` to skip datagen if a dataset already exists. See [`docs/getting_started/quickstart.md`](docs/getting_started/quickstart.md).
 
 ## Genetic Hyperparameter Search
 
@@ -93,7 +93,7 @@ results = run_two_stage_genetic_search(
 print(results["best_config"], results["best_score"])
 ```
 
-Key parameters — full tables in [`docs/sweep.md`](docs/sweep.md):
+Key parameters — full tables in [`docs/guides/search.md`](docs/guides/search.md):
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
@@ -309,19 +309,19 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/learning_path.md](docs/learning_path.md) | **Zero-to-hero curriculum** — staged learning path with literature anchors |
 | [examples/README.md](examples/README.md) | 43 runnable examples — covers every featurizer / head / loss |
 | [docs/index.md](docs/index.md) | Navigation hub — all modules, scripts, and key functions |
-| [docs/notebooks.md](docs/notebooks.md) | Notebook curriculum guide — hardware tiers, decision tree, recommended running order |
-| [docs/sweep.md](docs/sweep.md) | Full search API: parameter tables, fitness functions, island model |
-| [docs/quickstart.md](docs/quickstart.md) | `QuickstartConfig` API reference |
-| [docs/training.md](docs/training.md) | Step-by-step training guide, full CLI reference, infinite training, VC backends |
-| [docs/extractors.md](docs/extractors.md) | All 17 feature extractors |
-| [docs/classifiers.md](docs/classifiers.md) | All 15 classifier heads |
-| [docs/losses.md](docs/losses.md) | All 17 loss functions including RPPL component breakdown |
-| [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
-| [docs/faq.md](docs/faq.md) | Common questions and error resolutions |
-| [docs/audit.md](docs/audit.md) | Known issues and tech debt |
-| [docs/references.md](docs/references.md) | Academic references and bibliography |
-| [docs/rppl_whitepaper.md](docs/rppl_whitepaper.md) | RPPL loss technical whitepaper |
-| [docs/tinyhubert_whitepaper.md](docs/tinyhubert_whitepaper.md) | TinyHuBERT distillation design |
+| [docs/guides/notebooks.md](docs/guides/notebooks.md) | Notebook curriculum, hardware-tier decision tree |
+| [docs/guides/search.md](docs/guides/search.md) | Full search API: parameter tables, fitness functions, island model |
+| [docs/getting_started/quickstart.md](docs/getting_started/quickstart.md) | `QuickstartConfig` API reference |
+| [docs/guides/training.md](docs/guides/training.md) | Training guide, CLI, infinite training, VC backends |
+| [docs/reference/extractors.md](docs/reference/extractors.md) | All feature extractors |
+| [docs/reference/classifiers.md](docs/reference/classifiers.md) | All classifier heads |
+| [docs/reference/losses.md](docs/reference/losses.md) | All loss functions including RPPL breakdown |
+| [docs/guides/embedded.md](docs/guides/embedded.md) | MCU → server tier selection |
+| [docs/faq.md](docs/faq.md) | Topic-ordered Q&A |
+| [docs/internals/known_issues.md](docs/internals/known_issues.md) | Currently open issues |
+| [docs/research/references.md](docs/research/references.md) | Bibliography |
+| [docs/research/rppl.md](docs/research/rppl.md) | RPPL loss technical whitepaper |
+| [docs/research/tinyhubert.md](docs/research/tinyhubert.md) | TinyHuBERT distillation design |
 
 ## Contributing
 

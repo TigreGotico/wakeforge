@@ -789,7 +789,7 @@ Final model saved as `output_dir/final_model.pt`. Mining cache saved as `output_
 
 Entry point: `ww_trainer-train` (defined in `pyproject.toml`, implemented in `cli.py`).
 
-See [training.md](training.md) for the full option table.
+See [training.md](../guides/training.md) for the full option table.
 
 ---
 
@@ -827,7 +827,7 @@ class TierConfig
 HARDWARE_TIERS: dict[str, TierConfig]
 ```
 
-Keys: `"micro"`, `"small"`, `"medium"`, `"large"`. See [architecture.md](architecture.md) for the full tier table.
+Keys: `"micro"`, `"small"`, `"medium"`, `"large"`. See [architecture.md](../internals/architecture.md) for the full tier table.
 
 ---
 

@@ -72,7 +72,7 @@ one for the other; only data and loss choices can shift the whole curve.
 
 1. Add real negative audio (podcasts, music, ambient).
 2. Turn on hard-negative mining or use `scripts/train/train_infinite.py`.
-3. Try `RobustProtoDiversityLoss` (RPPL) — [`rppl_whitepaper.md`](rppl_whitepaper.md).
+3. Try `RobustProtoDiversityLoss` (RPPL) — [`rppl_whitepaper.md`](research/rppl.md).
 4. Tune the threshold *only after* fixing the data; thresholding cannot rescue
    a bad model.
 
@@ -133,7 +133,7 @@ ww_trainer-quickstart --wake-word "hey computer" --output-dir ./hey_computer
 
 Synthesises ~1000 TTS positives, mines negatives, trains a `small` tier model,
 and emits `best_f1_featurizer.onnx` + `best_f1.onnx` under
-`./hey_computer/model/`. Full reference in [`quickstart.md`](quickstart.md).
+`./hey_computer/model/`. Full reference in [`quickstart.md`](getting_started/quickstart.md).
 
 **Q: Python API equivalent?**
 
@@ -164,7 +164,7 @@ directory must contain `train/metadata.csv` and `test/metadata.csv`.
 | `medium`, `large`, BCResNet/KWT/Conformer | server / GPU | 1–10 M |
 | `hubert_small`, `hubert_medium` | GPU server | tens of M |
 
-Run `ww_trainer-tiers` to list them. See also [`hardware_guide.md`](hardware_guide.md).
+Run `ww_trainer-tiers` to list them. See also [`hardware_guide.md`](guides/embedded.md).
 
 ---
 
@@ -182,7 +182,7 @@ samples = [
 ```
 
 Supported file types: `.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`. Label convention
-is the string `"1"` / `"0"`. Full contract in [`data_contract.md`](data_contract.md).
+is the string `"1"` / `"0"`. Full contract in [`data_contract.md`](guides/datasets.md).
 
 **Q: What sample rate?**
 
@@ -244,11 +244,11 @@ uv run ww_trainer-train --help
 
 Key flags: `--wake-folder`, `--non-wake-folder`, `--arch {ffn,gru,cnn,bcresnet,…}`,
 `--epochs`, `--batch-size`, `--loss`, `--lr`. Full reference:
-[`training.md`](training.md).
+[`training.md`](guides/training.md).
 
 **Q: Which loss functions are supported?**
 
-The full catalogue is in [`losses.md`](losses.md). The ones you reach for first:
+The full catalogue is in [`losses.md`](reference/losses.md). The ones you reach for first:
 
 | Loss | When |
 |---|---|
@@ -257,7 +257,7 @@ The full catalogue is in [`losses.md`](losses.md). The ones you reach for first:
 | `arcface` | tight embedding clusters for retrieval-style heads |
 | `supcon` / `ntxent` | self-/supervised contrastive |
 | `triplet` / `soft_triplet` / `pair` | siamese / metric learning |
-| `rppl` | recommended for production — composite prototype loss with hard-neg diversity. See [`rppl_whitepaper.md`](rppl_whitepaper.md). |
+| `rppl` | recommended for production — composite prototype loss with hard-neg diversity. See [`rppl_whitepaper.md`](research/rppl.md). |
 | `size_aware` | wrap any base loss to add sparsity + param-count penalty (ESP32). |
 
 **Q: How do I freeze layers / do transfer learning?**
@@ -306,7 +306,7 @@ artifacts, and ONNX checkpoints are logged automatically.
 
 `scripts/eval/eval_hey_mycroft.py` (and friends) emit ROC / PR / DET, FP and FN
 lists, confidence histograms, and an FP/hour estimate against an ambient
-corpus. See [`benchmarking.md`](benchmarking.md).
+corpus. See [`benchmarking.md`](guides/evaluation.md).
 
 **Q: What does `--target-fp-per-hour` do?**
 
@@ -454,7 +454,7 @@ parity tests. Rarely affects wake-word accuracy.
 **Q: What extractors are available?**
 
 The full catalogue with parameters and citations is in
-[`extractors.md`](extractors.md). At a glance:
+[`extractors.md`](reference/extractors.md). At a glance:
 
 | Family | Notes |
 |---|---|
@@ -514,7 +514,7 @@ pipeline pattern.
 
 **Q: What heads are available?**
 
-The full catalogue is in [`classifiers.md`](classifiers.md). Highlights:
+The full catalogue is in [`classifiers.md`](reference/classifiers.md). Highlights:
 
 | Head | Use it for |
 |---|---|
@@ -609,7 +609,7 @@ losses_cfg = [{"name": "size_aware", "param_budget": 1024}]
 tier's param budget are hard-rejected. The search space is auto-constrained
 per tier.
 
-More: [`esp32.md`](esp32.md), [`hardware_guide.md`](hardware_guide.md).
+More: [`esp32.md`](guides/embedded.md), [`hardware_guide.md`](guides/embedded.md).
 
 ---
 
@@ -618,7 +618,7 @@ More: [`esp32.md`](esp32.md), [`hardware_guide.md`](hardware_guide.md).
 **Q: What search strategies are available?**
 
 Optuna (Bayesian), Grid, Random, Genetic, Two-Stage Genetic — full reference
-in [`sweep.md`](sweep.md) and [`search_strategies.md`](search_strategies.md).
+in [`sweep.md`](guides/search.md) and [`search_strategies.md`](guides/search.md).
 
 **Q: What is two-stage genetic search?**
 

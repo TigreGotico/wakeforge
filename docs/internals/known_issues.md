@@ -11,7 +11,7 @@ Open issues and known limitations. Evidence-based, with `file:line` citations.
 `torch.stft` in MFCC and Filterbank extractors produces slightly different
 results in the exported ONNX graph vs. native PyTorch — internal FFT windowing
 and floating-point optimisations in ONNX Runtime differ by ~`1e-4`. Use
-`tolerance=1e-3` in parity tests. Documented in [`faq.md`](faq.md).
+`tolerance=1e-3` in parity tests. Documented in [`faq.md`](../faq.md).
 
 ---
 

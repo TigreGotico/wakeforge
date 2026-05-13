@@ -282,18 +282,20 @@ Five-component loss designed for binary fixed-keyword wake-word detection under 
 | Hard-neg diversity | `gamma` | Spreads apart negatives with cos-sim to wake prototype above `hard_div_threshold` | Boudiaf et al. 2020 |
 | Proto-ranked consistency | `eta` | Under acoustic augmentation, each sample must still be correctly classified against the class prototypes (requires dataset `get_augmented`) | BYOL / MeanTeacher |
 
-**Novel features vs. standard metric learning:**
-- **EMA wake prototype** (`proto_ema_alpha=0.05`): the batch mean of ~2–5 wake embeddings is too noisy to use directly; the EMA stabilises over ~20 batches.
-- **Hard-negative targeting** (`hard_div_threshold=0.1`): only spreads confusable negatives, not easy ones far from the wake cluster.
-- **Proto-ranked consistency**: replaces L2 augmentation invariance with a stricter objective — the augmented embedding must remain on the correct side of the prototype boundary.
-- **Warmup scheduling** (`warmup_epochs=5`): geometric terms ramp from 0 → 1 so they don't train against random-epoch-0 prototypes.
+**Engineering choices specific to this implementation** (each is a known idea applied to binary KWS — see [docs/research/rppl.md §4](../research/rppl.md) for honest framing and prior-work attribution):
+
+- **EMA wake prototype** (`proto_ema_alpha=0.05`): the batch mean of ~2–5 wake embeddings is too noisy as a center-loss target; the EMA stabilises within ~20 batches. Updated only in `model.train()` mode so validation does not drift the target.
+- **Hard-negative targeting** (`hard_div_threshold=0.1`): only spreads confusable negatives. If fewer than two negatives clear the threshold the diversity term contributes 0 for that step (no fallback to easy negatives).
+- **Hinge diversity** (`div_margin=1.0`): pairs already > `div_margin` apart in squared L2 produce zero gradient — bounded, unlike the earlier unbounded `-mean(distance)` form.
+- **Proto-ranked consistency**: augmented view must classify correctly against the shared prototypes (a 2-class reduction of SupCon-with-augmentation). Stricter than per-sample L2 invariance because representation collapse cannot satisfy it.
+- **Warmup scheduling** (`warmup_epochs=5`): geometric terms ramp linearly from 0 → 1 so they don't train against the random-epoch-0 prototype.
 
 **Full config:**
 
 ```python
 {"name": "rppl", "weight": 1.0,
  "tau": 0.1,              # prototype similarity temperature
- "K_neg_proto": 0,        # 0 = single mean NWW prototype; >1 splits into K groups
+ "K_neg_proto": 0,        # 0/1 = single mean NWW prototype; >1 = cosine k-means
  "alpha": 1.0,            # BCE
  "beta": 1.0,             # proto-softmax
  "gamma": 0.5,            # diversity
@@ -302,6 +304,7 @@ Five-component loss designed for binary fixed-keyword wake-word detection under 
  "warmup_epochs": 5,
  "proto_ema_alpha": 0.05,
  "hard_div_threshold": 0.1,
+ "div_margin": 1.0,             # hinge margin (squared L2) for diversity
  "consistency_mode": "proto"}   # "proto" (proto-ranked CE) or "l2" (MSE ablation)
 ```
 
@@ -311,13 +314,13 @@ Five-component loss designed for binary fixed-keyword wake-word detection under 
 |--------|---------|
 | `rppl_bce` | BCE sub-loss per epoch |
 | `rppl_proto` | Prototype contrastive sub-loss |
-| `rppl_div` | Diversity sub-loss (negative = good, maximising distance) |
+| `rppl_div` | Hinge diversity sub-loss (0 when hard negatives are already > `div_margin` apart) |
 | `rppl_center` | Center loss sub-loss |
 | `rppl_cons` | Consistency sub-loss |
 | `rppl_geo_scale` | Warmup ramp (0 → 1 over `warmup_epochs`) |
-| `rppl_proto_ema_norm` | L2 norm of the EMA wake prototype (should stabilise quickly) |
+| `rppl_proto_ema_norm` | L2 norm of the EMA wake prototype (should stabilise within ~20 batches) |
 
-A 6-panel **RPPL dashboard** PNG is auto-generated every 5 epochs and at end-of-training, logged to the MLflow `rppl/` artifact folder. Use `train_rppl.py` as the dedicated experiment script.
+`train_rppl.py` is the dedicated experiment script; see [docs/research/rppl.md](../research/rppl.md) for the full whitepaper and ablation/baseline experiment spec.
 
 **When to use:** Hard-negative mining regime with a large NWW pool; infinite training mode; any scenario where you want per-epoch visibility into embedding structure.
 
