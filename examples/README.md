@@ -54,6 +54,46 @@ Runnable demos covering every architecture in ww-trainer.
 | 31 | `31_arcface_training.py` | ArcFace angular margin loss for embedding separation |
 | 32 | `32_full_pipeline.py` | End-to-end: build → train → ONNX export → inference → streaming |
 
+## Specialised Extractors & Embedded
+
+| # | Example | Focus |
+|---|---------|-------|
+| 33 | `33_markov_features.py` | Markov transition extractors — temporal modelling without neural nets |
+| 34 | `34_esp32_nano.py` | ESP32 nano tier: sub-1 KB models via grid search |
+| 35 | `35_esp32_genetic_search.py` | ESP32 GA: find best sub-10 KB model via evolutionary optimisation |
+| 36 | `36_size_aware_training.py` | `SizeAwareLoss` — train a tiny model with sparsity + size penalties |
+| 37 | `37_hmm_advanced.py` | Hybrid MFCC + HMM + GRU |
+| 38 | `38_markov_onnx_blackbox.py` | Use a Markov ONNX featurizer as a black-box `OnnxFeatureExtractor` |
+| 39 | `39_silero_vad_wrapper.py` | Wrap pre-trained Silero VAD as an ONNX feature stream |
+| 40 | `40_multi_onnx_pipeline.py` | Chain multiple ONNX models in a single inference pipeline |
+| 41 | `41_hmm_feature_extraction.py` | Classical HMM feature extraction |
+| 42 | `42_phonmatch_training.py` | PhonMatchNet training with IPA phoneme conditioning |
+| 43 | `43_ocsvm_head.py` | `OCSVMHead` — FFN backbone + One-Class SVM classifier (anomaly-style) |
+
+## Browser tester
+
+`wakeword_tester.html` — single-page HTML that loads a featurizer + head ONNX
+pair via onnxruntime-web and tests them from the microphone. No build step.
+
+## Recommended order — Zero to Hero
+
+If you are learning the framework end-to-end, work through examples in this
+order rather than numerically:
+
+1. **01 → 02** — simplest model, then a small recurrent one.
+2. **08 → 09** — load your trained ONNX and run it (offline + streaming).
+3. **11** — see the tier presets.
+4. **04 → 05 → 06 → 07** — alternative featurizers.
+5. **15 → 17 → 18 → 16** — production-grade CNN/TCN heads.
+6. **30 → 31** — multi-loss training and ArcFace.
+7. **24 → 25 → 27 → 29** — enrichment wrappers and stacking.
+8. **12 → 28** — Optuna and full GA architecture search.
+9. **34 → 35 → 36** — squeeze to ESP32.
+10. **14 → 10** — large SSL features, then distil to small.
+11. **40 → 38 → 39** — multi-ONNX pipelines and external pretrained features.
+12. **43** — OCSVM anomaly-style classifier head.
+13. **32** — the full end-to-end pipeline.
+
 ## Quick Start
 
 ```bash

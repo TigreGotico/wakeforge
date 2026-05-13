@@ -171,29 +171,29 @@ Use `--freeze-extractor` to freeze the entire feature extractor, and/or `--freez
 
 **Q: Is `--feature-cache-dir` actually wired up?**
 
-Yes (as of 2026-03-19). After the trainer is created, a `FeatureCache` is instantiated from the extractor's name/feature_dim/sample_rate and stored in `trainer.augment_opts["feature_cache"]`. Every training-epoch `AudioDataset` receives it automatically via the loop. Disable with `--no-feature-cache`. See `cli.py` and `ww_trainer/cache.py`.
+Yes. After the trainer is created, a `FeatureCache` is instantiated from the extractor's name/feature_dim/sample_rate and stored in `trainer.augment_opts["feature_cache"]`. Every training-epoch `AudioDataset` receives it automatically via the loop. Disable with `--no-feature-cache`. See `cli.py` and `ww_trainer/cache.py`.
 
-**Q: Does `SileroVadWrapper.__init__` still download the model at construction?**
+**Q: Does `SileroVadWrapper.__init__` download the model at construction?**
 
-No. The `torch.hub.load()` call was moved to the first `forward()` call (lazy init). Construction is now always fast and offline-safe. If you provide `onnx_path`, the ONNX session is still loaded eagerly (local file only). See `feats.py:SileroVadWrapper`.
+No — `torch.hub.load()` fires on the first `forward()` call (lazy init). Construction is fast and offline-safe. If `onnx_path` is provided, the ONNX session is loaded eagerly (local file only). See `feats.py:SileroVadWrapper`.
 
 ---
 
 **Q: Where does the epoch training loop live?**
 
-The full training loop was extracted from `WakeWordTrainer.train()` into `ww_trainer/loop.py:training_loop()`. `WakeWordTrainer.train()` is now a thin 4-line delegate. `trainer.py` is 246 lines. Related helpers in `loop.py`: `_build_epoch_data`, `_run_batch_loop`, `_update_best_checkpoints`, `_log_fp_fn_artifacts`.
+`training_loop()` in `ww_trainer/loop.py`. `WakeWordTrainer.train()` is a thin delegate. Helpers in `loop.py`: `_build_epoch_data`, `_run_batch_loop`, `_update_best_checkpoints`, `_log_fp_fn_artifacts`.
 
 **Q: Where is `compute_readiness` (hard-negative readiness score)?**
 
-Moved to `ww_trainer/evaluation.py:compute_readiness()`. Previously it was a private method on `WakeWordTrainer`.
+`ww_trainer/evaluation.py:compute_readiness()`.
 
 **Q: Where is `save_intermediate_checkpoint`?**
 
-Moved to `ww_trainer/checkpoint.py:save_intermediate_checkpoint()`. `WakeWordTrainer.save_intermediate_ckpt()` is now a thin wrapper for backwards compatibility.
+`ww_trainer/checkpoint.py:save_intermediate_checkpoint()`.
 
 ---
 
-## New Modules (v1.2)
+## Modules
 
 **Q: How do I export an FFN model to C for ESP32?**
 
@@ -205,7 +205,7 @@ Use `ww_trainer.calibration.calibrate_model(model, val_data, output_dir)` after 
 
 **Q: How do I use QAT (quantization-aware training)?**
 
-`from ww_trainer.qat import prepare_qat, convert_qat`. Call `prepare_qat(model)` before training and `convert_qat(model)` after. Note: `torch.ao.quantization` is deprecated in PyTorch 2.10+; migration to `torchao` is planned.
+`from ww_trainer.qat import prepare_qat, convert_qat`. Call `prepare_qat(model)` before training and `convert_qat(model)` after.
 
 **Q: How do I use multi-GPU training?**
 
@@ -553,7 +553,7 @@ The cache is a numpy array of shape `[T_cached, F]` grown and windowed automatic
 
 **Q: Does ww-trainer have a pyproject.toml?**
 
-Yes. `pyproject.toml` was added alongside `setup.py` (both coexist for backward compatibility). The pyproject.toml declares the build system, project metadata, optional extras, and the `ww_trainer-train` CLI entry point. `setup.py` remains as the authoritative version source.
+Yes. `pyproject.toml` declares the build system, project metadata, optional extras, and the `ww_trainer-train` CLI entry point.
 
 **Q: What optional dependency groups are available?**
 
@@ -604,10 +604,6 @@ Six docs files in `docs/`:
 | `docs/export.md` | ONNX export: extractors, heads, quantization, verification |
 | `docs/inference.md` | Inference: single, batch, streaming (ONNX and PyTorch) |
 | `docs/sweep.md` | Hyperparameter sweep with Optuna |
-
-**Q: What documentation was added in the 2026-03-10 sprint?**
-
-All six `docs/` files were created (or replaced for `index.md`) in a single documentation sprint. Every class and method entry in `api.md` cites the actual source file and line number. See `docs/changelog.md` for the full transparency report.
 
 **Q: Where is the notebook → ww-trainer data contract documented?**
 

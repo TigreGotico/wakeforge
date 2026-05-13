@@ -306,6 +306,8 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 
 | Doc | Contents |
 |-----|----------|
+| [docs/learning_path.md](docs/learning_path.md) | **Zero-to-hero curriculum** — staged learning path with literature anchors |
+| [examples/README.md](examples/README.md) | 43 runnable examples — covers every featurizer / head / loss |
 | [docs/index.md](docs/index.md) | Navigation hub — all modules, scripts, and key functions |
 | [docs/notebooks.md](docs/notebooks.md) | Notebook curriculum guide — hardware tiers, decision tree, recommended running order |
 | [docs/sweep.md](docs/sweep.md) | Full search API: parameter tables, fitness functions, island model |
@@ -317,7 +319,6 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
 | [docs/faq.md](docs/faq.md) | Common questions and error resolutions |
 | [docs/audit.md](docs/audit.md) | Known issues and tech debt |
-| [docs/changelog.md](docs/changelog.md) | Timestamped change history |
 | [docs/suggestions.md](docs/suggestions.md) | Feature backlog and improvement proposals |
 | [docs/references.md](docs/references.md) | Academic references and bibliography |
 | [docs/rppl_whitepaper.md](docs/rppl_whitepaper.md) | RPPL loss technical whitepaper |

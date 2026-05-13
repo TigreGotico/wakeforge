@@ -103,6 +103,14 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 
 ## Documentation
 
+### Getting Started
+
+| Document | Description |
+|----------|-------------|
+| [learning_path.md](learning_path.md) | **Zero-to-hero curriculum** — staged path from first model to research surface, with literature anchors |
+| [quickstart.md](quickstart.md) | `QuickstartConfig` API and CLI — string → ONNX in one call |
+| [../examples/README.md](../examples/README.md) | 43 runnable examples — pair each with the matching doc |
+
 ### Core Architecture
 
 | Document | Description |
@@ -132,7 +140,6 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 | [streaming.md](streaming.md) | `SlidingFeatureCacheTensor` deep-dive |
 | [distillation.md](distillation.md) | Knowledge distillation workflow |
 | [hardware_guide.md](hardware_guide.md) | Hardware-specific configurations |
-| [quickstart.md](quickstart.md) | `QuickstartConfig` API and CLI reference |
 
 ### Optimization & Research
 
@@ -205,7 +212,6 @@ All scripts live under `scripts/`. Run with `.venv/bin/python scripts/<subdir>/<
 - [faq.md](faq.md) — keyword-rich Q&A
 - [audit.md](audit.md) — known issues and tech debt
 - [suggestions.md](suggestions.md) — feature backlog
-- [changelog.md](changelog.md) — timestamped change history
 - [references.md](references.md) — academic bibliography
 - [rppl_whitepaper.md](rppl_whitepaper.md) — RPPL loss technical whitepaper
 - [tinyhubert_whitepaper.md](tinyhubert_whitepaper.md) — TinyHuBERT distillation design
