@@ -6,6 +6,43 @@ Train, evaluate, and ship lightweight on-device detectors that run anywhere
 from an ESP32 to a GPU server. Every component exports to ONNX; production
 inference requires only `onnxruntime` and `numpy` — no PyTorch at runtime.
 
+## What is a wake word?
+
+A short phrase ("hey jarvis", "computer", "alexa") that a device listens for
+continuously. When detected, downstream STT/NLU runs. A useful detector must
+run on tiny hardware (sub-100 KB, <10 % CPU, no internet), tolerate noise and
+distance, almost never false-fire (< 1 FA / hour), and trigger reliably when
+spoken (> 90 % recall at that operating point). ww-trainer is the toolchain
+that builds such a detector from a single phrase — synthesise data, train,
+evaluate, export, deploy.
+
+## Who is this for?
+
+| You are… | Start here |
+|---|---|
+| **Hobbyist** waking a Pi with your own phrase | [`docs/getting_started/quickstart.md`](docs/getting_started/quickstart.md) — ONNX in 5 minutes |
+| **Embedded engineer** shipping to ESP32 / MCU | [`docs/guides/embedded.md`](docs/guides/embedded.md) |
+| **Voice-assistant integrator** (OVOS, Rhasspy, …) | [`docs/guides/inference.md`](docs/guides/inference.md) |
+| **ML researcher** comparing architectures / losses | [`docs/guides/search.md`](docs/guides/search.md), [`docs/reference/losses.md`](docs/reference/losses.md), [`docs/research/rppl.md`](docs/research/rppl.md) |
+| **New to ML** entirely | [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) — runs free on Kaggle |
+
+## Highlights
+
+- **Single-string-to-ONNX** quickstart — `train_from_wakeword("hey jarvis", out)` produces a deployable model.
+- **17 featurizers × 15 classifier heads × 17 losses** — a real research surface.
+- **Genetic + Bayesian HP search** with island-model parallelism, adaptive mutation, two-stage refinement.
+- **Synthetic datagen** — TTS + voice conversion to bootstrap a dataset from zero recordings.
+- **Hard-negative mining** and **infinite training** for industrial-scale negative pools.
+- **ONNX-first**: featurizer and head export cleanly; no CUDA-only kernels.
+- **Hardware tiers** from `esp32_nano` (sub-1 KB int8) to `hubert_medium`.
+
+### Honest trade-offs
+
+- CPU training works for small tiers; a mid-range GPU is the best UX for larger ones.
+- Synthetic data is great for smoke-testing — production still needs real far-field recordings.
+- ONNX-export is mandatory; non-traceable components (custom CUDA kernels, dynamic control flow) are out of scope. See [`docs/internals/known_issues.md`](docs/internals/known_issues.md).
+- SSL featurizers (HuBERT, Wav2Vec2-BERT) are used as pre-exported ONNX and held frozen during downstream training — guarantees train/inference parity but limits adaptation.
+
 ## Install
 
 ```bash
