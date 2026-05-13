@@ -141,11 +141,22 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
     try:
         return run_datagen_pipeline(datagen_cfg)
     except ModuleNotFoundError as e:
+        vc_modules = {"chatterbox_onnx", "chatterbox_tts", "vocos"}
+        if e.name in vc_modules or (cfg.vc_refs_dir and e.name and "chatterbox" in e.name):
+            hint = (
+                "Voice conversion dependency missing. Install a VC backend:\n"
+                "    uv pip install -e \".[vc-onnx]\"   # CPU ONNX, recommended\n"
+                "    uv pip install -e \".[vc-torch]\"  # GPU PyTorch backend\n"
+                "Or drop --vc-refs to skip voice cloning."
+            )
+        else:
+            hint = (
+                "The quickstart requires the [datagen] and [torchcodec] extras:\n"
+                "    uv pip install -e \".[dev,datagen,torchcodec]\"\n"
+                "Or pass --reuse-dataset to skip datagen and train on an existing dataset."
+            )
         raise ModuleNotFoundError(
-            f"Quickstart datagen dependency missing: {e.name!r}. "
-            "The quickstart requires the [datagen] and [torchcodec] extras:\n"
-            "    uv pip install -e \".[dev,datagen,torchcodec]\"\n"
-            "Or pass --reuse-dataset to skip datagen and train on an existing dataset."
+            f"Quickstart datagen dependency missing: {e.name!r}. {hint}"
         ) from e
 
 
@@ -290,6 +301,11 @@ def cli_main() -> None:
                   help="Generate grapheme-level hard-negative confusables.")
     @click.option("--augmentation-data/--no-augmentation-data", default=True, show_default=True,
                   help="Download bg_noise/music/RIR augmentation datasets.")
+    @click.option("--vc-refs", "vc_refs_dir", default=None, type=click.Path(exists=True),
+                  help="Optional directory of reference voices (WAVs) for voice "
+                       "conversion. Requires the [vc-onnx] or [vc-torch] extra. "
+                       "When set, each synthesised positive is re-rendered in the "
+                       "timbre of a random reference speaker for diversity.")
     @click.option("--reuse-dataset", is_flag=True, default=False,
                   help="Skip datagen if dataset directory already exists.")
     @click.option("--device", default="auto", show_default=True,
@@ -308,6 +324,7 @@ def cli_main() -> None:
         lang: str,
         adversarial: bool,
         augmentation_data: bool,
+        vc_refs_dir: Optional[str],
         reuse_dataset: bool,
         device: str,
         export_onnx: bool,
@@ -325,6 +342,7 @@ def cli_main() -> None:
             lang=lang,
             adversarial=adversarial,
             download_augmentation=augmentation_data,
+            vc_refs_dir=vc_refs_dir,
             reuse_dataset=reuse_dataset,
             device=device,
             export_onnx=export_onnx,

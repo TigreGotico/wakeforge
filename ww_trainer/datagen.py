@@ -361,7 +361,16 @@ def voice_convert_batch(
 
     Returns list of output WAV paths.
     """
-    from chatterbox_onnx import ChatterboxOnnx
+    try:
+        from chatterbox_onnx import ChatterboxOnnx
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            f"Voice conversion dependency missing: {e.name!r}. "
+            "Install a VC backend extra:\n"
+            "    uv pip install -e \".[vc-onnx]\"   # CPU ONNX, recommended\n"
+            "    uv pip install -e \".[vc-torch]\"  # GPU PyTorch backend\n"
+            "Or run datagen without --vc-refs to skip voice conversion."
+        ) from e
 
     ref_voices = sorted(vc_refs_dir.rglob("*.wav"))
     if not ref_voices:
