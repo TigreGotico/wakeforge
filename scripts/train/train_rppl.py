@@ -1,11 +1,12 @@
 """RPPL-loss wake-word experiment with rich embedding visualisation.
 
-RPPL (Representation-Pair Purity Loss) trains the model to produce
-*consistent* embeddings for the same word under different acoustic
-conditions — positive pairs should be close, negative pairs far.
-This script trains a single run and logs PCA + t-SNE projections to
-MLflow every ``--viz-every`` epochs so you can watch the embedding
-space organise itself over time.
+RPPL (Robust Prototype and Diversity Loss — ``RobustProtoDiversityLoss``)
+combines BCE, prototype-softmax against an EMA wake prototype, a hinge
+hard-negative diversity term, center loss, and proto-ranked consistency
+under acoustic augmentation. See ``docs/rppl_whitepaper.md`` for the full
+formulation. This script trains a single run and logs PCA + t-SNE
+projections to MLflow every ``--viz-every`` epochs so you can watch the
+embedding space organise itself over time.
 
 What you'll see in MLflow
 -------------------------

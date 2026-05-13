@@ -26,6 +26,8 @@ import numpy as np
 import torch
 import torchaudio
 
+from ww_trainer.dataset import _save_audio
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -152,7 +154,7 @@ def preprocess_audio(
         max_abs = np.max(np.abs(wav))
         if max_abs > 0:
             wav = wav / max_abs
-        torchaudio.save(str(dst), torch.tensor(wav).unsqueeze(0).float(), sr)
+        _save_audio(str(dst), torch.tensor(wav).unsqueeze(0).float(), sr)
         return True
     except Exception as e:
         logger.warning("Error preprocessing %s: %s", src, e)
@@ -257,7 +259,7 @@ def download_hf_audio_dataset(
             ).numpy()
 
         fname = output_dir / f"{i:06d}.wav"
-        torchaudio.save(str(fname), torch.tensor(arr).unsqueeze(0).float(), sr)
+        _save_audio(str(fname), torch.tensor(arr).unsqueeze(0).float(), sr)
         written.append(fname)
 
     logger.info("  Downloaded %d files from %s", len(written), dataset_id)

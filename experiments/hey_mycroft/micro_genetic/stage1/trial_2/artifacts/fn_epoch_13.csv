@@ -1,7 +1,0 @@
-true_label,predicted_label,probability,file_path
-1,0,0.4735,experiments/hey_mycroft/dataset/positives/synth_output/2c6-4a7c-920a-3fa42f39736a.wav
-1,0,0.3801,experiments/hey_mycroft/dataset/positives/synth_output/0b5-4f82-bd79-8fcae06c91fe.wav
-1,0,0.3398,experiments/hey_mycroft/dataset/positives/vc_output/1ad-4b82-a360-8c7a212795e0.wav
-1,0,0.1898,experiments/hey_mycroft/dataset/positives/vc_output/09e-49d7-b6d9-c57a19ad9414.wav
-1,0,0.1210,experiments/hey_mycroft/dataset/positives/synth_output/105-4df2-8cfe-d9f51497f1c0.wav
-1,0,0.2139,experiments/hey_mycroft/dataset/positives/synth_output/395-4f96-927f-f161bdf4b902.wav
