@@ -24,23 +24,6 @@ Apply a 2D image CNN (EfficientNet-B0) to the log-mel spectrogram treated as a
 single-channel image. Widely used in production KWS pipelines. Fills the gap
 between the existing 1D `CnnClassifierHead` and the heavier transformer heads.
 
----
-
-### Mamba / SSM-based head — DROPPED (not ONNX-exportable)
-**Status: Will not implement until ONNX export is viable**
-
-`mamba-ssm` uses custom CUDA kernels not registered as ONNX ops.
-`mamba2-minimal` parallel scan uses control flow untraceable by torch.onnx.
-All ww-trainer heads must export cleanly via `export_to_onnx()`.
-
-Revisit if: (a) mamba-ssm adds official ONNX support, or (b) a pure-PyTorch
-ONNX-safe SSM implementation (e.g. Hawk/Griffin-style linear RNN) appears.
-
----
-
-### ~~Fine-tunable HuBERT~~ — DROPPED
-SSL models must be pre-exported to ONNX via `scripts/export_hubert.py` and used
-via `OnnxFeatureExtractor` for both training and inference (feature parity).
 
 ---
 
@@ -135,12 +118,3 @@ which intermediate layer transfers best (well-known: HuBERT L6–L8 ≫ final).
 Auto-insert a resampling stage when the dataset and featurizer sample rates
 disagree (e.g. 22.05 kHz speech corpus + 16 kHz HuBERT). ONNX-traceable.
 
----
-
-## Repo cleanup / publish prep
-
-- [ ] Add CONTRIBUTING.md, CODE_OF_CONDUCT.md
-- [ ] Verify all license headers (Apache 2.0)
-- [ ] Tag `0.3.0` for first public release
-- [ ] Replace `last_checkpoint.pt` in repo root with `.gitignore`d artifact
-- [ ] Publish first batch of pretrained featurizers to HF Hub
