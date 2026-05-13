@@ -104,6 +104,9 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="Maximum negative class weight for BCE/focal losses (default: 100).")
 @click.option("--target-fpr", default=None, type=float,
               help="Target false positive rate. If exceeded, max_neg_weight doubles per epoch.")
+@click.option("--target-fp-per-hour", default=None, type=float,
+              help="Target FP/hour on ambient audio. Requires --ambient-dir. "
+                   "If exceeded, max_neg_weight doubles per epoch (livekit-wakeword-style).")
 # -------------------------- Augmentation --------------------------
 @click.option('--aug-prob', default=0.8, type=float,
               help='Probability of applying any augmentation to each training sample.')
@@ -205,6 +208,7 @@ def train(**opts: dict) -> None:
     neg_weight_schedule = opts.pop("neg_weight_schedule", None)
     max_neg_weight = opts.pop("max_neg_weight", 100.0)
     target_fpr = opts.pop("target_fpr", None)
+    target_fp_per_hour = opts.pop("target_fp_per_hour", None)
 
     feature_cache_dir = opts.pop("feature_cache_dir", ".feature_cache/")
     no_feature_cache = opts.pop("no_feature_cache", False)
@@ -336,6 +340,7 @@ def train(**opts: dict) -> None:
             neg_weight_schedule=neg_weight_schedule,
             max_neg_weight=max_neg_weight,
             target_fpr=target_fpr,
+            target_fp_per_hour=target_fp_per_hour,
             ambient_dir=ambient_dir,
             spec_augment=spec_augment,
             spec_augment_kwargs={

@@ -155,6 +155,31 @@ def det_curve(
     return fars, frrs, thresholds
 
 
+def area_under_det(
+    y_true: np.ndarray,
+    y_scores: np.ndarray,
+    n_thresholds: int = 1001,
+) -> float:
+    """Area Under the Detection Error Tradeoff curve (AUT).
+
+    Integrates FNR as a function of FPR via the trapezoidal rule. Lower is
+    better (0 = perfect separation). Mirrors the AUT metric defined in
+    ``livekit/livekit-wakeword``'s evaluation pipeline.
+
+    Args:
+        y_true: Binary labels.
+        y_scores: Predicted probabilities.
+        n_thresholds: Number of threshold points on the DET curve.
+
+    Returns:
+        Scalar AUT value.
+    """
+    fars, frrs, _ = det_curve(y_true, y_scores, n_thresholds)
+    order = np.argsort(fars)
+    _trapz = getattr(np, "trapezoid", getattr(np, "trapz", None))
+    return float(_trapz(frrs[order], fars[order]))
+
+
 def find_optimal_threshold(
     y_true: np.ndarray,
     y_scores: np.ndarray,

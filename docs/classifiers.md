@@ -19,8 +19,11 @@ All heads inherit from `ClassifierHead` -- `ww_trainer/model.py:13`. Input: `[B,
 | KWT | `KWTHead` | `model.py:860` | Vision Transformer on patches | ~50-200K | RPi4/laptop |
 | Conformer | `ConformerHead` | `model.py:975` | Conv-augmented transformer | ~100-500K | RPi4/laptop |
 | CRNN | `CRNNHead` | `model.py:1021` | 2D CNN + GRU | ~50-200K | RPi |
+| ConvAttention | `ConvAttentionHead` | `model.py:1357` | 1D conv stack + self-attention + mean-pool | ~5-30K | MCU/RPi |
 
 Supporting module: `AttentionPooling` -- `model.py:536`. Used internally by `ConformerHead`.
+
+`ConvAttentionHead` is ported from [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) (Apache-2.0). Their docs report "60x lower AUT and 100x fewer FPs/h vs openWakeWord" with this head over a frozen embedding front-end. The port relaxes the original fixed `LayerNorm([D, T=16])` to `LayerNorm(D)` over the channel axis, so the head accepts any `T` and exports with a dynamic time axis like the rest of `ww-trainer`.
 
 ---
 

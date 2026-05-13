@@ -229,6 +229,7 @@ def training_loop(
         neg_weight_schedule: Optional[str] = "linear",   # was None — now on by default
         max_neg_weight: float = 100.0,
         target_fpr: Optional[float] = None,
+        target_fp_per_hour: Optional[float] = None,
         ambient_dir: Optional[str] = None,
         spec_augment: bool = True,    # was False — enable by default
         spec_augment_kwargs: Optional[Dict[str, Any]] = None,
@@ -279,6 +280,11 @@ def training_loop(
         neg_weight_schedule: BCE negative weight schedule (``"linear"``, etc.).
         max_neg_weight: Maximum negative weight for the schedule.
         target_fpr: If set, double ``max_neg_weight`` whenever FPR exceeds this.
+        target_fp_per_hour: If set, double ``max_neg_weight`` whenever the
+            ambient FP/hour estimate exceeds this. Requires ``ambient_dir``.
+            Ported from ``livekit/livekit-wakeword``; mirrors ``target_fpr``
+            but uses an absolute trigger-rate target rather than a per-batch
+            negative-rate fraction.
         ambient_dir: Directory of ambient audio for FP/hour estimation.
         spec_augment: Enable spectrogram augmentation.
         spec_augment_kwargs: Kwargs for :class:`~ww_trainer.augment.SpectrogramAugment`.
@@ -526,6 +532,12 @@ def training_loop(
                 logger.info("[Ambient] FP/hour: %.2f (%d files)", fp_per_hour, len(ambient_paths))
                 if trainer.mlflow:
                     trainer.mlflow_log("log_metrics", {"fp_per_hour": fp_per_hour}, step=ep + 1)
+                if (target_fp_per_hour is not None
+                        and neg_weight_schedule is not None
+                        and fp_per_hour > target_fp_per_hour):
+                    loss_manager.adjust_max_neg_weight(2.0)
+                    logger.info("[NegWeight] FP/h %.2f > target %.2f — doubled max_neg_weight to %.1f",
+                                fp_per_hour, target_fp_per_hour, loss_manager.max_neg_weight)
 
         if metrics_log:
             log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)

@@ -43,6 +43,7 @@ from ww_trainer.model import (
     ConformerHead,
     CRNNHead,
     AttentionPooling,
+    ConvAttentionHead,
 )
 
 # --- Losses ---
@@ -96,7 +97,15 @@ from ww_trainer.metrics import (
     compute_far_frr,
     find_optimal_threshold,
     det_curve,
+    area_under_det,
     classification_report,
+)
+
+# --- Checkpoint helpers ---
+from ww_trainer.checkpoint import (
+    save_checkpoint,
+    average_checkpoints,
+    select_best_checkpoints,
 )
 
 # --- Factory ---
