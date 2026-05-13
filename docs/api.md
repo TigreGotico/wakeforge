@@ -14,11 +14,11 @@ Source: `ww_trainer/feats.py`
 WavInput: TypeAlias = Union[torch.Tensor, List[torch.Tensor]]
 ```
 
-Defined at `feats.py:11`. Accepted by all extractor `forward` methods.
+Defined at `feats.py`. Accepted by all extractor `forward` methods.
 
 ---
 
-### `ensure_wav_list` — `feats.py:14`
+### `ensure_wav_list` — `feats.py:18`
 
 ```python
 def ensure_wav_list(wavs: WavInput) -> List[torch.Tensor]
@@ -36,7 +36,7 @@ Raises `ValueError` for unsupported tensor shapes, `TypeError` for non-tensor in
 
 ---
 
-### `SlidingFeatureCacheTensor` — `feats.py:27`
+### `SlidingFeatureCacheTensor` — `feats.py:31`
 
 ```python
 class SlidingFeatureCacheTensor(torch.nn.Module)
@@ -44,7 +44,7 @@ class SlidingFeatureCacheTensor(torch.nn.Module)
 
 Rolling buffer that accumulates the most recent `window_size` feature frames for streaming inference.
 
-#### `__init__` — `feats.py:28`
+#### `__init__` — `feats.py:32`
 
 ```python
 def __init__(self, feature_dim: int = 768, window_size: int = 50)
@@ -57,7 +57,7 @@ def __init__(self, feature_dim: int = 768, window_size: int = 50)
 
 Registers `feature_cache: Tensor[window_size, feature_dim]` as a buffer (zero-initialized).
 
-#### `forward` — `feats.py:36`
+#### `forward` — `feats.py:49`
 
 ```python
 def forward(self, new_feats: Tensor) -> Tensor
@@ -71,7 +71,7 @@ Returns `Tensor[T_current, F]` — the current window (up to `window_size` frame
 
 ---
 
-### `BaseExtractor` — `feats.py:57`
+### `BaseExtractor` — `feats.py:70`
 
 ```python
 class BaseExtractor(torch.nn.Module)
@@ -79,15 +79,15 @@ class BaseExtractor(torch.nn.Module)
 
 Abstract base for all feature extractors.
 
-#### `__init__` — `feats.py:59`
+#### `__init__` — `feats.py:72`
 
 ```python
 def __init__(self, sample_rate: int = 16000, device: str = "auto") -> None
 ```
 
-`device="auto"` selects CUDA if available, otherwise CPU (`feats.py:61`–`62`).
+`device="auto"` selects CUDA if available, otherwise CPU.
 
-#### `feature_dim` property — `feats.py:66`
+#### `feature_dim` property — `feats.py:97`
 
 ```python
 @property
@@ -96,7 +96,7 @@ def feature_dim(self) -> int
 
 Abstract. Subclasses must return the integer feature dimension F. Raises `NotImplementedError` in the base class.
 
-#### `forward` — `feats.py:71`
+#### `forward` — `feats.py:101`
 
 ```python
 @abc.abstractmethod
@@ -105,10 +105,10 @@ def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor
 
 Abstract. Must return `Tensor[B, T_frames, F]`.
 
-#### `export_to_onnx` — `feats.py:77`
+#### `export_to_onnx` — `feats.py:107`
 
 ```python
-def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None
+def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None
 ```
 
 Exports the extractor to ONNX.
@@ -118,12 +118,13 @@ Exports the extractor to ONNX.
 | `out` | `str` | required | Output file path (e.g. `"extractor.onnx"`) |
 | `quantize` | `bool` | `False` | If True, also writes INT16 and INT8 quantized variants |
 | `dynamo` | `bool` | `False` | Use TorchDynamo exporter instead of TorchScript |
+| `metadata` | `dict` | `None` | Key-value pairs embedded in ONNX model metadata |
 
-Dynamic axes: batch size and time dimension. Opset 18. Verifies the exported model with `onnx.checker`. If `quantize=True`, writes `<stem>_int16.onnx` and `<stem>_int8.onnx` (`feats.py:97`–`102`).
+Dynamic axes: batch size and time dimension. Opset 18. Verifies the exported model with `onnx.checker`. If `quantize=True`, writes `<stem>_int16.onnx` and `<stem>_int8.onnx`.
 
 ---
 
-### `OnnxFeatureExtractor` — `feats.py:105`
+### `OnnxFeatureExtractor` — `feats.py:157`
 
 ```python
 class OnnxFeatureExtractor(BaseExtractor)
@@ -131,19 +132,19 @@ class OnnxFeatureExtractor(BaseExtractor)
 
 Wraps a pre-exported extractor ONNX file as a `BaseExtractor`. Used for training when the extractor has already been exported (e.g. HuBERT exported once, reused across many training runs).
 
-#### `__init__` — `feats.py:106`
+#### `__init__` — `feats.py:158`
 
 ```python
 def __init__(self, model_path: str, sample_rate: int = 16000, device: str = "auto")
 ```
 
-Loads `model_path` into an `onnxruntime.InferenceSession`. Selects `CUDAExecutionProvider` then `CPUExecutionProvider` when device is CUDA (`feats.py:110`–`118`).
+Loads `model_path` into an `onnxruntime.InferenceSession`.
 
-#### `feature_dim` property — `feats.py:125`
+#### `feature_dim` property — `feats.py:178`
 
-Reads from the ONNX output shape. If the last dimension is dynamic (None), runs a dummy `[1, sample_rate]` inference to determine the dimension at runtime (`feats.py:130`–`133`).
+Reads from the ONNX output shape. If the last dimension is dynamic (None), runs a dummy `[1, sample_rate]` inference to determine the dimension at runtime.
 
-#### `forward` — `feats.py:136`
+#### `forward` — `feats.py:246`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -153,17 +154,17 @@ Processes each waveform individually (batch size 1 per ONNX run), pads results t
 
 ---
 
-### `MfccExtractor` — `feats.py:159`
+### `MfccExtractor` — `feats.py:304`
 
 ```python
 class MfccExtractor(BaseExtractor)
 ```
 
-Pure-PyTorch MFCC extractor. Fully ONNX-exportable. Uses `return_complex=False` in `torch.stft` to remain compatible with the ONNX exporter (`feats.py:228`).
+Pure-PyTorch MFCC extractor. Fully ONNX-exportable. Uses `return_complex=False` in `torch.stft` for ONNX compatibility.
 
 A pre-exported version is available at https://huggingface.co/TigreGotico/mfcc-onnx.
 
-#### `__init__` — `feats.py:165`
+#### `__init__` — `feats.py:310`
 
 ```python
 def __init__(
@@ -190,11 +191,11 @@ def __init__(
 
 Registers `mel_fb` and `dct_mat` as buffers so they move with the model's device.
 
-#### `feature_dim` property — `feats.py:181`
+#### `feature_dim` property — `feats.py:326`
 
 Returns `self.n_mfcc`.
 
-#### `forward` — `feats.py:213`
+#### `forward` — `feats.py:358`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -202,81 +203,11 @@ def forward(self, wavs: WavInput) -> torch.Tensor
 
 Computes MFCC: STFT → power spectrum → mel filterbank → log → DCT. Returns `Tensor[B, T, n_mfcc]`.
 
-#### `_mel_filterbank` — `feats.py:184`
-
-Builds the `[n_mels, n_fft//2+1]` triangular mel filterbank matrix using Hz-to-mel and mel-to-Hz conversions.
-
-#### `_dct_matrix` — `feats.py:206`
-
-Builds the orthonormal `[n_mfcc, n_mels]` DCT-II matrix.
+---
 
 ---
 
-### `HubertExtractor` — `feats.py:245`
-
-```python
-class HubertExtractor(BaseExtractor)
-```
-
-HuBERT encoder wrapper for training. Requires `transformers`. Sets `_REQUIRES_TRANSFORMERS = True` (`feats.py:249`).
-
-#### `__init__` — `feats.py:251`
-
-```python
-def __init__(
-    self,
-    model_name: str = "voidful/hubert-tiny-v2",
-    sample_rate: int = 16000,
-    device: str = "auto",
-) -> None
-```
-
-Loads `HubertModel.from_pretrained(model_name)` and puts it in eval mode. Raises `ImportError` if `transformers` is not installed (`feats.py:255`–`259`).
-
-#### `feature_dim` property — `feats.py:263`
-
-Returns `self.hubert.config.hidden_size`.
-
-#### `forward` — `feats.py:267`
-
-```python
-def forward(self, wavs: WavInput) -> torch.Tensor
-```
-
-Pads to equal length, normalizes by peak amplitude (`feats.py:272`–`273`), runs `hubert(wav_tensor).last_hidden_state` under `torch.no_grad()`. Returns `Tensor[B, T, hidden_size]`.
-
----
-
-### `Wav2Vec2Extractor` — `feats.py:279`
-
-```python
-class Wav2Vec2Extractor(BaseExtractor)
-```
-
-Wav2Vec2 encoder wrapper for training. Requires `transformers`. Sets `_REQUIRES_TRANSFORMERS = True` (`feats.py:283`).
-
-#### `__init__` — `feats.py:285`
-
-```python
-def __init__(
-    self,
-    model_name: str = "patrickvonplaten/tiny-wav2vec2-no-tokenizer",
-    sample_rate: int = 16000,
-    device: str = "auto",
-) -> None
-```
-
-#### `feature_dim` property — `feats.py:297`
-
-Returns `self.model.config.hidden_size`.
-
-#### `forward` — `feats.py:301`
-
-```python
-def forward(self, wavs: torch.Tensor) -> torch.Tensor
-```
-
-Mean/std normalizes the input (`feats.py:307`), runs `model(wavs).last_hidden_state` under `torch.no_grad()`. Returns `Tensor[B, T', hidden_size]`.
+> **Removed in 0.2.0:** `HubertExtractor` and `Wav2Vec2Extractor` training wrappers were dropped from `feats.py` to enforce ONNX-first training. Export these models once via `scripts/export_hubert.py` / `scripts/export_wav2vec2.py` / `scripts/export_w2vbert.py`, then load with `OnnxFeatureExtractor` for training.
 
 ---
 
@@ -286,7 +217,7 @@ Source: `ww_trainer/model.py`
 
 ---
 
-### `ClassifierHead` — `model.py:13`
+### `ClassifierHead` — `model.py:27`
 
 ```python
 class ClassifierHead(torch.nn.Module)
@@ -294,7 +225,7 @@ class ClassifierHead(torch.nn.Module)
 
 Abstract base for all classifier heads.
 
-#### `__init__` — `model.py:14`
+#### `__init__` — `model.py:28`
 
 ```python
 def __init__(self, input_size: int, sample_rate: int = 16000, device: str = "auto") -> None
@@ -306,7 +237,7 @@ def __init__(self, input_size: int, sample_rate: int = 16000, device: str = "aut
 | `sample_rate` | Audio sample rate (informational) |
 | `device` | `"auto"`, `"cuda"`, or `"cpu"` |
 
-#### `forward` — `model.py:23`
+#### `forward` — `model.py:45`
 
 ```python
 @abc.abstractmethod
@@ -315,7 +246,7 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 Abstract. Must return scalar logits `Tensor[B]`.
 
-#### `embed` — `model.py:27`
+#### `embed` — `model.py:49`
 
 ```python
 @abc.abstractmethod
@@ -324,17 +255,17 @@ def embed(self, feats: torch.Tensor) -> torch.Tensor
 
 Abstract. Must return pre-logit embeddings `Tensor[B, D]` for metric learning.
 
-#### `export_to_onnx` — `model.py:30`
+#### `export_to_onnx` — `model.py:52`
 
 ```python
-def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False) -> None
+def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None
 ```
 
-Exports the head to ONNX with a dummy `[1, 200, input_size]` input. Dynamic axis on the time dimension. Input name `input_features`, output name `logits`. If `quantize=True`, writes `<stem>_int8.onnx` (`model.py:57`–`62`).
+Exports the head to ONNX with a dummy `[1, 200, input_size]` input. Dynamic axis on the time dimension. Input name `input_features`, output name `logits`. If `quantize=True`, writes `<stem>_int8.onnx`.
 
 ---
 
-### `FfnClassifierHead` — `model.py:150`
+### `FfnClassifierHead` — `model.py:246`
 
 ```python
 class FfnClassifierHead(ClassifierHead)
@@ -342,7 +273,7 @@ class FfnClassifierHead(ClassifierHead)
 
 Mean-pool over the time dimension, then a two-layer feed-forward network.
 
-#### `__init__` — `model.py:153`
+#### `__init__` — `model.py:249`
 
 ```python
 def __init__(
@@ -357,7 +288,7 @@ def __init__(
 
 Architecture: `Linear(input_size → hidden_dim) → ReLU → Dropout(dropout) → Linear(hidden_dim → 1)`.
 
-#### `forward` — `model.py:166`
+#### `forward` — `model.py:262`
 
 ```python
 def forward(self, feats: torch.Tensor) -> torch.Tensor
@@ -365,13 +296,13 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 `pooled = feats.mean(dim=1)` then sequential forward. Returns `Tensor[B]`.
 
-#### `embed` — `model.py:170`
+#### `embed` — `model.py:266`
 
-Returns `F.relu(linear_0(pooled))` — the hidden layer activation, shape `[B, hidden_dim]`.
+Returns the hidden layer activation, shape `[B, hidden_dim]`.
 
 ---
 
-### `CnnClassifierHead` — `model.py:175`
+### `CnnClassifierHead` — `model.py:451`
 
 ```python
 class CnnClassifierHead(ClassifierHead)
@@ -379,9 +310,9 @@ class CnnClassifierHead(ClassifierHead)
 
 Two Conv1d layers over the feature dimension, adaptive average pooling, then two FC layers.
 
-**Note:** Conv1d operates on `[B, C, T]` so the head transposes features internally — feats arrive as `[B, T, F]` and `self.conv` receives `[B, F, T]` (`model.py:196`: `self.conv(feats)` — the `Conv1d` in `self.conv` has `in_channels=self.input_size`, which matches `F`).
+**Note:** Conv1d operates on `[B, C, T]` so the head transposes features internally — feats arrive as `[B, T, F]` and `self.conv` receives `[B, F, T]`.
 
-#### `__init__` — `model.py:177`
+#### `__init__` — `model.py:453`
 
 ```python
 def __init__(
@@ -398,17 +329,17 @@ def __init__(
 
 Architecture: `Conv1d(input_size, conv_dim, kernel_size) → ReLU → Conv1d(conv_dim, conv_dim, kernel_size) → ReLU → AdaptiveAvgPool1d(1) → FC(conv_dim, linear_dim) → FC(linear_dim, 1)`.
 
-#### `forward` — `model.py:195`
+#### `forward` — `model.py:471`
 
 Returns `Tensor[B]`.
 
-#### `embed` — `model.py:200`
+#### `embed` — `model.py:477`
 
-Returns `F.relu(fc1(conv_out))` — shape `[B, linear_dim]`.
+Returns the relu-activated fc1 output — shape `[B, linear_dim]`.
 
 ---
 
-### `GruClassifierHead` — `model.py:205`
+### `GruClassifierHead` — `model.py:483`
 
 ```python
 class GruClassifierHead(ClassifierHead)
@@ -416,7 +347,7 @@ class GruClassifierHead(ClassifierHead)
 
 GRU recurrent network over the time dimension, mean-pooled, then two FC layers.
 
-#### `__init__` — `model.py:207`
+#### `__init__` — `model.py:485`
 
 ```python
 def __init__(
@@ -442,7 +373,7 @@ def __init__(
 
 FC size after GRU: `hidden_dim * 2` if bidirectional, else `hidden_dim`.
 
-#### `_ensure_correct_shape` — `model.py:226`
+#### `_ensure_correct_shape` — `model.py:504`
 
 ```python
 def _ensure_correct_shape(self, feats: torch.Tensor) -> torch.Tensor
@@ -450,7 +381,7 @@ def _ensure_correct_shape(self, feats: torch.Tensor) -> torch.Tensor
 
 Auto-detects `[B, F, T]` vs `[B, T, F]` input orientation by comparing `D1` and `D2` to `input_size`. Transposes if `D1 == input_size and D2 != input_size`. Raises `ValueError` when both dimensions equal `input_size` (ambiguous).
 
-#### `forward` — `model.py:245`
+#### `forward` — `model.py:523`
 
 ```python
 def forward(self, feats: torch.Tensor) -> torch.Tensor
@@ -458,13 +389,13 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 Calls `_ensure_correct_shape`, runs GRU, mean-pools GRU outputs, then two FC layers. Returns `Tensor[B]`.
 
-#### `embed` — `model.py:252`
+#### `embed` — `model.py:530`
 
-Returns `F.relu(fc1(pooled))` — shape `[B, linear_dim]`.
+Returns the relu-activated fc1 output — shape `[B, linear_dim]`.
 
 ---
 
-### `BaseWakeModel` — `model.py:65`
+### `BaseWakeModel` — `model.py:93`
 
 ```python
 class BaseWakeModel(nn.Module)
@@ -472,7 +403,7 @@ class BaseWakeModel(nn.Module)
 
 Combines an extractor and a head into a single trainable module.
 
-#### `__init__` — `model.py:71`
+#### `__init__` — `model.py:99`
 
 ```python
 def __init__(
@@ -484,9 +415,9 @@ def __init__(
 ) -> None
 ```
 
-Moves both submodules to `device` via `self.to(self.device)` (`model.py:83`).
+Moves both submodules to `device`.
 
-#### `forward` — `model.py:86`
+#### `forward` — `model.py:147`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -494,7 +425,7 @@ def forward(self, wavs: WavInput) -> torch.Tensor
 
 Runs `feature_extractor(wavs)` then `classifier.forward(feats)`. Returns logits `Tensor[B]`.
 
-#### `embed` — `model.py:91`
+#### `embed` — `model.py:168`
 
 ```python
 def embed(self, wavs: WavInput) -> torch.Tensor
@@ -502,7 +433,7 @@ def embed(self, wavs: WavInput) -> torch.Tensor
 
 Returns `classifier.embed(feature_extractor(wavs))`. Used by metric losses and visualization.
 
-#### `forward_streaming` — `model.py:110`
+#### `forward_streaming` — `model.py:200`
 
 ```python
 def forward_streaming(
@@ -521,7 +452,7 @@ Processes one audio chunk with a rolling feature cache.
 
 Returns sigmoid probability as a Python `float`.
 
-#### `infer` — `model.py:127`
+#### `infer` — `model.py:222`
 
 ```python
 def infer(self, audio: np.ndarray) -> float
@@ -529,7 +460,7 @@ def infer(self, audio: np.ndarray) -> float
 
 Single-waveform inference. Wraps the audio in a tensor, calls `forward`, applies sigmoid. Returns `float` in `[0, 1]`. Raises `ValueError` if `audio.ndim != 1`.
 
-#### `load_checkpoint` — `model.py:97`
+#### `load_checkpoint` — `model.py:187`
 
 ```python
 def load_checkpoint(self, ckpt_path: str) -> None
@@ -677,16 +608,27 @@ Source: `ww_trainer/trainer.py`
 
 ---
 
-### `EXTRACTOR_REGISTRY` — `trainer.py:24`
+### `EXTRACTOR_REGISTRY` — `factory.py:49`
 
 ```python
 EXTRACTOR_REGISTRY = {
     "onnx": OnnxFeatureExtractor,
     "mfcc": MfccExtractor,
+    "filterbank": FilterbankExtractor,
+    "sincnet": SincNetExtractor,
+    "gammatone": GammatoneExtractor,
+    "leaf": LEAFExtractor,
+    "plp": PLPExtractor,
+    "pncc": PNCCExtractor,
+    "cqt": CQTExtractor,
+    "delta_mfcc": None,          # MfccExtractor wrapped in DeltaExtractor
+    "delta_filterbank": None,    # FilterbankExtractor wrapped in DeltaExtractor
 }
 ```
 
-Maps string extractor type names to classes. Used by `create_model` for the two directly importable extractors. `hubert` and `wav2vec2` are handled inline via guarded imports.
+Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:83`.
+
+**Note:** `HubertExtractor` and `Wav2Vec2Extractor` were removed in 0.2.0. Export those models once via the standalone export scripts, then use `featurizer_type="onnx"` to load the ONNX file.
 
 ---
 
@@ -721,14 +663,14 @@ def __init__(
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `arch` | required | Head architecture: `"ffn"`, `"gru"`, `"cnn"` |
-| `featurizer` | required | Path to extractor ONNX (or `""` for `mfcc`/`hubert`/`wav2vec2`) |
+| `featurizer` | required | Path to extractor ONNX (or `""` when `featurizer_type` is `"mfcc"` or similar built-in) |
 | `feature_dim` | `None` | Feature dimension F; auto-detected from extractor if None |
 | `device` | `"auto"` | `"cpu"`, `"cuda"`, or `"auto"` |
 | `mlflow_uri` | `None` | MLflow tracking URI; disables MLflow if None |
 | `resume` | `None` | Path to `.pt` checkpoint to resume from |
 | `export_onnx` | `False` | Export to ONNX after every checkpoint save |
 | `losses_cfg` | `None` | List of loss config dicts; see `LossManager` |
-| `featurizer_type` | `"onnx"` | One of `"onnx"`, `"mfcc"`, `"hubert"`, `"wav2vec2"` |
+| `featurizer_type` | `"onnx"` | Key into `EXTRACTOR_REGISTRY` — e.g. `"onnx"`, `"mfcc"`, `"filterbank"`, `"sincnet"` |
 | `shared_extractor` | `None` | Pre-built extractor to share across trainers |
 | `use_amp` | `False` | Enable mixed-precision training |
 | `**model_kwargs` | | Passed to `create_model` (arch-specific params) and augmentation |
@@ -751,22 +693,25 @@ def create_model(
 ) -> BaseWakeModel
 ```
 
-Builds and returns a `BaseWakeModel`. Extractor selection:
+Builds and returns a `BaseWakeModel`. Extractor is resolved via `EXTRACTOR_REGISTRY[featurizer_type]` — `factory.py:49`. Architecture-specific kwargs are forwarded from `HEAD_REGISTRY` — `factory.py:63`.
 
-| `featurizer_type` | Extractor class |
-|-------------------|----------------|
-| `"onnx"` | `OnnxFeatureExtractor(featurizer, ...)` |
-| `"mfcc"` | `MfccExtractor(sr=sample_rate)` |
-| `"hubert"` | `HubertExtractor(featurizer, ...)` |
-| `"wav2vec2"` | `Wav2Vec2Extractor(featurizer, ...)` |
-
-Architecture-specific kwargs forwarded to the head:
-
-| `arch_name` | Head class | Accepted kwargs |
-|-------------|-----------|-----------------|
-| `"ffn"` | `FfnClassifierHead` | `hidden_dim`, `dropout` |
-| `"gru"` | `GruClassifierHead` | `hidden_dim`, `dropout`, `bidirectional`, `gru_n_layers` |
-| `"cnn"` | `CnnClassifierHead` | `conv_dim`, `linear_dim`, `kernel_size`, `stride` |
+| `arch_name` | Head class |
+|-------------|-----------|
+| `"ffn"` | `FfnClassifierHead` |
+| `"gru"` | `GruClassifierHead` |
+| `"cnn"` | `CnnClassifierHead` |
+| `"bcresnet"` | `BCResNetHead` |
+| `"tcresnet"` | `TCResNetHead` |
+| `"dscnn"` | `DSCNNHead` |
+| `"matchboxnet"` | `MatchboxNetHead` |
+| `"res15"` | `Res15Head` |
+| `"kwt"` | `KWTHead` |
+| `"conformer"` | `ConformerHead` |
+| `"crnn"` | `CRNNHead` |
+| `"mixconv"` | `MixConvHead` |
+| `"efficientnet"` | `EfficientNetHead` |
+| `"ocsvm"` | `OCSVMHead` |
+| `"conv_attention"` | `ConvAttentionHead` |
 
 #### `save_checkpoint` — `trainer.py:119`
 
@@ -864,7 +809,7 @@ class TierConfig
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `name` | `str` | required | Tier identifier (e.g. `"micro"`) |
-| `extractor_type` | `str` | required | One of `"mfcc"`, `"onnx"`, `"hubert"`, `"wav2vec2"` |
+| `extractor_type` | `str` | required | Key into `EXTRACTOR_REGISTRY` — e.g. `"mfcc"`, `"onnx"`, `"filterbank"`, `"sincnet"` |
 | `head_arch` | `str` | required | One of `"ffn"`, `"gru"`, `"cnn"` |
 | `hidden_dim` | `int` | required | Head hidden dimension |
 | `n_mfcc` | `int` | `40` | MFCC coefficients (only used when `extractor_type == "mfcc"`) |

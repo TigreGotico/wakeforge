@@ -4,6 +4,56 @@
 
 ---
 
+### 0.4.0a1 — 2026-05-13 — CI hardening
+
+**Type:** CI / Packaging
+**Commits:** `575020f8`
+**Changes:**
+- Made `torchcodec` optional so CI does not fail on platforms where it is unavailable.
+- Added `test` as an installable extra in `pyproject.toml`.
+- Excluded generated notebooks and vendor files from the licence check.
+- Fixed an `onnxscript` import guard that caused import errors on envs without it.
+
+---
+
+### 0.4.0a1 — 2026-05-13 — OCSVMHead: all kernels (linear, poly, sigmoid, rbf)
+
+**Type:** Feature / Fix
+**Commits:** `9b7d14a0`, `216d265e`, `f199e2f0`, `b347bd9c`
+**Changes:**
+- `OCSVMHead` now supports `kernel={"rbf","linear","poly","sigmoid"}` — all implemented in pure PyTorch (`OCSVMHead._kernel_vals` — `model.py:343`), ONNX-exportable without sklearn.
+- Added `degree` and `coef0` constructor arguments for `"poly"` and `"sigmoid"` kernels.
+- Fixed `gamma` resolution: `svm._gamma` (the actual float after sklearn resolves `"scale"` / `"auto"`) is now stored as `_gamma_val` buffer — `model.py:442`.
+- Added `ValueError` when an unsupported `kernel` string is passed — `model.py:315`.
+- Added `OCSVMHead` integration tests (`test/test_ocsvm_training.py`) and example `examples/43_ocsvm_head.py`.
+- Documented `OCSVMHead` in `docs/classifiers.md` and `docs/faq.md`.
+
+---
+
+### 0.3.0a1 — 2026-04 — OCSVMHead: two-stage FFN + One-Class SVM head
+
+**Type:** Feature
+**Commits:** `ddef3895`, `a2028211`
+**Changes:**
+- Added `OCSVMHead` — `model.py:271`: FFN backbone (Linear→ReLU→Dropout→Linear) produces `embed_dim` embeddings; `fit_ocsvm(dataloader)` fits `sklearn.svm.OneClassSVM` on positive embeddings and stores support vectors / dual coefficients / bias as torch buffers for ONNX export.
+- Added `ocsvm_small` tier preset — `ww_trainer/tiers.py:174`.
+- Added `ocsvm` optional dependency group in `pyproject.toml` (`scikit-learn`).
+
+---
+
+### 0.2.0a1 — 2026-04 — ConvAttentionHead, AUT metric, checkpoint averaging; text modality; SSL export scripts
+
+**Type:** Feature
+**Commits:** `a09ab762`, `ad1828cd`, `32df8d5f`, `e059e50c`
+**Changes:**
+- Ported `ConvAttentionHead` from `livekit/livekit-wakeword` (Apache-2.0) — `model.py:1541`. Relaxed `LayerNorm` from fixed `[D, T=16]` to `LayerNorm(D)` for dynamic `T` and ONNX export compatibility.
+- Added `area_under_det` (AUT) metric — `ww_trainer/metrics.py`. AUT integrates FNR vs FPR (lower = better), the operating metric used by LiveKit.
+- Added `select_best_checkpoints` and `average_checkpoints` — `ww_trainer/checkpoint.py`.
+- Added `OnnxTextExtractor` — `ww_trainer/feats.py:2187`: optional audio+text conditioning via a pre-exported text ONNX encoder.
+- Dropped SSL training wrappers (HuBERT, Wav2Vec2) from `feats.py`; replaced with standalone export scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`). Use `OnnxFeatureExtractor` to load exported ONNX features for training.
+
+---
+
 ### 2026-03-20 — Initial release versioning at 0.1.0 + OVOS shared workflows
 
 **Type:** Packaging / CI

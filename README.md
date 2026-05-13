@@ -249,7 +249,7 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 ## Key Features
 
 - **17 feature extractors**: MFCC, FilterBank, SincNet, Gammatone, LEAF, PLP, PNCC, CQT, HuBERT, Wav2Vec2, TorchAudio-HuBERT, Markov, HMM, plus enrichment wrappers (VAD, Pitch, SNRAware, MultiResolution, Delta)
-- **11 classifier heads**: FFN, GRU, CNN, BC-ResNet, TC-ResNet, DS-CNN, MatchboxNet, Res15, KWT, Conformer, CRNN
+- **15 classifier heads**: FFN, OCSVM, GRU, CNN, BC-ResNet, TC-ResNet, DS-CNN, MatchboxNet, Res15, KWT, Conformer, MixConv, CRNN, EfficientNet, ConvAttention
 - **17 loss functions**: BCE, Focal, ArcFace, SupCon, NTXent, RPPL (with EMA prototype + hard-neg diversity + proto-consistency), Triplet, and more
 - **5 search strategies**: Optuna (Bayesian), Grid, Random, Genetic, Two-Stage Genetic
 - **Island model**: `n_demes` parallel populations with ring-topology migration — `sweep.py:620`
@@ -274,7 +274,7 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/quickstart.md](docs/quickstart.md) | `QuickstartConfig` API reference |
 | [docs/training.md](docs/training.md) | Step-by-step training guide, full CLI reference, infinite training, VC backends |
 | [docs/extractors.md](docs/extractors.md) | All 17 feature extractors |
-| [docs/classifiers.md](docs/classifiers.md) | All 11 classifier heads |
+| [docs/classifiers.md](docs/classifiers.md) | All 15 classifier heads |
 | [docs/losses.md](docs/losses.md) | All 17 loss functions including RPPL component breakdown |
 | [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
 | [docs/faq.md](docs/faq.md) | Common questions and error resolutions |

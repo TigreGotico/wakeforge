@@ -2,7 +2,7 @@
 
 Training and research suite for wake word detection — from microcontrollers to GPU servers. Every extractor exports to ONNX; production inference requires only `onnxruntime` and `numpy`.
 
-Version: `0.0.1a1` — `ww_trainer/version.py`
+Version: `0.4.0a1` — `ww_trainer/version.py`
 
 ---
 

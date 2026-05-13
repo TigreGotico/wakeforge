@@ -600,11 +600,15 @@ Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset direc
 
 **Q: What is OCSVMHead and when should I use it?**
 
-`OCSVMHead` is a two-stage classifier: a small FFN backbone produces embeddings, then a One-Class SVM (OCSVM) provides the decision boundary. It is useful when you have only positive (wake-word) samples — no hard negatives required. After the normal training loop, `fit_ocsvm()` fits the SVM on positive embeddings. Requires `pip install ww_trainer[ocsvm]` (scikit-learn). Use tier `ocsvm_small` to try it. See `docs/classifiers.md` for full details.
+`OCSVMHead` — `ww_trainer/model.py:271` — is a two-stage classifier: a small FFN backbone produces embeddings, then a One-Class SVM provides the decision boundary. Use it when you have few or no negative samples; the OCSVM learns to enclose the positive embedding manifold. After the normal training loop, call `OCSVMHead.fit_ocsvm(dataloader)` — `model.py:392` — which fits `sklearn.svm.OneClassSVM` on positive embeddings and stores the result as torch buffers. Requires `pip install ww_trainer[ocsvm]` (scikit-learn). Use tier `ocsvm_small` — `ww_trainer/tiers.py:174`. See `docs/classifiers.md` for full details.
+
+**Q: Which OCSVM kernels are supported?**
+
+`OCSVMHead` supports `kernel={"rbf","linear","poly","sigmoid"}` — all four are implemented in pure PyTorch (`OCSVMHead._kernel_vals` — `model.py:343`) and are ONNX-exportable. `gamma="scale"` (default) is resolved by sklearn from the training embeddings and stored as a buffer after `fit_ocsvm`. The `"poly"` kernel also accepts `degree` and `coef0` constructor arguments.
 
 **Q: Does OCSVMHead export to ONNX?**
 
-Yes. The RBF kernel decision function is reimplemented in pure PyTorch — support vectors are stored as `register_buffer` tensors. `export_to_onnx()` is inherited from `ClassifierHead` without any override. `scikit-learn` is not needed at inference time.
+Yes. All kernel computations are pure PyTorch — support vectors, dual coefficients, bias, gamma, degree, and coef0 are all stored as `register_buffer` tensors after `fit_ocsvm`. `export_to_onnx()` is inherited from `ClassifierHead` without any override. **Always export after fitting** — exporting before `fit_ocsvm` bakes in the all-zero sentinel buffers and produces constant-zero scores.
 
 **Q: Why is `torchcodec` not in the core dependencies?**
 
