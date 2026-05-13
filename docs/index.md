@@ -81,9 +81,9 @@ See [docs/notebooks.md](notebooks.md) for the full curriculum guide, hardware-ti
 | `run_sweep` | `sweep` | Optuna Bayesian search | `sweep.py:91` |
 | `run_grid_search` | `sweep` | Exhaustive grid search | `sweep.py:202` |
 | `run_random_search` | `sweep` | Uniform random sampling | `sweep.py:276` |
-| `train_from_wakeword` | `quickstart` | String → trained ONNX in one call | `quickstart.py:205` |
-| `QuickstartConfig` | `quickstart` | All quickstart knobs with defaults | `quickstart.py:34` |
-| `QuickstartResult` | `quickstart` | Paths and metrics of a completed run | `quickstart.py:70` |
+| `train_from_wakeword` | `quickstart` | String → trained ONNX in one call | `quickstart.py:231` |
+| `QuickstartConfig` | `quickstart` | All quickstart knobs with defaults | `quickstart.py:23` |
+| `QuickstartResult` | `quickstart` | Paths and metrics of a completed run | `quickstart.py:71` |
 | `BaseWakeModel` | `model` | Extractor + head + ONNX export | `model.py` |
 | `OnnxWakeWordInferencer` | `inference` | PyTorch-free inference (single/batch/streaming) | `inference.py` |
 | `SlidingFeatureCacheTensor` | `feats` | Rolling feature cache for streaming | `feats.py:27` |

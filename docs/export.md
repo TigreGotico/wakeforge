@@ -24,9 +24,9 @@ for prop in model.metadata_props:
 ```
 
 Implementation details:
-- `embed_onnx_metadata` utility in `utils.py:295`.
-- Integrated into `ClassifierHead.export_to_onnx` (`model.py:40`).
-- Integrated into `BaseExtractor.export_to_onnx` (`feats.py:80`).
+- `embed_onnx_metadata` utility in `ww_trainer/utils.py`.
+- Integrated into `ClassifierHead.export_to_onnx` (`model.py:52`).
+- Integrated into `BaseExtractor.export_to_onnx` (`feats.py:107`).
 
 ---
 
@@ -64,7 +64,7 @@ After export, `OnnxWakeWordInferencer` (`inference.py:8`) runs inference with on
 
 ## 2. Exporting `MfccExtractor`
 
-`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:228`) specifically to remain ONNX-exportable.
+`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:380`) specifically to remain ONNX-exportable.
 
 ```python
 from ww_trainer.feats import MfccExtractor
@@ -73,7 +73,7 @@ extractor = MfccExtractor(sr=16000, n_mfcc=40, n_mels=40, n_fft=400, hop_length=
 extractor.export_to_onnx("mfcc.onnx")
 ```
 
-`BaseExtractor.export_to_onnx` (`feats.py:77`) uses `torch.onnx.export` with:
+`BaseExtractor.export_to_onnx` (`feats.py:107`) uses `torch.onnx.export` with:
 - Opset 18.
 - Dynamic axes: batch size (`batch_size`) and time (`time`) on both input and output.
 - `do_constant_folding=True`.

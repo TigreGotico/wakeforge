@@ -62,7 +62,7 @@ See the configuration table in `notebooks/genetic_search.ipynb` cell 1, or `docs
 
 Cell 4 is fully resume-safe across all three dataset modes:
 - **BYO CSV**: no datagen at all; the optional 80/20 split is written once to `OUTPUT_DIR/dataset_split/` and reused.
-- **HF / Auto**: `reuse_dataset=True` is always passed — if `dataset/train/metadata.csv` and `dataset/test/metadata.csv` exist under `OUTPUT_DIR`, datagen is skipped. See `_run_or_load_datagen` — `quickstart.py:115`.
+- **HF / Auto**: `reuse_dataset=True` is always passed — if `dataset/train/metadata.csv` and `dataset/test/metadata.csv` exist under `OUTPUT_DIR`, datagen is skipped. See `_run_or_load_datagen` — `quickstart.py:97`.
 
 **Q: How do I use my own dataset instead of generating one?**
 
@@ -596,7 +596,7 @@ Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset direc
 
 **Q: How is augmentation data wired from datagen to training?**
 
-`_train_from_datagen_result` reads `bg_noise_dir`, `music_dir`, and `rir_dir` from `DatagenResult` and passes them as `bg_noise_folder`, `music_folder`, `rir_folder` kwargs to `WakeWordTrainer` — `ww_trainer/quickstart.py:168`.
+`_train_from_datagen_result` reads `bg_noise_dir`, `music_dir`, and `rir_dir` from `DatagenResult` and passes them as `bg_noise_folder`, `music_folder`, `rir_folder` kwargs to `WakeWordTrainer` — `ww_trainer/quickstart.py:144`.
 
 **Q: What is OCSVMHead and when should I use it?**
 

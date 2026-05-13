@@ -8,35 +8,35 @@ Deep-dive into the system design: why it is structured the way it is, how data f
 
 The entire system rests on three abstract types defined in `ww_trainer/feats.py` and `ww_trainer/model.py`.
 
-### `BaseExtractor` — `ww_trainer/feats.py:57`
+### `BaseExtractor` — `ww_trainer/feats.py:70`
 
 Converts raw audio `[B, T]` float32 waveforms into dense frame-level feature tensors `[B, T_frames, F]`.
 
 Every concrete extractor must:
-1. Implement the `feature_dim` property (`feats.py:66`) — the integer `F` that downstream heads need to know their `input_size`.
-2. Implement `forward(wavs: WavInput) -> Tensor[B, T_frames, F]` (`feats.py:71`).
-3. Inherit `export_to_onnx(out, quantize=False, dynamo=False)` from the base class (`feats.py:77`).
+1. Implement the `feature_dim` property (`feats.py:97`) — the integer `F` that downstream heads need to know their `input_size`.
+2. Implement `forward(wavs: WavInput) -> Tensor[B, T_frames, F]` (`feats.py:101`).
+3. Inherit `export_to_onnx(out, quantize=False, dynamo=False)` from the base class (`feats.py:107`).
 
 The split between extractor and head exists so that a heavy neural extractor (HuBERT, ~90M parameters) can be:
 - Exported to ONNX **once** and reused across many training runs without re-exporting.
-- Shared by multiple heads simultaneously via the `shared_extractor` argument to `WakeWordTrainer` (`trainer.py:67` (shared_extractor kwarg)).
+- Shared by multiple heads simultaneously via the `shared_extractor` argument to `WakeWordTrainer`.
 - Replaced at inference time without changing the head.
 
-### `ClassifierHead` — `ww_trainer/model.py:13`
+### `ClassifierHead` — `ww_trainer/model.py:27`
 
 Maps feature frames `[B, T_frames, F]` to a scalar logit `[B]` (pre-sigmoid).
 
 Every concrete head must implement:
-- `forward(feats) -> Tensor[B]` (`model.py:23`) — full forward pass returning logits.
-- `embed(feats) -> Tensor[B, D]` (`model.py:27`) — returns the pre-logit embedding for metric learning and visualization.
+- `forward(feats) -> Tensor[B]` (`model.py:45`) — full forward pass returning logits.
+- `embed(feats) -> Tensor[B, D]` (`model.py:49`) — returns the pre-logit embedding for metric learning and visualization.
 
-The `embed()` method is what makes metric losses (triplet, RPPL, cn2pair) possible. Both the logit and the embedding are needed in the same forward pass during loss computation (`loss.py:473`–`474`).
+The `embed()` method is what makes metric losses (triplet, RPPL, cn2pair) possible.
 
-### `BaseWakeModel` — `ww_trainer/model.py:65`
+### `BaseWakeModel` — `ww_trainer/model.py:93`
 
 Combines one extractor and one head. Holds no learnable parameters directly; they all live in the extractor and head submodules.
 
-`BaseWakeModel.forward(wavs)` (`model.py:86`) calls `feature_extractor(wavs)` then `classifier.forward(feats)`. `BaseWakeModel.embed(wavs)` (`model.py:91`) calls `feature_extractor(wavs)` then `classifier.embed(feats)`.
+`BaseWakeModel.forward(wavs)` (`model.py:147`) calls `feature_extractor(wavs)` then `classifier.forward(feats)`. `BaseWakeModel.embed(wavs)` (`model.py:168`) calls `feature_extractor(wavs)` then `classifier.embed(feats)`.
 
 ---
 
