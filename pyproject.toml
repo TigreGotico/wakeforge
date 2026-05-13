@@ -13,7 +13,6 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
     "torchaudio",
-    "torchcodec",
     "onnx",
     "onnxruntime",
     "numpy",
@@ -31,6 +30,19 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-cov",
+    "onnxscript",
+]
+
+# Alias used by CI (build-tests.yml installs [test])
+test = [
+    "pytest",
+    "pytest-cov",
+    "onnxscript",
+]
+
+# ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
+torchcodec = [
+    "torchcodec",
 ]
 
 # ── Experiment tracking ────────────────────────────────────────────────────

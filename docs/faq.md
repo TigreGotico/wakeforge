@@ -605,3 +605,11 @@ Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset direc
 **Q: Does OCSVMHead export to ONNX?**
 
 Yes. The RBF kernel decision function is reimplemented in pure PyTorch — support vectors are stored as `register_buffer` tensors. `export_to_onnx()` is inherited from `ClassifierHead` without any override. `scikit-learn` is not needed at inference time.
+
+**Q: Why is `torchcodec` not in the core dependencies?**
+
+`torchcodec` requires FFmpeg shared libraries at runtime (`libtorchcodec`). In environments without FFmpeg (CI, minimal containers, some embedded targets), importing torchaudio with torchcodec installed raises `RuntimeError: Could not load libtorchcodec`. Install it explicitly when FFmpeg is available: `pip install ww_trainer[torchcodec]`.
+
+**Q: Why does ONNX export fail with `ModuleNotFoundError: No module named 'onnxscript'`?**
+
+PyTorch ≥ 2.x ONNX export requires `onnxscript`. It is now included in the `[dev]` and `[test]` extras. Install via `pip install ww_trainer[dev]` or `pip install onnxscript` directly.

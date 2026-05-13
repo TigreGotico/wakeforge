@@ -9,3 +9,7 @@ jobs:
   license_check:
     uses: OpenVoiceOS/gh-automations/.github/workflows/license-check.yml@dev
     secrets: inherit
+    with:
+      # soxr (LGPL-2.1) and tqdm (MPL-2.0) are transitive deps of librosa/core.
+      # Both are dynamically linked — distribution complies with their licenses.
+      exclude_packages: "^(soxr|tqdm)$"
