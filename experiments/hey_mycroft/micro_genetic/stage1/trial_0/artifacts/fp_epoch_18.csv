@@ -1,8 +1,0 @@
-true_label,predicted_label,probability,file_path
-0,1,0.5885,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_05968.wav
-0,1,0.6532,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001245.wav
-0,1,0.6261,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001578.wav
-0,1,0.8136,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001118.wav
-0,1,0.5799,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_04137.wav
-0,1,0.6454,experiments/hey_mycroft/dataset/negatives/not_wake_word_subset/not_wake_word_04953.wav
-0,1,0.6963,/home/miro/Workspace/MachineLearningProjects/ww-trainer/experiments/hey_mycroft/dataset/negatives/processed/001070.wav
