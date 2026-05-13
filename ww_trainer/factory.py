@@ -41,7 +41,7 @@ from ww_trainer.model import (
     FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
     TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
     KWTHead, ConformerHead, CRNNHead, MixConvHead,
-    EfficientNetHead,
+    EfficientNetHead, OCSVMHead,
     BaseWakeModel,
 )
 from ww_trainer.phonmatch import PhonMatchHead
@@ -75,6 +75,7 @@ HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "mixconv": (MixConvHead, {"n_blocks", "filters", "kernel_groups"}),
     "efficientnet": (EfficientNetHead, {"dropout"}),
     "phonmatch": (PhonMatchHead, {"hidden_dim", "n_heads", "gru_layers", "dropout"}),
+    "ocsvm": (OCSVMHead, {"hidden_dim", "embed_dim", "dropout", "nu", "kernel", "gamma", "degree", "coef0"}),
 }
 
 

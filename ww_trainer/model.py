@@ -2,7 +2,7 @@ import abc
 import inspect
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -266,6 +266,186 @@ class FfnClassifierHead(ClassifierHead):
     def embed(self, feats: WavInput) -> torch.Tensor:
         pooled = feats.mean(dim=1)
         return F.relu(self.sequential[0](pooled))
+
+
+class OCSVMHead(ClassifierHead):
+    """Two-stage wake-word head: FFN backbone + One-Class SVM decision boundary.
+
+    Stage 1 — normal training loop with BCE/focal loss; backbone learns discriminative embeddings.
+    Stage 2 — call :meth:`fit_ocsvm` after training to fit an OCSVM on positive embeddings.
+    The OCSVM decision function is stored as torch buffers so :meth:`export_to_onnx` works
+    without any sklearn dependency at inference time.
+
+    Args:
+        input_size: Feature dimension from the upstream extractor.
+        sample_rate: Audio sample rate (Hz).
+        device: Torch device string or ``"auto"``.
+        hidden_dim: Intermediate FFN width.
+        embed_dim: Output embedding dimension (input to OCSVM).
+        dropout: Dropout probability in the backbone.
+        nu: OCSVM ``nu`` parameter (upper bound on fraction of outliers).
+        kernel: OCSVM kernel — ``"rbf"`` (default), ``"linear"``, ``"poly"``,
+            or ``"sigmoid"``. All four are implemented in pure PyTorch and are
+            ONNX-exportable. Kernel parameters are stored as buffers after
+            :meth:`fit_ocsvm` so no sklearn is needed at inference time.
+        gamma: Kernel coefficient passed to sklearn. ``"scale"`` (default) lets
+            sklearn compute ``1 / (n_features × X.var())`` from the training
+            embeddings; that exact value is stored as a buffer after fitting.
+        degree: Degree for the ``"poly"`` kernel (ignored for other kernels).
+        coef0: Independent term for ``"poly"`` and ``"sigmoid"`` kernels.
+    """
+
+    _SUPPORTED_KERNELS = frozenset({"rbf", "linear", "poly", "sigmoid"})
+
+    def __init__(
+        self,
+        input_size: int,
+        sample_rate: int = 16000,
+        device: str = "auto",
+        hidden_dim: int = 128,
+        embed_dim: int = 64,
+        dropout: float = 0.1,
+        nu: float = 0.1,
+        kernel: str = "rbf",
+        gamma: "Union[str, float]" = "scale",
+        degree: int = 3,
+        coef0: float = 0.0,
+    ) -> None:
+        super().__init__(input_size=input_size, sample_rate=sample_rate, device=device)
+        if kernel not in self._SUPPORTED_KERNELS:
+            raise ValueError(
+                f"kernel={kernel!r} is not supported. Choose from: "
+                + ", ".join(sorted(self._SUPPORTED_KERNELS))
+            )
+        self.embed_dim = embed_dim
+        self._nu = nu
+        self._kernel = kernel
+        self._gamma = gamma
+        self._degree_init = degree
+        self._coef0_init = coef0
+        self.backbone = nn.Sequential(
+            nn.Linear(input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, embed_dim),
+        )
+        # Support-vector buffers — populated by fit_ocsvm(); zeros = unfitted sentinel.
+        # All-zero SVs produce constant-zero decision scores before fitting.
+        self.register_buffer("_sv_vectors", torch.zeros(1, embed_dim))
+        self.register_buffer("_sv_weights", torch.zeros(1))
+        self.register_buffer("_rho", torch.zeros(1))
+        # Kernel parameter buffers — exact values stored after fitting.
+        # Sentinels are reasonable defaults but produce zero scores with zero SVs.
+        self.register_buffer("_gamma_val", torch.tensor(1.0 / embed_dim))
+        self.register_buffer("_degree_val", torch.tensor(float(degree)))
+        self.register_buffer("_coef0_val", torch.tensor(coef0))
+
+    def _kernel_vals(self, emb: torch.Tensor) -> torch.Tensor:
+        """Compute kernel matrix K(emb, support_vectors) — pure torch, ONNX-safe.
+
+        Args:
+            emb: ``[B, embed_dim]`` embeddings.
+
+        Returns:
+            ``[B, N]`` kernel evaluations against the N support vectors.
+        """
+        dot = emb @ self._sv_vectors.T  # [B, N]
+        if self._kernel == "linear":
+            return dot
+        if self._kernel == "poly":
+            return (self._gamma_val * dot + self._coef0_val) ** self._degree_val
+        if self._kernel == "sigmoid":
+            return torch.tanh(self._gamma_val * dot + self._coef0_val)
+        # rbf (default)
+        sq_x = (emb ** 2).sum(dim=1, keepdim=True)   # [B, 1]
+        sq_sv = (self._sv_vectors ** 2).sum(dim=1)    # [N]
+        sq_dist = sq_x + sq_sv - 2.0 * dot            # [B, N]
+        return torch.exp(-self._gamma_val * sq_dist)
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        """Compute wake-word score.
+
+        Before fitting, all SV buffers are zero, producing a constant-zero score.
+        After :meth:`fit_ocsvm`, returns the OCSVM decision value.
+
+        Args:
+            feats: ``[B, T, F]`` feature frames.
+
+        Returns:
+            ``[B]`` scores (positive = inlier / wake-word after fitting).
+        """
+        emb = self.backbone(feats.mean(dim=1))           # [B, embed_dim]
+        k = self._kernel_vals(emb)                        # [B, N]
+        return (k * self._sv_weights).sum(dim=1) - self._rho.squeeze()
+
+    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+        """Return backbone embeddings.
+
+        Args:
+            feats: ``[B, T, F]`` feature frames.
+
+        Returns:
+            ``[B, embed_dim]`` embeddings.
+        """
+        return self.backbone(feats.mean(dim=1))
+
+    def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader") -> None:
+        """Fit the OCSVM on positive-class embeddings from *dataloader*.
+
+        Requires ``scikit-learn``. After fitting, all kernel parameters (support
+        vectors, dual coefficients, bias, gamma, degree, coef0) are stored as
+        torch buffers so subsequent ONNX export needs no sklearn.
+
+        **Always call :meth:`export_to_onnx` after fitting** — an ONNX graph
+        exported before fitting bakes in the all-zero sentinel buffers and will
+        produce constant-zero scores regardless of the input.
+
+        Args:
+            dataloader: Yields ``(feats, labels, ...)`` batches where ``labels == 1``
+                        marks positive (wake-word) samples.
+
+        Raises:
+            ImportError: If ``scikit-learn`` is not installed.
+            ValueError: If no positive-class samples are found in *dataloader*.
+        """
+        try:
+            from sklearn.svm import OneClassSVM
+        except ImportError as exc:
+            raise ImportError(
+                "scikit-learn is required for fit_ocsvm(). "
+                "Install with: pip install ww_trainer[ocsvm]"
+            ) from exc
+
+        self.eval()
+        embeds = []
+        with torch.no_grad():
+            for batch in dataloader:
+                feats, labels = batch[0], batch[1]
+                pos = feats[labels == 1]
+                if pos.shape[0]:
+                    embeds.append(self.embed(pos.to(self.device)).cpu())
+
+        if not embeds:
+            raise ValueError("No positive samples found in dataloader — cannot fit OCSVM.")
+
+        X = torch.cat(embeds, dim=0).numpy()
+        svm = OneClassSVM(
+            nu=self._nu, kernel=self._kernel, gamma=self._gamma,
+            degree=int(self._degree_val.item()), coef0=float(self._coef0_val.item()),
+        )
+        svm.fit(X)
+
+        self._sv_vectors = torch.tensor(svm.support_vectors_, dtype=torch.float32).to(self.device)
+        self._sv_weights = torch.tensor(svm.dual_coef_[0], dtype=torch.float32).to(self.device)
+        self._rho = torch.tensor([svm.offset_[0]], dtype=torch.float32).to(self.device)
+        # svm._gamma holds the actual float (resolves "scale"/"auto" from training data)
+        self._gamma_val = torch.tensor(float(svm._gamma), dtype=torch.float32).to(self.device)
+        self._degree_val = torch.tensor(float(svm.degree), dtype=torch.float32).to(self.device)
+        self._coef0_val = torch.tensor(float(svm.coef0), dtype=torch.float32).to(self.device)
+        logger.info(
+            "OCSVMHead fitted: %d support vectors, kernel=%s, gamma=%.6f.",
+            self._sv_vectors.shape[0], self._kernel, svm._gamma,
+        )
 
 
 class CnnClassifierHead(ClassifierHead):

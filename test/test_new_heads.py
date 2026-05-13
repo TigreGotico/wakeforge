@@ -12,6 +12,7 @@ from ww_trainer.model import (
     KWTHead,
     ConformerHead,
     CRNNHead,
+    OCSVMHead,
 )
 from ww_trainer.feats import LEAFExtractor
 
@@ -308,3 +309,149 @@ class TestLEAFExtractor:
         out = ext(wav)
         assert out.ndim == 3
         assert out.shape[2] == 40
+
+
+# ---------- OCSVMHead ----------
+
+class TestOCSVMHead:
+    def _make_head(self) -> OCSVMHead:
+        return OCSVMHead(input_size=40, hidden_dim=64, embed_dim=32, device="cpu")
+
+    def test_forward_shape_unfitted(self):
+        head = self._make_head()
+        feats = torch.randn(3, 50, 40)
+        out = head(feats)
+        assert out.shape == (3,), f"Expected (3,), got {out.shape}"
+
+    def test_embed_shape(self):
+        head = self._make_head()
+        feats = torch.randn(3, 50, 40)
+        emb = head.embed(feats)
+        assert emb.shape == (3, 32), f"Expected (3, 32), got {emb.shape}"
+
+    def test_fit_ocsvm(self):
+        pytest.importorskip("sklearn")
+        head = self._make_head()
+        # Simulate a dataloader yielding (feats, labels) batches
+        batches = [
+            (torch.randn(4, 50, 40), torch.tensor([1, 1, 0, 1])),
+            (torch.randn(4, 50, 40), torch.tensor([0, 1, 1, 0])),
+        ]
+        head.fit_ocsvm(batches)
+        assert head._sv_vectors.shape[0] > 1  # at least one real support vector
+        assert head._sv_vectors.shape[1] == 32
+
+    def test_forward_shape_fitted(self):
+        pytest.importorskip("sklearn")
+        head = self._make_head()
+        batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
+        head.fit_ocsvm(batches)
+        feats = torch.randn(5, 50, 40)
+        out = head(feats)
+        assert out.shape == (5,)
+
+    def test_onnx_export_unfitted(self, tmp_path):
+        head = self._make_head()
+        out_path = str(tmp_path / "ocsvm_head.onnx")
+        head.export_to_onnx(out_path)
+        import onnx
+        onnx.checker.check_model(out_path)
+
+    def test_onnx_export_fitted(self, tmp_path):
+        pytest.importorskip("sklearn")
+        head = self._make_head()
+        batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
+        head.fit_ocsvm(batches)
+        out_path = str(tmp_path / "ocsvm_head_fitted.onnx")
+        head.export_to_onnx(out_path)
+        import onnx
+        onnx.checker.check_model(out_path)
+
+    def test_onnx_inference_parity(self, tmp_path):
+        pytest.importorskip("sklearn")
+        import onnxruntime as ort
+        head = self._make_head()
+        head.eval()
+        batches = [(torch.randn(8, 50, 40), torch.tensor([1] * 8))]
+        head.fit_ocsvm(batches)
+        out_path = str(tmp_path / "ocsvm_parity.onnx")
+        head.export_to_onnx(out_path)
+        feats = torch.randn(2, 50, 40)
+        with torch.no_grad():
+            torch_out = head(feats).numpy()
+        sess = ort.InferenceSession(out_path)
+        ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
+        np.testing.assert_allclose(torch_out, ort_out, rtol=1e-4, atol=1e-5)
+
+    @pytest.mark.parametrize("kernel", ["rbf", "linear", "poly", "sigmoid"])
+    def test_decision_scores_match_sklearn(self, kernel):
+        """Torch kernel decision must exactly match sklearn.decision_function for all kernels."""
+        pytest.importorskip("sklearn")
+        from sklearn.svm import OneClassSVM
+        torch.manual_seed(0)
+        head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                         kernel=kernel, device="cpu")
+        train_feats = torch.randn(32, 50, 40)
+        batches = [(train_feats, torch.ones(32, dtype=torch.long))]
+        head.fit_ocsvm(batches)
+
+        # Fit a reference sklearn SVM on the same backbone embeddings
+        with torch.no_grad():
+            train_embeds = head.embed(train_feats).numpy()
+        ref_svm = OneClassSVM(nu=0.1, kernel=kernel, gamma="scale")
+        ref_svm.fit(train_embeds)
+
+        test_feats = torch.randn(5, 50, 40)
+        with torch.no_grad():
+            test_embeds = head.embed(test_feats).numpy()
+        sklearn_scores = ref_svm.decision_function(test_embeds)
+
+        # Re-fit a fresh head on the same data so its buffers match ref_svm
+        head2 = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                          kernel=kernel, device="cpu")
+        head2.backbone = head.backbone
+        head2.fit_ocsvm([(train_feats, torch.ones(32, dtype=torch.long))])
+        with torch.no_grad():
+            torch_scores = head2(test_feats).numpy()
+
+        np.testing.assert_allclose(torch_scores, sklearn_scores, rtol=1e-4, atol=1e-5,
+                                   err_msg=f"Score mismatch for kernel={kernel}")
+
+    @pytest.mark.parametrize("kernel", ["linear", "poly", "sigmoid"])
+    def test_non_rbf_kernels_fit_and_onnx_parity(self, tmp_path, kernel):
+        """All supported kernels must fit, produce correct [B] output, and export valid ONNX."""
+        pytest.importorskip("sklearn")
+        import onnx, onnxruntime as ort
+        head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
+                         kernel=kernel, device="cpu")
+        batches = [(torch.randn(8, 50, 40), torch.ones(8, dtype=torch.long))]
+        head.fit_ocsvm(batches)
+        head.eval()
+        out_path = str(tmp_path / f"ocsvm_{kernel}.onnx")
+        head.export_to_onnx(out_path)
+        onnx.checker.check_model(out_path)
+        feats = torch.randn(3, 50, 40)
+        with torch.no_grad():
+            pt_out = head(feats).numpy()
+        sess = ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
+        ort_out = sess.run(None, {"input_features": feats.numpy()})[0]
+        np.testing.assert_allclose(pt_out, ort_out, rtol=1e-4, atol=1e-5,
+                                   err_msg=f"ONNX parity failed for kernel={kernel}")
+
+    def test_unsupported_kernel_raises_at_init(self):
+        """Construction with an unsupported kernel must raise ValueError immediately."""
+        with pytest.raises(ValueError, match="not supported"):
+            OCSVMHead(input_size=40, kernel="precomputed", device="cpu")
+
+    def test_registered_in_factory(self):
+        from ww_trainer.factory import HEAD_REGISTRY
+        assert "ocsvm" in HEAD_REGISTRY
+        cls, valid_kwargs = HEAD_REGISTRY["ocsvm"]
+        assert cls is OCSVMHead
+        assert "embed_dim" in valid_kwargs
+
+    def test_ocsvm_small_tier(self):
+        from ww_trainer.tiers import get_tier
+        tc = get_tier("ocsvm_small")
+        assert tc.head_arch == "ocsvm"
+        assert tc.embed_dim == 64

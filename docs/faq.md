@@ -597,3 +597,19 @@ Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset direc
 **Q: How is augmentation data wired from datagen to training?**
 
 `_train_from_datagen_result` reads `bg_noise_dir`, `music_dir`, and `rir_dir` from `DatagenResult` and passes them as `bg_noise_folder`, `music_folder`, `rir_folder` kwargs to `WakeWordTrainer` — `ww_trainer/quickstart.py:168`.
+
+**Q: What is OCSVMHead and when should I use it?**
+
+`OCSVMHead` is a two-stage classifier: a small FFN backbone produces embeddings, then a One-Class SVM (OCSVM) provides the decision boundary. It is useful when you have only positive (wake-word) samples — no hard negatives required. After the normal training loop, `fit_ocsvm()` fits the SVM on positive embeddings. Requires `pip install ww_trainer[ocsvm]` (scikit-learn). Use tier `ocsvm_small` to try it. See `docs/classifiers.md` for full details.
+
+**Q: Does OCSVMHead export to ONNX?**
+
+Yes. The RBF kernel decision function is reimplemented in pure PyTorch — support vectors are stored as `register_buffer` tensors. `export_to_onnx()` is inherited from `ClassifierHead` without any override. `scikit-learn` is not needed at inference time.
+
+**Q: Why is `torchcodec` not in the core dependencies?**
+
+`torchcodec` requires FFmpeg shared libraries at runtime (`libtorchcodec`). In environments without FFmpeg (CI, minimal containers, some embedded targets), importing torchaudio with torchcodec installed raises `RuntimeError: Could not load libtorchcodec`. Install it explicitly when FFmpeg is available: `pip install ww_trainer[torchcodec]`.
+
+**Q: Why does ONNX export fail with `ModuleNotFoundError: No module named 'onnxscript'`?**
+
+PyTorch ≥ 2.x ONNX export requires `onnxscript`. It is now included in the `[dev]` and `[test]` extras. Install via `pip install ww_trainer[dev]` or `pip install onnxscript` directly.

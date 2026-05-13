@@ -18,6 +18,7 @@ class TierConfig:
     n_mfcc: int = 40             # only used when extractor_type == "mfcc"
     bidirectional: bool = False  # only used when head_arch == "gru"
     gru_n_layers: int = 1
+    embed_dim: Optional[int] = None    # only used when head_arch == "ocsvm"
     description: str = ""
     approx_params: str = ""
     target_hardware: str = ""
@@ -169,6 +170,17 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         description="Alias: HuBERT featurizer + bidirectional GRU (large, GPU)",
         approx_params="depends on featurizer + ~2M head",
         target_hardware="GPU server",
+    ),
+    "ocsvm_small": TierConfig(
+        name="ocsvm_small",
+        extractor_type="mfcc",
+        head_arch="ocsvm",
+        hidden_dim=128,
+        embed_dim=64,
+        n_mfcc=40,
+        description="MFCC + two-stage FFN backbone + OCSVM head (anomaly-detection KWS)",
+        approx_params="~25K backbone + N_sv × 64 decision boundary",
+        target_hardware="RPi / x86 edge",
     ),
 }
 

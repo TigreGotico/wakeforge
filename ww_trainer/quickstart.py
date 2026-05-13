@@ -172,6 +172,8 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
     if tc.head_arch == "gru":
         model_kwargs["bidirectional"] = tc.bidirectional
         model_kwargs["gru_n_layers"] = tc.gru_n_layers
+    if tc.head_arch == "ocsvm" and tc.embed_dim is not None:
+        model_kwargs["embed_dim"] = tc.embed_dim
 
     # ---- augmentation opts from datagen result ----
     augment_opts: Dict[str, str] = {}
