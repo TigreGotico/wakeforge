@@ -11,6 +11,35 @@ from ww_trainer.utils import get_hard_pair_distances, sample_triplets, pairwise_
     pairwise_cosine_similarity, timed
 
 
+def _kmeans_prototypes(x: torch.Tensor, k: int, n_iter: int = 5) -> torch.Tensor:
+    """Cosine k-means on L2-normalised rows of ``x``; returns ``(k, D)`` centroids.
+
+    Centroids are L2-normalised at every step. Empty clusters are reseeded from
+    the row furthest from any current centroid. Detached from autograd graph —
+    centroids are used as fixed targets, not parameters.
+    """
+    n, _d = x.shape
+    if k <= 1 or n <= k:
+        return x.detach().mean(0, keepdim=True) if k <= 1 else x.detach().clone()
+    xd = x.detach()
+    perm = torch.randperm(n, device=x.device)[:k]
+    centroids = F.normalize(xd[perm], dim=1)
+    for _ in range(n_iter):
+        sims = xd @ centroids.t()  # (n, k)
+        assign = sims.argmax(dim=1)
+        new_centroids = torch.zeros_like(centroids)
+        for j in range(k):
+            mask = assign == j
+            if mask.any():
+                new_centroids[j] = xd[mask].mean(0)
+            else:
+                # Reseed empty cluster from the worst-fit point
+                worst = sims.max(dim=1).values.argmin()
+                new_centroids[j] = xd[worst]
+        centroids = F.normalize(new_centroids, dim=1)
+    return centroids
+
+
 class CN2Plus1PairLoss(nn.Module):
     """(C_N,2 + 1)-pair loss (López-Espejo et al., TASLP 2021).
 
@@ -314,6 +343,7 @@ class RobustProtoDiversityLoss(nn.Module):
         proto_ema_alpha: float = 0.05,
         hard_div_threshold: float = 0.1,
         consistency_mode: str = "proto",
+        div_margin: float = 1.0,
     ) -> None:
         """
         Args:
@@ -328,8 +358,17 @@ class RobustProtoDiversityLoss(nn.Module):
             proto_ema_alpha: EMA decay for wake prototype (0.05 = slow decay, stable prototype).
             hard_div_threshold: Diversity only applied to negatives with cos-sim to wake proto above this.
             consistency_mode: "proto" (proto-ranked CE) or "l2" (L2 distance, legacy).
+            div_margin: Squared-L2 margin for hinge diversity (no gradient once pairs are further apart).
         """
         super().__init__()
+        if not 0.0 < proto_ema_alpha <= 1.0:
+            raise ValueError(f"proto_ema_alpha must be in (0, 1], got {proto_ema_alpha}")
+        if tau <= 0:
+            raise ValueError(f"tau must be > 0, got {tau}")
+        if warmup_epochs < 0:
+            raise ValueError(f"warmup_epochs must be >= 0, got {warmup_epochs}")
+        if consistency_mode not in ("proto", "l2"):
+            raise ValueError(f"consistency_mode must be 'proto' or 'l2', got {consistency_mode!r}")
         self.tau = tau
         self.K_neg_proto = K_neg_proto
         self.alpha = alpha
@@ -341,6 +380,7 @@ class RobustProtoDiversityLoss(nn.Module):
         self.proto_ema_alpha = proto_ema_alpha
         self.hard_div_threshold = hard_div_threshold
         self.consistency_mode = consistency_mode
+        self.div_margin = div_margin
 
         # EMA wake prototype — shape inferred on first forward pass
         self.register_buffer("proto_w_ema", torch.zeros(1))
@@ -353,6 +393,8 @@ class RobustProtoDiversityLoss(nn.Module):
         self.last_div: float = 0.0
         self.last_center: float = 0.0
         self.last_cons: float = 0.0
+        self.last_geo_scale: float = 0.0
+        self.last_proto_ema_norm: float = 0.0
 
     def set_epoch(self, epoch: int) -> None:
         """Called by LossManager at the start of each epoch to drive warmup scheduling."""
@@ -394,15 +436,21 @@ class RobustProtoDiversityLoss(nn.Module):
             # Batch wake mean — used only to UPDATE the EMA, not as the loss target
             p_w_batch = z[pos_mask].mean(0)
 
-            # EMA prototype update
-            if not self._proto_initialised.item():
-                self.proto_w_ema = p_w_batch.detach().clone()
+            # EMA prototype update — TRAIN MODE ONLY (eval batches must not drift the target)
+            if self.training:
+                if not self._proto_initialised.item():
+                    self.proto_w_ema = p_w_batch.detach().clone()
+                    self._proto_initialised = torch.tensor(True, device=device)
+                else:
+                    self.proto_w_ema = (
+                        (1.0 - self.proto_ema_alpha) * self.proto_w_ema
+                        + self.proto_ema_alpha * p_w_batch.detach()
+                    )
+            elif not self._proto_initialised.item():
+                # Eval-time cold start: use batch mean directly (no EMA write)
+                p_w_stable_init = p_w_batch.detach()
+                self.proto_w_ema = p_w_stable_init.clone()
                 self._proto_initialised = torch.tensor(True, device=device)
-            else:
-                self.proto_w_ema = (
-                    (1.0 - self.proto_ema_alpha) * self.proto_w_ema
-                    + self.proto_ema_alpha * p_w_batch.detach()
-                )
 
             # Stable (EMA) wake prototype — used in all geometric terms
             p_w_stable = F.normalize(self.proto_w_ema, dim=0).unsqueeze(0)  # (1, D)
@@ -411,10 +459,9 @@ class RobustProtoDiversityLoss(nn.Module):
             if self.K_neg_proto <= 1:
                 neg_protos = z[neg_mask].mean(0, keepdim=True)
             else:
-                negs = z[neg_mask]
-                k = min(self.K_neg_proto, max(1, n_neg))
-                perm = torch.randperm(n_neg, device=device)
-                neg_protos = torch.stack([negs[perm[i::k]].mean(0) for i in range(k)], dim=0)
+                neg_protos = _kmeans_prototypes(
+                    z[neg_mask], k=min(self.K_neg_proto, max(1, n_neg)), n_iter=5,
+                )
 
             all_protos = torch.cat([p_w_stable, neg_protos], dim=0)
 
@@ -429,17 +476,23 @@ class RobustProtoDiversityLoss(nn.Module):
             # 3. Center loss (pull positives toward stable prototype)
             center_loss = ((z[pos_mask] - p_w_stable) ** 2).sum(dim=1).mean()
 
-            # 4. Hard-negative diversity loss
+            # 4. Hard-negative diversity loss — hinge form, bounded gradient.
+            # Only applied when at least 2 confusable negatives exist; no
+            # fallback to all-negatives (which would defeat the targeting).
             if n_neg > 1:
                 neg_embs = z[neg_mask]
                 cos_to_wake = torch.matmul(neg_embs, p_w_stable.t()).squeeze(1)
                 hard_mask = cos_to_wake > self.hard_div_threshold
-                target_embs = neg_embs[hard_mask] if hard_mask.sum() > 1 else neg_embs
-                pd = torch.cdist(target_embs, target_embs, p=2) ** 2
-                upper = torch.triu(torch.ones(len(target_embs), len(target_embs),
-                                              device=device), diagonal=1).bool()
-                if upper.any():
-                    div_loss = -pd[upper].mean()
+                if int(hard_mask.sum().item()) >= 2:
+                    target_embs = neg_embs[hard_mask]
+                    pd = torch.cdist(target_embs, target_embs, p=2) ** 2
+                    n_h = target_embs.shape[0]
+                    upper = torch.triu(
+                        torch.ones(n_h, n_h, device=device), diagonal=1,
+                    ).bool()
+                    # Hinge: pairs already > margin apart contribute 0 (zero gradient)
+                    pair_d = pd[upper]
+                    div_loss = torch.clamp(self.div_margin - pair_d, min=0.0).mean()
 
         # 5. Consistency loss
         if aug_embeds is not None:
@@ -475,6 +528,12 @@ class RobustProtoDiversityLoss(nn.Module):
         self.last_div    = float(div_loss.item())
         self.last_center = float(center_loss.item())
         self.last_cons   = float(cons_loss.item())
+        self.last_geo_scale = float(geo_scale)
+        self.last_proto_ema_norm = (
+            float(self.proto_w_ema.norm().item())
+            if bool(self._proto_initialised.item())
+            else 0.0
+        )
 
         return loss
 
@@ -1183,6 +1242,7 @@ class LossManager:
                     proto_ema_alpha=cfg.get("proto_ema_alpha", 0.05),
                     hard_div_threshold=cfg.get("hard_div_threshold", 0.1),
                     consistency_mode=cfg.get("consistency_mode", "proto"),
+                    div_margin=cfg.get("div_margin", 1.0),
                 ).to(self.device)
             elif name == "halo":
                 crit = HALOLoss(
@@ -1419,18 +1479,19 @@ class LossManager:
                 loss_val = crit(logits.view(-1), labels.to(self.device).float().view(-1), model)
 
             elif name == "rppl":
-                # Robust Prototype and Diversity Loss
+                # Robust Prototype and Diversity Loss.
+                # Augmented embeddings MUST flow gradients — the consistency loss
+                # is what makes the model invariant to augmentation. Computing
+                # them under no_grad would silently zero the consistency gradient.
                 aug_embeds = None
                 if dataset_ref is not None and hasattr(dataset_ref, "get_augmented"):
                     aug_embeds_list = []
-                    with torch.no_grad():
-                        for i, w in enumerate(wavs):
-                            aug_w = dataset_ref.get_augmented(w).to(self.device)
-                            kw = text_token_ids[i:i+1] if text_token_ids is not None else None
-                            emb = model.embed(aug_w.unsqueeze(0), text_token_ids=kw).squeeze(0)  # (D,)
-                            aug_embeds_list.append(emb)
+                    for i, w in enumerate(wavs):
+                        aug_w = dataset_ref.get_augmented(w).to(self.device)
+                        kw = text_token_ids[i:i+1] if text_token_ids is not None else None
+                        emb = model.embed(aug_w.unsqueeze(0), text_token_ids=kw).squeeze(0)
+                        aug_embeds_list.append(emb)
                     aug_embeds = torch.stack(aug_embeds_list, dim=0)
-                    aug_embeds = F.normalize(aug_embeds, p=2, dim=1)
 
                 loss_val = crit(logits, labels.view(-1), embeds, aug_embeds)
                 # Log RPPL sub-components
@@ -1439,6 +1500,8 @@ class LossManager:
                 results["rppl_div"]    = crit.last_div
                 results["rppl_center"] = crit.last_center
                 results["rppl_cons"]   = crit.last_cons
+                results["rppl_geo_scale"]      = crit.last_geo_scale
+                results["rppl_proto_ema_norm"] = crit.last_proto_ema_norm
 
             total += weight * loss_val
             results[name] = float(loss_val.item())
