@@ -132,3 +132,41 @@ class TestSelectBestCheckpoints:
 
     def test_empty(self) -> None:
         assert select_best_checkpoints([]) == []
+
+
+class TestFpphAdaptiveDoubling:
+    """``target_fp_per_hour`` should double ``max_neg_weight`` when exceeded.
+
+    The doubling itself lives on :class:`ww_trainer.loss.LossManager` and is
+    triggered inline inside :func:`ww_trainer.loop.train_loop`. Rather than
+    spinning up a full training loop, we exercise the two contracts
+    separately: (1) ``train_loop`` accepts the kwarg, (2)
+    ``LossManager.adjust_max_neg_weight(2.0)`` performs the doubling.
+    """
+
+    def test_train_loop_signature_accepts_kwarg(self) -> None:
+        import inspect
+
+        from ww_trainer.loop import training_loop
+        params = inspect.signature(training_loop).parameters
+        assert "target_fp_per_hour" in params
+        assert params["target_fp_per_hour"].default is None
+
+    def test_loss_manager_doubles(self) -> None:
+        from ww_trainer.loss import LossManager
+
+        lm = LossManager(loss_configs=[{"name": "bce", "weight": 1.0}],
+                         neg_weight_schedule="linear",
+                         max_neg_weight=100.0,
+                         device="cpu")
+        lm.adjust_max_neg_weight(2.0)
+        assert lm.max_neg_weight == 200.0
+        lm.adjust_max_neg_weight(2.0)
+        assert lm.max_neg_weight == 400.0
+
+    def test_cli_exposes_flag(self) -> None:
+        from click.testing import CliRunner
+
+        from ww_trainer.cli import train as train_cmd
+        result = CliRunner().invoke(train_cmd, ["--help"])
+        assert "--target-fp-per-hour" in result.output

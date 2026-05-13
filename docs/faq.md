@@ -20,6 +20,10 @@ average_checkpoints([h["path"] for h in keep], out_path="best_avg.pt")
 
 `select_best_checkpoints` gates by FPPH ≤ p10 ∧ recall ≥ p90 ∧ accuracy ≥ p90 (falls back to highest-recall ckpt if no entry passes all three). See `ww_trainer/checkpoint.py`.
 
+**Q: What does `--target-fp-per-hour` do?**
+
+End-of-epoch controller: if the measured FP/hour on `--ambient-dir` exceeds the target, `max_neg_weight` is doubled for the next epoch. Mirrors the existing `--target-fpr` knob but uses the absolute trigger rate users actually care about. Requires `--neg-weight-schedule linear` (or `cosine`) and `--ambient-dir`. See the doubling site in `ww_trainer/loop.py` (after `estimate_fp_per_hour`).
+
 ## Genetic Search — Advanced (wakegp-inspired)
 
 **Q: What does `SEARCH_TWO_STAGE` do?**
