@@ -628,7 +628,7 @@ EXTRACTOR_REGISTRY = {
 
 Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:83`.
 
-**Note:** `HubertExtractor` and `Wav2Vec2Extractor` were removed in 0.2.0. Export those models once via the standalone export scripts, then use `featurizer_type="onnx"` to load the ONNX file.
+For HuBERT and Wav2Vec2: export the SSL model to ONNX once with the standalone export scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then use `featurizer_type="onnx"` to load it as an `OnnxFeatureExtractor`. This guarantees train/inference feature parity.
 
 ---
 

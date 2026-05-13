@@ -138,7 +138,7 @@ The batch mean is only used to update the EMA; it is never directly used as a lo
 | `warmup_epochs` | 5 | Geometric term ramp-up duration |
 | `proto_ema_alpha` | 0.05 | EMA decay (~20 batch time constant) |
 | `hard_div_threshold` | 0.1 | Cos-sim threshold for hard-negative targeting |
-| `consistency_mode` | "proto" | "proto" = proto-ranked CE; "l2" = legacy MSE |
+| `consistency_mode` | "proto" | "proto" = proto-ranked CE; "l2" = MSE ablation |
 
 ---
 

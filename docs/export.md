@@ -90,7 +90,7 @@ A pre-exported version (40 coefficients, 16 kHz) is available at https://hugging
 
 ## 3. Exporting HuBERT and Wav2Vec2
 
-`HubertExtractor` and `Wav2Vec2Extractor` training wrappers were removed in 0.2.0. Use the standalone export scripts to produce ONNX files once, then load with `OnnxFeatureExtractor` for all subsequent training and inference runs.
+Large SSL models (HuBERT, Wav2Vec2, Wav2Vec2-BERT) are exported to ONNX once via the standalone export scripts and loaded with `OnnxFeatureExtractor` for both training and inference. Same ONNX in both paths guarantees feature parity.
 
 ```bash
 # Export HuBERT tiny to ONNX

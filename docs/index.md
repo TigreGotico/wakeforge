@@ -211,7 +211,7 @@ All scripts live under `scripts/`. Run with `.venv/bin/python scripts/<subdir>/<
 
 - [faq.md](faq.md) — keyword-rich Q&A
 - [audit.md](audit.md) — known issues and tech debt
-- [suggestions.md](suggestions.md) — feature backlog
+- [../TODO.md](../TODO.md) — open feature backlog
 - [references.md](references.md) — academic bibliography
 - [rppl_whitepaper.md](rppl_whitepaper.md) — RPPL loss technical whitepaper
 - [tinyhubert_whitepaper.md](tinyhubert_whitepaper.md) — TinyHuBERT distillation design

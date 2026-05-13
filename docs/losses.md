@@ -302,7 +302,7 @@ Five-component loss designed for binary fixed-keyword wake-word detection under 
  "warmup_epochs": 5,
  "proto_ema_alpha": 0.05,
  "hard_div_threshold": 0.1,
- "consistency_mode": "proto"}   # "proto" or "l2" (legacy ablation)
+ "consistency_mode": "proto"}   # "proto" (proto-ranked CE) or "l2" (MSE ablation)
 ```
 
 **MLflow metrics logged automatically when using RPPL:**

@@ -319,7 +319,6 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/hardware_guide.md](docs/hardware_guide.md) | MCU → server tier selection |
 | [docs/faq.md](docs/faq.md) | Common questions and error resolutions |
 | [docs/audit.md](docs/audit.md) | Known issues and tech debt |
-| [docs/suggestions.md](docs/suggestions.md) | Feature backlog and improvement proposals |
 | [docs/references.md](docs/references.md) | Academic references and bibliography |
 | [docs/rppl_whitepaper.md](docs/rppl_whitepaper.md) | RPPL loss technical whitepaper |
 | [docs/tinyhubert_whitepaper.md](docs/tinyhubert_whitepaper.md) | TinyHuBERT distillation design |

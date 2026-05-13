@@ -1,209 +1,73 @@
-# ww-trainer — Audit
+# Known Issues
 
-Known issues, tech debt, and limitations. All claims are evidence-based with `file:line` citations.
-
----
-
-## Confirmed Bugs (as of v0.0.1a1)
-
-### BUG-004 — dataset.py — torchaudio 2.9+ torchcodec requirement ✅ FIXED
-**Severity:** High — CI failure; `ImportError` on any environment without `torchcodec`
-**File:** `ww_trainer/dataset.py:228,248,251` (pre-fix line numbers)
-**Description:** `torchaudio 2.9` changed `torchaudio.load()` to use `torchcodec` by default. Environments without `torchcodec` installed raised `ImportError: TorchCodec is required for load_with_torchcodec`.
-**Fix:** Introduced `_load_audio(path)` helper (`dataset.py:14`) that catches `ImportError`/`RuntimeError` from `torchaudio.load` and falls back to `soundfile` (already a project dependency). All three `torchaudio.load` call sites in `dataset.py` now use `_load_audio`.
+Open issues and known limitations. Evidence-based, with `file:line` citations.
 
 ---
 
-### BUG-001 — feats.py:87 — Wrong argument to ONNX checker ✅ FIXED
-**Severity:** Medium — silently skips model validation
-**File:** `ww_trainer/feats.py:87`
-**Description:** `onnx.checker.check_model(out)` was called with the file path string instead of the loaded ONNX model object. The checker accepts a path string in some versions but the intent (and correct API) is to pass the model object returned by `onnx.load()` on line 86.
-**Fix:** Changed to `onnx.checker.check_model(onnx_model)`.
+## STFT parity (Low)
 
----
-
-### BUG-002 — dataset.py:237 — Hardcoded /tmp/ path for voice conversion ✅ FIXED
-**Severity:** Low-Medium — breaks on Windows; race condition on concurrent workers
-**File:** `ww_trainer/dataset.py` (formerly line 237)
-**Description:** `vc_path = f"/tmp/vc_{uuid4()}.wav"` hardcoded the Linux `/tmp/` directory. This is non-portable and creates a temporary file that is never explicitly cleaned up.
-**Fix:** Replaced with `tempfile.NamedTemporaryFile(suffix=".wav", delete=False)`.
-
----
-
-### BUG-003 — dataset.py:253 — Bare `except:` swallows all exceptions ✅ FIXED
-**Severity:** Medium — hides voice conversion errors, making debugging impossible
-**File:** `ww_trainer/dataset.py` (formerly line 253)
-**Description:** A bare `except:` clause caught `BaseException` (including `KeyboardInterrupt`, `SystemExit`). Errors during voice conversion were silently discarded.
-**Fix:** Changed to `except Exception as exc:` with `logger.warning(...)`.
-
----
-
-### BUG-004 — model.py:219 — GRU shape heuristic silently wrong ✅ FIXED
-**Severity:** Medium — silent incorrect results when feature_dim == sequence_len
-**File:** `ww_trainer/model.py:219`
-**Description:** `GruClassifierHead._ensure_correct_shape` auto-transposes `[B, F, T]` to `[B, T, F]` when `D1 == input_size`. When `D1 == D2 == input_size`, the heuristic cannot determine orientation and falls through silently with potentially wrong results.
-**Fix:** Added explicit `ValueError` for the ambiguous case.
-
----
-
-### BUG-005 — feats.py:44 — SlidingFeatureCacheTensor shift logic out-of-bounds ✅ FIXED
-**Severity:** High — `RuntimeError` at runtime when `T_new > current_len`
-**File:** `ww_trainer/feats.py:44`
-**Description:** `self.feature_cache[:-shift]` selects `window_size - shift` slots but only `current_len - shift` frames are valid to copy. When `T_new > current_len` the slice target is larger than the source, causing a shape mismatch `RuntimeError`.
-**Fix:** Changed to `self.feature_cache[:new_len] = self.feature_cache[shift:self.current_len]`.
-
----
-
-### BUG-007 — utils.py:290 — Return statement overwritten by utility ✅ FIXED
-**Severity:** High — breaks all triplet-based loss functions
-**File:** `ww_trainer/utils.py:290`
-**Description:** During the addition of `embed_onnx_metadata`, the return statement of `sample_semihard_triplets` was accidentally overwritten, causing it to return `None` instead of the mined triplets.
-**Fix:** Restored the multi-value return statement before the new utility.
-
----
-
-### BUG-008 — feats.py:317 — STFT numerical drift in ONNX backends
-**Severity:** Low — minor parity mismatch (~1e-4) between PyTorch and ONNX Runtime
 **File:** `ww_trainer/feats.py:317`
-**Description:** `torch.stft` used in MFCC and Filterbank extractors produces slightly different results in the exported ONNX graph compared to the native PyTorch implementation. This is due to internal differences in FFT windowing and floating-point optimizations in ONNX Runtime.
-**Status:** Documented in `docs/faq.md`. Recommended workaround: increase tolerance in unit tests to `1e-3`.
+
+`torch.stft` in MFCC and Filterbank extractors produces slightly different
+results in the exported ONNX graph vs. native PyTorch — internal FFT windowing
+and floating-point optimisations in ONNX Runtime differ by ~`1e-4`. Use
+`tolerance=1e-3` in parity tests. Documented in [`faq.md`](faq.md).
 
 ---
 
-### BUG-006 — dataset.py — Top-level import of optional dependency
-**Severity:** Low — breaks any import of `ww_trainer.dataset` when `chatterbox_onnx` is not installed
-**File:** `ww_trainer/dataset.py` (formerly line 15)
-**Description:** `from chatterbox_onnx import ChatterboxOnnx` was at module top-level. Since `chatterbox_onnx` is an optional voice-conversion dependency, this caused `ImportError` for users who haven't installed it — even when they never use voice conversion.
-**Fix:** Moved import inside the `if vc_folder and vc_prob > 0:` branch with a comment.
+## `pytest --cov` on Python 3.13 (Low)
+
+**File:** `test/conftest.py:6`
+
+`uv run pytest --cov=ww_trainer` raises
+`ImportError: cannot load module more than once per process` from
+`numpy._core`. Known CPython 3.13 + numpy + coverage interaction when
+coverage instruments the numpy C extension at import time.
+
+Workarounds:
+- `uv run pytest test/` (no `--cov`)
+- `uv run pytest test/ --cov=ww_trainer --no-cov-on-fail`
+- Python 3.11 / 3.12 for coverage runs.
 
 ---
 
-### BUG-007 — loss.py:451 — margin not stored in loss_entry dict ✅ FIXED
-**Severity:** Low — margin config for triplet mining always defaults to 1.0, ignoring user config
-**File:** `ww_trainer/loss.py:451`
-**Description:** `LossManager.__init__` stores each loss as `{"name", "weight", "criterion"}` but not `"margin"`. In `compute_loss`, `loss_entry.get("margin", 1.0)` always returns the default because the key was never stored.
-**Fix:** Added `"margin": cfg.get("margin", 1.0)` to the stored dict.
+## ONNX-export constraints
+
+Every featurizer and head must export cleanly under `torch.onnx` opset 18.
+This rules out:
+
+- Custom CUDA kernels not registered as ONNX ops (e.g. `mamba-ssm`).
+- Non-traceable control flow in `forward()` (e.g. parallel scans, dynamic
+  Python branches on tensor values).
+- `torchaudio.compliance.kaldi` / `torchaudio.transforms` in `forward()` —
+  use `torch.stft` + buffer-registered filterbanks instead.
+
+Verification per extractor / head: `export_to_onnx("test.onnx")` followed by
+`onnx.checker.check_model(...)` must pass.
 
 ---
 
-### BUG-009 — model.py:151 — export_to_onnx positional arg mismatch ✅ FIXED
-**Severity:** High — silently swaps quantize/dynamo flags
-**File:** `ww_trainer/model.py:151`
-**Description:** `BaseWakeModel.export_to_onnx` called `self.classifier.export_to_onnx(out, simplify, quantize, metadata=metadata)` positionally, but `ClassifierHead.export_to_onnx` signature is `(out, quantize, dynamo, metadata)`. This passed `simplify` as `quantize` and `quantize` as `dynamo`. Quantization was silently skipped when requested, and dynamo export was unexpectedly enabled.
-**Fix:** Switched to keyword arguments: `export_to_onnx(out, quantize=quantize, dynamo=simplify, metadata=metadata)`.
+## SSL featurizers are frozen at training time
+
+HuBERT, Wav2Vec2, and Wav2Vec2-BERT are used as **pre-exported ONNX** featurizers
+via `OnnxFeatureExtractor`. The framework does not fine-tune their weights
+during downstream wake-word training. This guarantees train/inference parity
+but limits SSL adaptation. To adapt the SSL model, fine-tune externally with
+the source library (fairseq, transformers), re-export, and reload.
 
 ---
 
-### BUG-010 — model.py:154 — metadata kwarg passed to extractors that don't accept it ✅ FIXED
-**Severity:** Medium — TypeError at runtime
-**File:** `ww_trainer/model.py:154`
-**Description:** `self.feature_extractor.export_to_onnx(f_out, quantize, metadata=metadata)` passed `metadata` as a keyword argument, but `BaseExtractor.export_to_onnx` did not accept it. This caused a TypeError when using `export_featurizer=True` with metadata on any non-Markov/HMM extractor.
-**Fix:** Added `metadata: dict = None` parameter to `BaseExtractor.export_to_onnx` and all overrides.
+## CPU-only training cost
+
+The smaller tiers (`micro`, `delta_micro`, `small`, `filterbank_small`,
+`gammatone_small`, `sincnet_small`) train fine on CPU. The transformer heads
+(`KWT`, `Conformer`) and large featurizers (HuBERT-base) are practical only
+on GPU.
 
 ---
 
-## Tech Debt
+## Reporting new issues
 
-### TD-001 — trainer.py monolith ✅ RESOLVED
-`trainer.py` reduced from 1170 → 246 lines. Training loop extracted to `ww_trainer/loop.py:training_loop()`. `compute_readiness()` moved to `evaluation.py`. `save_intermediate_checkpoint()` moved to `checkpoint.py`.
-
-### TD-002 — No streaming inference wired up ✅ RESOLVED
-`BaseWakeModel.forward_streaming` implemented (`model.py:129-149`): extracts features from one audio chunk, updates `SlidingFeatureCacheTensor`, runs the classifier, and optionally smooths via `PredictionSmoother`. Returns a Python float probability suitable for real-time edge deployment.
-
-### TD-003 — setup.py instead of pyproject.toml ✅ RESOLVED
-Migrated to `pyproject.toml` with optional dependency groups: `dev`, `transformers`, `vc`, `mlflow`, `sweep`, `markov`, `datagen`.
-
-### TD-004 — 0% test coverage before this audit
-No tests existed in v0.0.1a1. Test suite added in this sprint (45 tests, see `test/`).
-
-### TD-010 — pytest-cov crashes with numpy double-import on Python 3.13 (pre-existing)
-**Severity:** Low — affects `--cov` flag only; tests pass without it
-**File:** `test/conftest.py:6` (`import numpy as np`)
-**Description:** `uv run pytest --cov=ww_trainer` raises `ImportError: cannot load module more than once per process` from `numpy._core`. This is a known CPython 3.13 + numpy + coverage interaction when coverage instruments the numpy C extension at import time. The bug pre-dates all changes in this sprint (confirmed by reproducing on the unmodified branch).
-**Workaround:** Run `uv run pytest test/` without `--cov` for normal test runs. For coverage reporting use `uv run pytest test/ --cov=ww_trainer --no-cov-on-fail` or downgrade to Python 3.11/3.12.
-
-### TD-005 — SileroVadWrapper downloads from internet at init ✅ RESOLVED
-`torch.hub.load()` moved to first `forward()` call. `__init__` no longer touches the network. `onnx_path` path unchanged (local file, no download). See `feats.py:SileroVadWrapper`.
-
-### TD-006 — Dataset generation scripts have zero test coverage ✅ RESOLVED
-17 tests added in `test/test_scripts.py` covering `GraphemeAugmenter` (01_adversarial_gen.py) and audio utils (03_training_aug.py). Heavy-dependency CLI entrypoints not tested (require TTS/VAD plugins).
-
-### TD-007 — Manual `self.device` attribute pattern ✅ FIXED
-Fixed via `_apply` override in `BaseExtractor` and `ClassifierHead`. Device now auto-syncs on `.to()`/`.cuda()`/`.cpu()`.
-
-### TD-008 — Flaky `test_hmm_fit_updates_parameters` ✅ RESOLVED
-Root cause: identical-frequency sinusoids → trivial K-means → near-uniform HMM params. Fixed by using 5 distinct-frequency sinusoids (100–8000 Hz). Assertion relaxed to `any_changed` to avoid over-constraining. See `test/test_hmm_extended.py`.
-
-### TD-009 — ClassifierHead ONNX batch axis was fixed ✅ FIXED
-`ClassifierHead.export_to_onnx` (`model.py:47`) previously only set dynamic axes for the time dimension, not batch. Batch>1 ONNX inference failed. Fixed by adding `{0: "batch_size"}` to dynamic_axes for both input and output.
-
-### S-015 — Quickstart module added ✅ DONE
-`ww_trainer/quickstart.py` — `train_from_wakeword()` Python API + `ww_trainer-quickstart` CLI. Glues `run_datagen_pipeline` → `WakeWordTrainer.train` with automatic augmentation wiring from `DatagenResult`. 11 unit tests in `test/test_quickstart.py`. See `docs/quickstart.md`.
-
----
-
-## Genetic / Island Model Limitations (sweep.py)
-
-### LIM-001 — No migration between demes ✅ FIXED 2026-03-20
-**File:** `ww_trainer/sweep.py:620-690`
-**Fix:** Ring-topology synchronised migration implemented via `migration_interval` and `migration_size` parameters. When `migration_interval > 0` (default 5), demes run synchronously generation-by-generation; top-`migration_size` individuals from each deme are injected into the next deme every `migration_interval` generations. `migration_interval=0` preserves the original `ProcessPoolExecutor` parallel path. Validated by `TestDemeMigration` tests.
-
-### LIM-002 — No input validation on `fitness_fn` — `sweep.py:23-38` ✅ FIXED 2026-03-20
-**Severity:** Low — silently uses identity when given an unknown value
-**File:** `ww_trainer/sweep.py:23-38`
-**Description:** `_apply_fitness_fn` falls through to the identity (`f1`) branch for any unrecognised `fitness_fn` string. No `ValueError` or warning is raised. A typo like `"expf1"` silently uses the identity without alerting the user.
-**Fix:** Added `_validate_ga_params()` — `sweep.py:24-55` — called at the top of `run_genetic_search`. Raises `ValueError` with message listing valid values. Tests: `TestInputValidation::test_invalid_fitness_fn_raises`.
-
-### LIM-003 — No input validation on `elite_frac` / `mutation_rate` — `sweep.py:543-659` ✅ FIXED 2026-03-20
-**Severity:** Low — degenerate behaviour with out-of-range values
-**File:** `ww_trainer/sweep.py:394-540` (`_run_deme`)
-**Description:** Neither `elite_frac` nor `mutation_rate` are validated to be in `[0, 1]`. `elite_frac=0.0` sets `n_elite = max(1, 0)` = 1 (safe), but `elite_frac > 1.0` would keep the whole population as elite, eliminating selection pressure. `mutation_rate > 1.0` always mutates every gene.
-**Fix:** Handled by `_validate_ga_params()` — validates `0 < elite_frac < 1` and `0 <= mutation_rate <= 1`. Tests: `TestInputValidation::test_invalid_elite_frac_raises`, `test_invalid_mutation_rate_raises`.
-
-### BUG-017 — datagen.py — AudioDecoder not handled (datasets ≥ 3.x) ✅ FIXED 2026-03-25
-**Severity:** High — downloads 0 audio files silently on any modern HF datasets install
-**File:** `ww_trainer/datagen.py:download_hf_audio_dataset`
-**Description:** `datasets ≥ 3.x` returns `AudioDecoder` objects (torchcodec backend) for audio columns instead of `{"array": ..., "sampling_rate": ...}` dicts. The existing `isinstance(audio, dict)` check always failed, causing every example to be skipped with no warning.
-**Fix:** Added `hasattr(audio, "get_all_samples")` branch first: calls `audio.get_all_samples()` → `AudioSamples.data` (torch tensor `[1, T]`) and `.sample_rate`. Old dict path kept as fallback.
-
-### BUG-016 — datagen.py — download_hf_audio_dataset always re-downloads ✅ FIXED 2026-03-25
-**Severity:** Medium — every datagen run re-fetches datasets over the network; streaming mode bypasses HF Arrow cache
-**File:** `ww_trainer/datagen.py:download_hf_audio_dataset`
-**Description:** Two problems: (1) `streaming=True` was used first, which skips HuggingFace's `~/.cache/huggingface/datasets` Arrow cache entirely, forcing a full re-download on every run. (2) No check for already-written WAV files in `output_dir`, so even if the WAVs existed from a prior run, the function still called `load_dataset`.
-**Fix:** Added early-return if `output_dir` already contains ≥ `max_samples` WAV files. Changed load order to try non-streaming (cached) first — Arrow files persist in `~/.cache/huggingface/datasets` across runs — and only fall back to streaming if the non-streaming load fails.
-
-### BUG-011 — feats.py — SlidingFeatureCacheTensor.current_len not persisted ✅ FIXED 2026-03-25
-**Severity:** Medium — streaming state lost on state_dict save/load
-**File:** `ww_trainer/feats.py:38`
-**Description:** `current_len` was a plain Python `int`. `state_dict()` does not save Python attributes, only tensors registered as parameters or buffers. Loading a checkpoint mid-stream would reset the valid-frame count to 0, corrupting the sliding window state.
-**Fix:** Replaced with `register_buffer("_current_len", torch.tensor(0, dtype=torch.long))` and exposed it via a `current_len` property/setter. All existing code that reads/writes `self.current_len` as an `int` is unaffected.
-
-### BUG-012 — feats.py — BaseExtractor._apply device tracking fails for parameter-free extractors ✅ FIXED 2026-03-25
-**Severity:** Low — self.device stale after .to() on pure-function extractors
-**File:** `ww_trainer/feats.py:70-81`
-**Description:** `_apply` iterated `self.parameters()` then `self.buffers()` to sync `self.device`. An extractor with neither (e.g., a wrapper that delegates entirely to an external library) would leave `self.device` pointing at the old device.
-**Fix:** Added `self.register_buffer("_device_anchor", torch.empty(0))` in `BaseExtractor.__init__`. This guarantees at least one buffer exists, so the `self.buffers()` branch of `_apply` always fires.
-
-### BUG-013 — feats.py — feature_dim not an abstract property ✅ FIXED 2026-03-25
-**Severity:** Low — subclasses missing feature_dim fail at runtime, not at class definition
-**File:** `ww_trainer/feats.py:84-85`
-**Description:** `feature_dim` was declared as a plain `@property` that `raise NotImplementedError`. IDEs and type checkers did not flag missing implementations.
-**Fix:** Changed to `@property @abc.abstractmethod`, consistent with the existing `@abc.abstractmethod` on `forward`.
-
-### BUG-014 — dataset.py — torchaudio fallback is silent ✅ FIXED 2026-03-25
-**Severity:** Low — unexpected import/runtime errors swallowed without logging
-**File:** `ww_trainer/dataset.py:32`
-**Description:** `_load_audio` caught `ImportError`/`RuntimeError` from `torchaudio.load` silently, making it impossible to distinguish an expected codec-missing fallback from an unexpected error.
-**Fix:** Added `logger.warning("torchaudio.load failed (%s); falling back to soundfile", exc)`.
-
-### BUG-015 — loop.py — evaluation threshold is hardcoded at 0.4 ✅ FIXED 2026-03-25
-**Severity:** Medium — suboptimal metrics throughout training; optimal threshold never applied
-**File:** `ww_trainer/loop.py:375`
-**Description:** `evaluate_model` was called with a fixed `threshold=0.4` every epoch. `find_optimal_threshold` existed in `metrics.py` but was never called during training. Reported precision/recall/F1 were computed at an arbitrary threshold rather than the ROC-optimal one.
-**Fix:** Added `current_threshold = 0.5` before the training loop. After each evaluation, `find_optimal_threshold(..., criterion="f1")` is called on the collected targets/probs and the result becomes the threshold for the next epoch. Logged to MLflow as `optimal_threshold`.
-
-### LIM-004 — Thread-safety: `Path.mkdir` called from worker processes — `sweep.py:441` ✅ FIXED 2026-03-20
-**Severity:** Low — race condition when two demes target the same `output_dir` subdirectory
-**File:** `ww_trainer/sweep.py:441`
-**Description:** Each `_run_deme` call creates `output_dir / f"trial_{trial_id}"`. Trial IDs start at 0 in every deme (`trial_id = 0` — `sweep.py:453`), so deme 0 and deme 1 will both try to create `trial_0/`, `trial_1/`, etc. The `exist_ok=True` flag on `mkdir` prevents a crash, but trial result files (`metrics.csv`, checkpoints) from different demes will overwrite each other in the same directory.
-**Fix:** Each deme now receives `output_dir=out_dir / f"deme_{deme_id}"` — `sweep.py:670-675`. Trial dirs are isolated per deme. Tests: `TestDemeOutputDirIsolation::test_deme_output_dirs_separate`.
+GitHub Issues: <https://github.com/TigreGotico/ww-trainer/issues>. Include
+your `pyproject.toml` extras, Python and torch versions, and a minimal
+repro script.

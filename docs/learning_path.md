@@ -151,8 +151,8 @@ and `ww_trainer.export_c.export_to_c_header` for the actual C header output.
 | Ablation grids | `notebooks/nb09_ablation.ipynb`, `scripts/train/train_ablation.py` |
 
 For framework contributions, read [`architecture.md`](architecture.md),
-[`audit.md`](audit.md) (known issues), and [`suggestions.md`](suggestions.md)
-(open ideas) before starting.
+[`audit.md`](audit.md) (known issues), and [`../TODO.md`](../TODO.md) (open
+backlog) before starting.
 
 ---
 
