@@ -39,6 +39,32 @@ def _load_audio(path: str) -> tuple[torch.Tensor, int]:
     wav = torch.from_numpy(data.T)  # [channels, time]
     return wav, int(sr)
 
+
+def _save_audio(path: str, wav: torch.Tensor, sample_rate: int) -> None:
+    """Save audio, handling torchaudio 2.9+ torchcodec requirement.
+
+    Mirrors :func:`_load_audio`: prefers ``torchaudio.save``, falls back to
+    ``soundfile`` when torchcodec is missing.
+
+    Args:
+        path: Output file path.
+        wav: Waveform tensor with shape ``[channels, time]``.
+        sample_rate: Sample rate in Hz.
+    """
+    try:
+        torchaudio.save(str(path), wav, sample_rate)
+        return
+    except (ImportError, RuntimeError) as exc:
+        logging.getLogger(__name__).warning(
+            "torchaudio.save failed (%s); falling back to soundfile", exc
+        )
+    import soundfile as sf
+    arr = wav.detach().cpu().numpy()
+    if arr.ndim == 2:
+        arr = arr.T  # soundfile expects [time, channels]
+    sf.write(str(path), arr, int(sample_rate))
+
+
 from ww_trainer.utils import timed
 from ww_trainer.augment import (
     _collect_audio_files,

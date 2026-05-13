@@ -36,7 +36,8 @@ def _make_wav(path: Path, sr: int = 16000, duration: float = 0.5) -> Path:
     n_samples = int(sr * duration)
     wav = torch.randn(1, n_samples) * 0.5
     path.parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(str(path), wav, sr)
+    from ww_trainer.dataset import _save_audio
+    _save_audio(str(path), wav, sr)
     return path
 
 

@@ -13,8 +13,8 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
     "torchaudio",
-    "onnx",
-    "onnxruntime",
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
     "numpy",
     "soundfile",
     "click",

@@ -125,7 +125,8 @@ class _TorchBackend(_VCBackend):
             audio_prompt_path=str(donor_path),
             exaggeration=exaggeration,
         )
-        torchaudio.save(str(out_path), wav.cpu(), self.sample_rate)
+        from ww_trainer.dataset import _save_audio
+        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
 
     def vc(self, source_path, donor_path, out_path):
         import torchaudio
@@ -144,7 +145,8 @@ class _TorchBackend(_VCBackend):
                 # Some versions accept source_audio for VC:
                 **_maybe_kwarg("source_audio_path", str(source_path), self._model.generate),
             )
-        torchaudio.save(str(out_path), wav.cpu(), self.sample_rate)
+        from ww_trainer.dataset import _save_audio
+        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +175,8 @@ class _LinaCodecBackend(_VCBackend):
         # wav shape: (samples,) or (1, samples)
         if wav.dim() == 1:
             wav = wav.unsqueeze(0)
-        torchaudio.save(str(out_path), wav.cpu(), self.sample_rate)
+        from ww_trainer.dataset import _save_audio
+        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
 
 
 def _maybe_kwarg(key: str, value, fn) -> dict:
