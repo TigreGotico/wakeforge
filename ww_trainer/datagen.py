@@ -295,6 +295,16 @@ def _collect_tts_plugins(lang: str) -> List[tuple[str, Any]]:
             "  uv pip install ovos-tts-plugin-google-tx\n"
             "  uv pip install ovos-tts-plugin-phoonnx"
         )
+    if len(instances) == 1:
+        logger.warning(
+            "Only one TTS plugin installed (%s) — synthesised positives will "
+            "have very limited voice diversity. Install additional plugins "
+            "(ovos-tts-plugin-google-tx, ovos-tts-plugin-phoonnx, …) for "
+            "better generalisation. Also ensure --lang carries a region tag "
+            "(e.g. 'nl-nl', not 'nl') so the plugin picks a native voice "
+            "rather than falling back to its default (English).",
+            instances[0][0],
+        )
     return instances
 
 
@@ -351,7 +361,16 @@ def voice_convert_batch(
 
     Returns list of output WAV paths.
     """
-    from chatterbox_onnx import ChatterboxOnnx
+    try:
+        from chatterbox_onnx import ChatterboxOnnx
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            f"Voice conversion dependency missing: {e.name!r}. "
+            "Install a VC backend extra:\n"
+            "    uv pip install -e \".[vc-onnx]\"   # CPU ONNX, recommended\n"
+            "    uv pip install -e \".[vc-torch]\"  # GPU PyTorch backend\n"
+            "Or run datagen without --vc-refs to skip voice conversion."
+        ) from e
 
     ref_voices = sorted(vc_refs_dir.rglob("*.wav"))
     if not ref_voices:

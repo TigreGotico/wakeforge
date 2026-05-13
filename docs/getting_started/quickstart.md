@@ -21,6 +21,18 @@ How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart
 
 `ww_trainer-quickstart` generates a synthetic dataset and trains a wake-word detector in one command.
 
+## Install
+
+The quickstart needs the `datagen` extra (TTS plugins + HF `datasets`) and an
+audio codec backend (`torchcodec`) on top of the core install:
+
+```bash
+uv pip install -e ".[dev,datagen,torchcodec]"
+```
+
+`[dev]` alone is **not** enough — datagen will fail with
+`ModuleNotFoundError: ovos_plugin_manager` / `datasets` / `torchcodec`.
+
 ## CLI
 
 ```bash
@@ -50,8 +62,9 @@ All options:
 | `--batch-size` | `16` | Batch size |
 | `--lr` | `5e-4` | Learning rate |
 | `--n-positive` | `1000` | Positive samples to synthesise |
-| `--lang` | `en` | BCP-47 language for TTS |
+| `--lang` | `en` | BCP-47 language for TTS (e.g. `en-us`, `nl-nl`, `pt-br` — pass a region for best voice selection) |
 | `--adversarial/--no-adversarial` | on | Grapheme hard-negatives |
+| `--vc-refs` | unset | Dir of reference WAVs for voice conversion (needs `[vc-onnx]`/`[vc-torch]`) |
 | `--augmentation-data/--no-augmentation-data` | on | Download bg_noise/music/RIR |
 | `--reuse-dataset` | off | Skip datagen if dataset exists |
 | `--device` | `auto` | `auto`, `cpu`, or `cuda` |
@@ -115,6 +128,32 @@ score = model.infer(wav_float32_array)  # float in [0, 1]
     best_f1.onnx             # if export_onnx=True (head)
     metrics_log.csv
 ```
+
+## Voice cloning (optional, recommended for quality)
+
+TTS alone gives limited voice diversity — especially with only one plugin
+installed. **Voice conversion** (VC) re-renders each synthesised positive in
+the timbre of a reference speaker, multiplying effective diversity.
+
+VC is opt-in and requires:
+
+1. The VC extra: `uv pip install -e ".[vc-onnx]"` (CPU ONNX, recommended) or
+   `".[vc-torch]"` (GPU PyTorch).
+2. A directory of short reference WAVs (3–10 s of clean speech each), one
+   per target speaker.
+
+Then pass `--vc-refs`:
+
+```bash
+ww_trainer-quickstart \
+  --wake-word "hey jarvis" \
+  --output-dir ./hey_jarvis \
+  --vc-refs ./my_voices/
+```
+
+Without `--vc-refs`, the VC step is skipped entirely — no `chatterbox_*`
+dependency is loaded. With `--vc-refs` but missing extras, the quickstart
+fails fast with a pointer to `[vc-onnx]`.
 
 ## Skipping Datagen
 
