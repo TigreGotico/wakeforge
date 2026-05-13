@@ -21,6 +21,18 @@ How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart
 
 `ww_trainer-quickstart` generates a synthetic dataset and trains a wake-word detector in one command.
 
+## Install
+
+The quickstart needs the `datagen` extra (TTS plugins + HF `datasets`) and an
+audio codec backend (`torchcodec`) on top of the core install:
+
+```bash
+uv pip install -e ".[dev,datagen,torchcodec]"
+```
+
+`[dev]` alone is **not** enough — datagen will fail with
+`ModuleNotFoundError: ovos_plugin_manager` / `datasets` / `torchcodec`.
+
 ## CLI
 
 ```bash
@@ -50,7 +62,7 @@ All options:
 | `--batch-size` | `16` | Batch size |
 | `--lr` | `5e-4` | Learning rate |
 | `--n-positive` | `1000` | Positive samples to synthesise |
-| `--lang` | `en` | BCP-47 language for TTS |
+| `--lang` | `en` | BCP-47 language for TTS (e.g. `en-us`, `nl-nl`, `pt-br` — pass a region for best voice selection) |
 | `--adversarial/--no-adversarial` | on | Grapheme hard-negatives |
 | `--augmentation-data/--no-augmentation-data` | on | Download bg_noise/music/RIR |
 | `--reuse-dataset` | off | Skip datagen if dataset exists |

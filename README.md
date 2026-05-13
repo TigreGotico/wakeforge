@@ -46,7 +46,11 @@ evaluate, export, deploy.
 ## Install
 
 ```bash
+# Core library + tests
 uv pip install -e ".[dev]"
+
+# Quickstart / datagen needs TTS plugins + HF datasets + an audio codec:
+uv pip install -e ".[dev,datagen,torchcodec]"
 ```
 
 Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,

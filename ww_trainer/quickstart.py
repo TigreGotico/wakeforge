@@ -138,7 +138,15 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
         llm_url=cfg.llm_url,
         seed=cfg.seed,
     )
-    return run_datagen_pipeline(datagen_cfg)
+    try:
+        return run_datagen_pipeline(datagen_cfg)
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            f"Quickstart datagen dependency missing: {e.name!r}. "
+            "The quickstart requires the [datagen] and [torchcodec] extras:\n"
+            "    uv pip install -e \".[dev,datagen,torchcodec]\"\n"
+            "Or pass --reuse-dataset to skip datagen and train on an existing dataset."
+        ) from e
 
 
 def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> QuickstartResult:
