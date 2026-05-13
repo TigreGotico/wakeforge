@@ -1,6 +1,44 @@
 # Wake Word Trainer
 
-Full training and research suite for wake word detection — from microcontrollers to GPU servers. All components export to ONNX; production inference requires only `onnxruntime` and `numpy`.
+A research-grade training suite for **wake-word detection** — the always-on keyword spotter that wakes "Hey Siri", "OK Google", or your own custom phrase. Train, evaluate, and ship lightweight on-device detectors that run anywhere from an ESP32 to a GPU server. Every component exports to ONNX; production inference requires only `onnxruntime` and `numpy` — no PyTorch at runtime.
+
+## What is a wake word?
+
+A wake word is a short phrase ("hey jarvis", "computer", "alexa") that a device listens for continuously. When detected, downstream STT/NLU runs. The detector must:
+
+- **Run on tiny hardware** — sub-100 KB models, <10 % CPU, no internet.
+- **Tolerate noise, accents, distance, reverberation** — real-world far-field audio.
+- **Almost never false-fire** — < 1 false alarm per hour is the bar.
+- **Trigger reliably when spoken** — > 90 % recall at that false-alarm rate.
+
+ww-trainer is the toolchain to build that detector from a single phrase — synthesise data, train, evaluate, export, deploy.
+
+## Who is this for?
+
+| You are… | Start here |
+|---|---|
+| **Hobbyist** who wants to wake a Pi with their own phrase | [`docs/quickstart.md`](docs/quickstart.md) — one command, ONNX in 5 minutes |
+| **Embedded engineer** shipping to ESP32 / MCU | [`docs/esp32.md`](docs/esp32.md) + [`docs/hardware_guide.md`](docs/hardware_guide.md) |
+| **Voice-assistant integrator** (OVOS, Rhasspy, custom) | [`docs/inference.md`](docs/inference.md) + [`docs/streaming.md`](docs/streaming.md) |
+| **ML researcher** comparing architectures, losses, distillation | [`docs/sweep.md`](docs/sweep.md), [`docs/losses.md`](docs/losses.md), [`docs/rppl_whitepaper.md`](docs/rppl_whitepaper.md) |
+| **Curious noob** who has never trained a model | [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) — runs free on Kaggle |
+
+## Why this framework?
+
+- **Single-string-to-ONNX** quickstart: `train_from_wakeword("hey jarvis", out)` and you have a deployable model.
+- **17 feature extractors × 15 classifier heads × 17 losses** — a real research surface, not a toy.
+- **Genetic & Bayesian hyperparameter search** with island-model parallelism and adaptive mutation.
+- **Synthetic datagen** — TTS + voice conversion to bootstrap a dataset from zero recordings.
+- **Hard-negative mining** and **infinite training** for industrial-scale negative pools.
+- **ONNX-first**: every model — featurizer and head — exports cleanly. No CUDA-only kernels.
+- **Hardware tiers from `esp32_nano` (sub-1 KB) to `hubert_medium`** — one preset per target.
+
+### Trade-offs / honest limitations
+
+- **CPU-only training is supported but slow** for the largest tiers. Best UX is a single mid-range GPU.
+- **Synthetic-only datasets** are great smoke-tests but real users still need real recordings for top performance.
+- **ONNX export is mandatory** — features that cannot trace (custom CUDA kernels, dynamic control flow) are excluded from the framework (see [`docs/audit.md`](docs/audit.md)).
+- **Large SSL featurizers** (HuBERT, Wav2Vec2-BERT) are pre-exported to ONNX and used frozen — not fine-tuned at training time. This guarantees train/inference parity but limits SSL adaptation.
 
 ## Install
 
@@ -284,6 +322,26 @@ export WW_VC_BACKEND=chatterbox-onnx   # or chatterbox / linacodec / auto
 | [docs/references.md](docs/references.md) | Academic references and bibliography |
 | [docs/rppl_whitepaper.md](docs/rppl_whitepaper.md) | RPPL loss technical whitepaper |
 | [docs/tinyhubert_whitepaper.md](docs/tinyhubert_whitepaper.md) | TinyHuBERT distillation design |
+
+## Contributing
+
+Issues and pull requests welcome. Target the `dev` branch (not `master`). For
+larger changes, open an issue first to discuss scope. Tests live in `test/`;
+run with `uv run pytest`.
+
+## Citation
+
+If you use ww-trainer in academic work, please cite:
+
+```bibtex
+@software{ww_trainer,
+  title  = {ww-trainer: a research suite for on-device wake-word detection},
+  author = {TigreGotico contributors},
+  year   = {2026},
+  url    = {https://github.com/TigreGotico/ww-trainer},
+  note   = {Funded by NGI0 Commons Fund / NLnet, grant 101135429}
+}
+```
 
 ## Credits
 

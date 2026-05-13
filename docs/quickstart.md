@@ -1,5 +1,24 @@
 # Quickstart — Single String to Trained ONNX Model
 
+Goal: go from typing a phrase like `"hey jarvis"` to a deployable ONNX model in **one command**, on a laptop, in under 10 minutes for a small smoke test.
+
+How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:231`:
+
+1. **Synthesise positives** — TTS produces 1000 utterances of the phrase in varied voices/speeds/pitches.
+2. **Mine negatives** — short common-speech clips that do *not* contain the phrase, optionally adversarial graphemes ("hay janice", "hey jarvi…").
+3. **Optionally download augmentation** — background noise, music, and Room Impulse Responses to simulate distance and reverberation.
+4. **Train** a chosen hardware tier (defaults to `small` — MFCC + GRU, ~50 K params).
+5. **Export two ONNX files** — featurizer + head — for PyTorch-free runtime.
+
+### When to use the quickstart vs. the full pipeline
+
+| Use the quickstart when… | Use the full pipeline when… |
+|---|---|
+| You want a working detector *today* | You need < 0.5 FA/hour or > 95 % recall |
+| You have no real recordings | You have real far-field user audio |
+| You're prototyping a new phrase | You're shipping to production |
+| You're benchmarking the framework | You're sweeping architectures / losses |
+
 `ww_trainer-quickstart` generates a synthetic dataset and trains a wake-word detector in one command.
 
 ## CLI

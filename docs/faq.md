@@ -1,5 +1,72 @@
 # ww-trainer — FAQ
 
+## Newcomer questions
+
+**Q: I just want a model for "hey computer". What's the minimum command?**
+
+```bash
+ww_trainer-quickstart --wake-word "hey computer" --output-dir ./hey_computer
+```
+
+This synthesises ~1000 TTS positives, mines negatives, trains a 50 K-param GRU,
+and emits `best_f1_featurizer.onnx` + `best_f1.onnx` in `./hey_computer/model/`.
+See [`quickstart.md`](quickstart.md).
+
+**Q: Do I need a GPU?**
+
+No. CPU works for the small/micro tiers and is the default. A single mid-range
+GPU speeds up large-tier training (BCResNet, MatchboxNet, anything > 1 M params).
+SSL featurizers (HuBERT) are used pre-exported to ONNX and run on CPU.
+
+**Q: How much data do I need?**
+
+For a smoke test, **zero** real recordings — TTS synthesises positives for you.
+For a production model: aim for hundreds of real far-field positives from
+multiple speakers plus tens of hours of real negative audio (podcasts, ambient).
+Hard-negative mining and voice conversion close the gap further.
+
+**Q: Why two ONNX files instead of one?**
+
+The featurizer (MFCC / SincNet / …) and the classifier head are exported
+separately so you can swap heads without re-exporting the featurizer, cache
+features on disk, or run the featurizer on a DSP while the head runs on the CPU.
+The contract is documented in [`inference.md`](inference.md). Use
+`OnnxWakeWordInferencer(featurizer_path, head_path)` — `ww_trainer/inference.py:8`.
+
+**Q: What's the difference between F1, EER, FAR, FRR, and "FA per hour"?**
+
+| Metric | Meaning | Typical target |
+|---|---|---|
+| **F1** | Harmonic mean of precision and recall | > 0.90 |
+| **EER** | False-accept rate = false-reject rate (equal-error point) | < 0.05 |
+| **FAR / FRR** | False-accept (false-fire) and false-reject (missed) rates at a chosen threshold | |
+| **FA/hour** | False fires per hour of continuous listening on ambient audio | < 1 |
+
+Wake-word users care most about FA/hour and recall. See [`benchmarking.md`](benchmarking.md).
+
+**Q: Can I train without an internet connection?**
+
+Yes — pass `--no-augmentation-data` and `--reuse-dataset` to the quickstart,
+or point `WakeWordTrainer` at local folders for `bg_noise_folder`, `music_folder`,
+`rir_folder`. Pre-built datasets at `/run/media/miro/endeavouros/ww/` are the
+canonical offline source on the maintainer's workstation.
+
+**Q: How do I deploy the trained model?**
+
+Two ONNX files + ~10 lines of Python (or C/C++/Rust with onnxruntime). The
+runtime has **no PyTorch dependency**. For embedded targets, see
+[`esp32.md`](esp32.md) and `export_c.export_to_c_header` for FFN heads. For
+streaming/sliding-window, see [`streaming.md`](streaming.md).
+
+**Q: My model overfits / falsely fires. Where do I start?**
+
+1. Add real negative audio (podcasts, music, ambient) — see [`data_contract.md`](data_contract.md).
+2. Enable hard-negative mining or use `train_infinite.py`.
+3. Try `RobustProtoDiversityLoss` (RPPL) — see [`rppl_whitepaper.md`](rppl_whitepaper.md).
+4. Lower the threshold *only after* fixing the data; thresholding cannot fix a bad model.
+
+---
+
 ## LiveKit-port additions
 
 **Q: What is `ConvAttentionHead`?**
