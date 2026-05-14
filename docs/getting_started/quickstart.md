@@ -1,5 +1,12 @@
 # Quickstart — Single String to Trained ONNX Model
 
+> **Before you start — resource budget.** The default run downloads
+> several HF datasets and trains for 50 epochs. Plan for **≈ 3–8 GB disk,
+> 2–5 GB download, 20–40 min on CPU** (much less on a GPU, much less
+> with `--no-augmentation-data --n-positive 200`). Full breakdown by
+> preset, dataset, tier, and cache location:
+> [`requirements.md`](requirements.md).
+
 Goal: go from typing a phrase like `"hey jarvis"` to a deployable ONNX model in **one command**, on a laptop, in under 10 minutes for a small smoke test.
 
 How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:231`:
