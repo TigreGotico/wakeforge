@@ -57,7 +57,6 @@ NEGATIVE_DATASETS: Dict[str, List[str]] = {
     "speech": [
         "TigreGotico/not-wake-words-speech-en",        # primary: curated NWW speech
         "hf-internal-testing/librispeech_asr_demo",    # ~70 clips, LibriSpeech clean
-        "Anton-Bushuiev/speech-commands-v2-resampled", # short spoken commands
     ],
     "bg_noise": [
         "TigreGotico/ambient_noises",

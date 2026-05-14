@@ -1,5 +1,13 @@
 # Quickstart — Single String to Trained ONNX Model
 
+> **Before you start — resource budget.** The default run downloads
+> several HF datasets (≈ 2.9 GB upstream) plus another ~5 GB if you opt
+> into voice cloning. Plan for **≈ 6–8 GB free disk and 5 GB download**
+> on the default preset, **~30–60 min on CPU** (or ~10–15 min on a
+> mid-range GPU). Smoke runs with `--no-augmentation-data --n-positive
+> 200` finish in ≈ 1.5 GB / 10 min on CPU. Full per-dataset breakdown:
+> [`requirements.md`](requirements.md).
+
 Goal: go from typing a phrase like `"hey jarvis"` to a deployable ONNX model in **one command**, on a laptop, in under 10 minutes for a small smoke test.
 
 How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:231`:
