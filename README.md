@@ -57,6 +57,10 @@ Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,
 `viz`, `markov`, `ocsvm`, `torchcodec`) — see
 [`docs/faq.md`](docs/faq.md#2-install).
 
+A default quickstart run needs **≈ 6–8 GB disk** and **~5 GB download**
+(or ~1.5 GB with `--no-augmentation-data`). Voice cloning via `--vc-refs`
+adds **another ~5 GB** for the Chatterbox ONNX weights. Full per-dataset
+budget: [`docs/getting_started/requirements.md`](docs/getting_started/requirements.md).
 ## 60-second quickstart
 
 ```bash

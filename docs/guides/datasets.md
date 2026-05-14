@@ -113,6 +113,10 @@ Keep the negative-to-positive ratio between **2:1 and 5:1**.  The `AudioDataset`
 logs the label distribution at `INFO` level (`dataset.py:163-167`) so you can verify balance
 before training starts.
 
+For **disk and bandwidth costs** of the auto-downloaded HF datasets, the
+synthesised positives, and the Chatterbox VC model, see
+[`docs/getting_started/requirements.md`](../getting_started/requirements.md).
+
 ---
 
 ## 2. The Notebook Pipeline
