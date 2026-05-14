@@ -26,7 +26,7 @@ jobs:
         run: pip install uv
 
       - name: Install package with dev dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev,torchcodec]"
 
       - name: Run tests with coverage
         run: pytest test/ -v --cov=ww_trainer --cov-report=term-missing
