@@ -73,6 +73,14 @@ NEGATIVE_DATASETS: Dict[str, List[str]] = {
 
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 
+# Datasets that are too large to materialise locally — always stream them.
+# A non-streaming load_dataset() call on these would download hundreds of GB
+# (or terabytes) into ~/.cache/huggingface/ before iteration even starts;
+# the per-call `max_samples` cap only limits iteration, not the cache fill.
+STREAMING_ONLY_DATASETS: set = {
+    "agkphysics/AudioSet",  # ~2.4 TB upstream
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -198,9 +206,13 @@ def download_hf_audio_dataset(
     # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
     # re-runs with the same dataset_id are instant.  Fall back to streaming
     # only if the non-streaming load fails (e.g. dataset too large for RAM).
+    # Known huge datasets (STREAMING_ONLY_DATASETS) skip the non-streaming
+    # attempt entirely — load_dataset(streaming=False) would download the
+    # full upstream (hundreds of GB / TB) before iteration starts.
     # Note: trust_remote_code was removed in datasets ≥ 3.x; omit it.
     ds = None
-    for streaming in (False, True):
+    modes = (True,) if dataset_id in STREAMING_ONLY_DATASETS else (False, True)
+    for streaming in modes:
         try:
             ds = load_dataset(dataset_id, split="train", streaming=streaming)
             break
