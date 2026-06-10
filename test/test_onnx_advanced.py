@@ -67,9 +67,10 @@ def test_multi_onnx_inferencer(tmp_path):
     graph_base = onnx.helper.make_graph([node_base], "base", 
                                         [onnx.helper.make_tensor_value_info("input_values", onnx.TensorProto.FLOAT, [1, 16000])],
                                         [onnx.helper.make_tensor_value_info("Y", onnx.TensorProto.FLOAT, [1, 100, 13])])
-    model_base = onnx.helper.make_model(graph_base, ir_version=8)
+    model_base = onnx.helper.make_model(graph_base, ir_version=8,
+                                        opset_imports=[onnx.helper.make_opsetid("", 18)])
     onnx.save(model_base, base_path)
-    
+
     # 2. Create a mock VAD extractor (Identity for chunk probabilities)
     # chunk [512] -> prob [1, 1]
     vad_path = str(tmp_path / "vad.onnx")
@@ -80,7 +81,8 @@ def test_multi_onnx_inferencer(tmp_path):
                                        [onnx.helper.make_tensor_value_info("X", onnx.TensorProto.FLOAT, ["B_vad", 512])],
                                        [onnx.helper.make_tensor_value_info("Y", onnx.TensorProto.FLOAT, ["B_vad", 1])],
                                        initializer=[axes_vad])
-    model_vad = onnx.helper.make_model(graph_vad, ir_version=8)
+    model_vad = onnx.helper.make_model(graph_vad, ir_version=8,
+                                       opset_imports=[onnx.helper.make_opsetid("", 18)])
     onnx.save(model_vad, vad_path)
     
     # 3. Create a mock head (Accepts 13 + 1 = 14 inputs)
@@ -91,7 +93,8 @@ def test_multi_onnx_inferencer(tmp_path):
                                         [onnx.helper.make_tensor_value_info("input_features", onnx.TensorProto.FLOAT, [1, 100, 14])],
                                         [onnx.helper.make_tensor_value_info("logits", onnx.TensorProto.FLOAT, [1])],
                                         initializer=[axes_head])
-    model_head = onnx.helper.make_model(graph_head, ir_version=8)
+    model_head = onnx.helper.make_model(graph_head, ir_version=8,
+                                        opset_imports=[onnx.helper.make_opsetid("", 18)])
     onnx.save(model_head, head_path)
     
     # 4. Test Inferencer
@@ -119,7 +122,8 @@ def test_embed_onnx_metadata(tmp_path):
     graph = onnx.helper.make_graph([node], "test", 
                                    [onnx.helper.make_tensor_value_info("X", onnx.TensorProto.FLOAT, [1])],
                                    [onnx.helper.make_tensor_value_info("Y", onnx.TensorProto.FLOAT, [1])])
-    model = onnx.helper.make_model(graph, ir_version=8)
+    model = onnx.helper.make_model(graph, ir_version=8,
+                                   opset_imports=[onnx.helper.make_opsetid("", 18)])
     onnx.save(model, onnx_path)
     
     metadata = {
