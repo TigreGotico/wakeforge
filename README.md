@@ -24,7 +24,7 @@ evaluate, export, deploy.
 | **Embedded engineer** shipping to ESP32 / MCU | [`docs/guides/embedded.md`](docs/guides/embedded.md) |
 | **Voice-assistant integrator** (OVOS, Rhasspy, …) | [`docs/guides/inference.md`](docs/guides/inference.md) |
 | **ML researcher** comparing architectures / losses | [`docs/guides/search.md`](docs/guides/search.md), [`docs/reference/losses.md`](docs/reference/losses.md), [`docs/research/rppl.md`](docs/research/rppl.md) |
-| **New to ML** entirely | [`notebooks/kaggle_quickstart.ipynb`](notebooks/kaggle_quickstart.ipynb) — runs free on Kaggle |
+| **New to ML** entirely | [`docs/quickstart-kaggle.md`](docs/quickstart-kaggle.md) — step-by-step guide; runs free on Kaggle / Colab |
 
 ## Highlights
 
