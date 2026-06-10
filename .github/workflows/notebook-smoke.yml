@@ -2,13 +2,13 @@ name: Notebook Smoke Test
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [master, dev]
     paths:
       - "notebooks/**"
       - "ww_trainer/**"
       - ".github/workflows/notebook-smoke.yml"
   pull_request:
-    branches: [main, master, dev]
+    branches: [master, dev]
     paths:
       - "notebooks/**"
       - "ww_trainer/**"

@@ -78,7 +78,7 @@ def _check_git_lfs() -> None:
 
 def _check_hdd4() -> None:
     if not HDD4_BASE.parent.parent.exists():
-        sys.exit(f"/mnt/hdd4 is not mounted — run: sshfs miro@192.168.1.200:/media/hdd4 /mnt/hdd4")
+        sys.exit("/mnt/hdd4 is not mounted — mount your external dataset drive to /mnt/hdd4 first")
     HDD4_BASE.mkdir(parents=True, exist_ok=True)
     free_gb = shutil.disk_usage(HDD4_BASE).free / 1e9
     logger.info("hdd4 free: %.0f GB", free_gb)

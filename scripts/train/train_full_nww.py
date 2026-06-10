@@ -84,7 +84,7 @@ if not TRAIN_CSV.exists():
 if not NWW_DIR.exists():
     sys.exit(
         f"Not-wake-word subset not found at {NWW_DIR}.\n"
-        "Mount the drive: sshfs miro@192.168.1.200:/media/hdd4 /mnt/hdd4"
+        "Mount your external dataset drive to /mnt/hdd4 first."
     )
 
 # ── Read existing CSVs ────────────────────────────────────────────────────────
