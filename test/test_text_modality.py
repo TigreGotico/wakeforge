@@ -34,7 +34,7 @@ def _build_dummy_text_onnx(out_path: str, emb_dim: int = 32, seq_len: int = 5) -
         value=helper.make_tensor("val", TensorProto.FLOAT, const_val.shape, const_val.flatten().tolist()),
     )
     graph = helper.make_graph([const_node], "text_encoder", [input_ids], [output_emb])
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8)
     onnx.checker.check_model(model)
     onnx.save(model, out_path)
 

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 import numpy as np
+import soundfile as sf
 import torch
 import torchaudio
 
@@ -150,12 +151,11 @@ def preprocess_audio(
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
-        wav, orig_sr = torchaudio.load(str(src))
-        wav = wav.mean(0).numpy()
+        arr, orig_sr = sf.read(str(src), dtype="float32", always_2d=True)
+        wav = arr.mean(axis=1)
         if orig_sr != sr:
-            wav = torchaudio.functional.resample(
-                torch.tensor(wav), orig_sr, sr
-            ).numpy()
+            import librosa
+            wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=sr)
         if vad_trim:
             wav = trim_silence_vad(wav, sr)
         max_abs = np.max(np.abs(wav))
