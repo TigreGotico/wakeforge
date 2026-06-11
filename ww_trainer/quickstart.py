@@ -42,6 +42,15 @@ class QuickstartConfig:
         export_onnx: Export best model to ONNX after training.
         reuse_dataset: Skip datagen if the dataset directory already exists.
         seed: Random seed for reproducibility.
+        losses_cfg: Loss configuration passed to :class:`~ww_trainer.trainer.WakeWordTrainer`.
+            Each entry is a dict with at least ``"name"`` and ``"weight"`` keys, e.g.
+            ``[{"name": "focal", "weight": 1.0}]``.  Defaults to BCE when ``None``.
+        bg_noise_folder: Optional path to a background-noise directory for augmentation.
+            When *None* the path is inferred from the datagen result (auto mode).
+        music_folder: Optional path to a music directory for augmentation.
+            When *None* the path is inferred from the datagen result (auto mode).
+        rir_folder: Optional path to a room-impulse-response directory for augmentation.
+            When *None* the path is inferred from the datagen result (auto mode).
     """
 
     wake_word: str
@@ -62,6 +71,11 @@ class QuickstartConfig:
     lr: float = 5e-4
     device: str = "auto"
     export_onnx: bool = True
+    losses_cfg: Optional[List[Dict[str, Any]]] = None
+    # augmentation overrides (auto-populated from datagen result when None)
+    bg_noise_folder: Optional[str] = None
+    music_folder: Optional[str] = None
+    rir_folder: Optional[str] = None
     # flow
     reuse_dataset: bool = False
     seed: int = 42
@@ -194,14 +208,24 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
     if tc.head_arch == "ocsvm" and tc.embed_dim is not None:
         model_kwargs["embed_dim"] = tc.embed_dim
 
-    # ---- augmentation opts from datagen result ----
+    # ---- augmentation opts: explicit overrides take priority; fall back to datagen result ----
     augment_opts: Dict[str, str] = {}
-    if getattr(datagen_result, "bg_noise_dir", None) and datagen_result.bg_noise_dir.exists():
-        augment_opts["bg_noise_folder"] = str(datagen_result.bg_noise_dir)
-    if getattr(datagen_result, "music_dir", None) and datagen_result.music_dir.exists():
-        augment_opts["music_folder"] = str(datagen_result.music_dir)
-    if getattr(datagen_result, "rir_dir", None) and datagen_result.rir_dir.exists():
-        augment_opts["rir_folder"] = str(datagen_result.rir_dir)
+    def _maybe(explicit: Optional[str], dr_attr: str) -> Optional[str]:
+        candidate = explicit if explicit is not None else getattr(datagen_result, dr_attr, None)
+        if candidate is not None and Path(candidate).exists():
+            return str(candidate)
+        return None
+
+    for folder_key, dr_attr in (
+        ("bg_noise_folder", "bg_noise_dir"),
+        ("music_folder", "music_dir"),
+        ("rir_folder", "rir_dir"),
+    ):
+        resolved = _maybe(getattr(cfg, folder_key), dr_attr)
+        if resolved is not None:
+            augment_opts[folder_key] = resolved
+
+    losses: List[Dict[str, Any]] = cfg.losses_cfg if cfg.losses_cfg is not None else [{"name": "bce", "weight": 1.0}]
 
     trainer = WakeWordTrainer(
         arch=tc.head_arch,
@@ -210,7 +234,7 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
         featurizer_type=tc.extractor_type,
         wake_word=cfg.wake_word,
         device=cfg.device,
-        losses_cfg=[{"name": "bce", "weight": 1.0}],
+        losses_cfg=losses,
         export_onnx=cfg.export_onnx,
         seed=cfg.seed,
         **model_kwargs,

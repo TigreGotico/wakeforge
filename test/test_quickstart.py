@@ -218,6 +218,93 @@ class TestTrainFromDatagenResult:
         assert result.test_csv == mock_datagen_result.test_csv
 
 
+class TestQuickstartConfigNewFields:
+    """losses_cfg and augmentation-folder fields are accepted and defaulted correctly."""
+
+    def test_losses_cfg_default_is_none(self) -> None:
+        cfg = QuickstartConfig(wake_word="hey_x", output_dir=Path("/tmp/x"))
+        assert cfg.losses_cfg is None
+
+    def test_losses_cfg_round_trip(self) -> None:
+        losses = [{"name": "focal", "weight": 1.0}]
+        cfg = QuickstartConfig(
+            wake_word="hey_x", output_dir=Path("/tmp/x"), losses_cfg=losses
+        )
+        assert cfg.losses_cfg == losses
+
+    def test_augmentation_folder_fields_default_none(self) -> None:
+        cfg = QuickstartConfig(wake_word="hey_x", output_dir=Path("/tmp/x"))
+        assert cfg.bg_noise_folder is None
+        assert cfg.music_folder is None
+        assert cfg.rir_folder is None
+
+    def test_augmentation_folder_fields_accept_strings(self) -> None:
+        cfg = QuickstartConfig(
+            wake_word="hey_x",
+            output_dir=Path("/tmp/x"),
+            bg_noise_folder="/data/noise",
+            music_folder="/data/music",
+            rir_folder="/data/rir",
+        )
+        assert cfg.bg_noise_folder == "/data/noise"
+        assert cfg.music_folder == "/data/music"
+        assert cfg.rir_folder == "/data/rir"
+
+    def test_train_from_wakeword_kwargs_accepted(self) -> None:
+        """train_from_wakeword forwards losses_cfg + folder kwargs without TypeError."""
+        from ww_trainer.quickstart import train_from_wakeword
+
+        # Only construct the QuickstartConfig — do NOT run training
+        cfg = QuickstartConfig(
+            wake_word="hey_x",
+            output_dir=Path("/tmp/x"),
+            losses_cfg=[{"name": "focal", "weight": 1.0}],
+            bg_noise_folder="/data/noise",
+            music_folder="/data/music",
+            rir_folder="/data/rir",
+        )
+        # Smoke-test: no TypeError on construction
+        assert cfg.losses_cfg == [{"name": "focal", "weight": 1.0}]
+
+    def test_losses_cfg_used_in_training(
+        self, mock_datagen_result: _FakeDatagenResult, tmp_path: Path
+    ) -> None:
+        """losses_cfg=[focal] is forwarded to WakeWordTrainer without error."""
+        cfg = QuickstartConfig(
+            wake_word="hey_test",
+            output_dir=tmp_path,
+            tier="micro",
+            epochs=1,
+            batch_size=4,
+            export_onnx=False,
+            download_augmentation=False,
+            device="cpu",
+            losses_cfg=[{"name": "focal", "weight": 1.0}],
+        )
+        result = _train_from_datagen_result(cfg, mock_datagen_result)
+        assert isinstance(result, QuickstartResult)
+        assert "f1" in result.metrics
+
+    def test_explicit_bg_noise_folder_overrides_datagen(
+        self, mock_datagen_result: _FakeDatagenResult, tmp_path: Path
+    ) -> None:
+        """bg_noise_folder set on cfg takes priority; non-existent path is silently skipped."""
+        cfg = QuickstartConfig(
+            wake_word="hey_test",
+            output_dir=tmp_path,
+            tier="micro",
+            epochs=1,
+            batch_size=4,
+            export_onnx=False,
+            download_augmentation=False,
+            device="cpu",
+            # Point at a non-existent dir — should be silently dropped (no crash)
+            bg_noise_folder=str(tmp_path / "nonexistent_noise"),
+        )
+        result = _train_from_datagen_result(cfg, mock_datagen_result)
+        assert isinstance(result, QuickstartResult)
+
+
 class TestCliHelp:
     """CLI entry point renders help text correctly."""
 
