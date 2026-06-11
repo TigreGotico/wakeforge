@@ -29,7 +29,7 @@ def _load_audio(path: str) -> tuple[torch.Tensor, int]:
     try:
         wav, sr = torchaudio.load(path)
         return wav, sr
-    except (ImportError, RuntimeError) as exc:
+    except Exception as exc:
         logging.getLogger(__name__).warning(
             "torchaudio.load failed (%s); falling back to soundfile", exc
         )
@@ -54,7 +54,7 @@ def _save_audio(path: str, wav: torch.Tensor, sample_rate: int) -> None:
     try:
         torchaudio.save(str(path), wav, sample_rate)
         return
-    except (ImportError, RuntimeError) as exc:
+    except Exception as exc:
         logging.getLogger(__name__).warning(
             "torchaudio.save failed (%s); falling back to soundfile", exc
         )

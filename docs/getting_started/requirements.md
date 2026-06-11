@@ -47,6 +47,22 @@ default run.
 Pass `--no-augmentation-data` to skip the bottom five rows — saves
 ~1.6 GB upstream + ~1.5 GB local.
 
+### If you already cached the full AudioSet by mistake
+
+Versions prior to this fix would attempt a non-streaming load of
+AudioSet first and only fall back to streaming on failure — which meant
+HF began downloading the full 2.4 TB upstream into the cache before the
+5 000-sample iteration cap ever kicked in. To recover:
+
+```bash
+du -sh ~/.cache/huggingface/datasets/datasets--agkphysics--AudioSet
+rm -rf ~/.cache/huggingface/datasets/datasets--agkphysics--AudioSet
+```
+
+This release forces streaming for AudioSet
+([`STREAMING_ONLY_DATASETS` — `ww_trainer/datagen.py`](../../ww_trainer/datagen.py)),
+so the cache will not balloon again.
+
 ## Pre-built positives — skip the synth step
 
 When your wake word is one of the phrases in the

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 import numpy as np
+import soundfile as sf
 import torch
 import torchaudio
 
@@ -72,6 +73,14 @@ NEGATIVE_DATASETS: Dict[str, List[str]] = {
 }
 
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
+
+# Datasets that are too large to materialise locally — always stream them.
+# A non-streaming load_dataset() call on these would download hundreds of GB
+# (or terabytes) into ~/.cache/huggingface/ before iteration even starts;
+# the per-call `max_samples` cap only limits iteration, not the cache fill.
+STREAMING_ONLY_DATASETS: set = {
+    "agkphysics/AudioSet",  # ~2.4 TB upstream
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -142,12 +151,11 @@ def preprocess_audio(
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
-        wav, orig_sr = torchaudio.load(str(src))
-        wav = wav.mean(0).numpy()
+        arr, orig_sr = sf.read(str(src), dtype="float32", always_2d=True)
+        wav = arr.mean(axis=1)
         if orig_sr != sr:
-            wav = torchaudio.functional.resample(
-                torch.tensor(wav), orig_sr, sr
-            ).numpy()
+            import librosa
+            wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=sr)
         if vad_trim:
             wav = trim_silence_vad(wav, sr)
         max_abs = np.max(np.abs(wav))
@@ -198,9 +206,13 @@ def download_hf_audio_dataset(
     # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
     # re-runs with the same dataset_id are instant.  Fall back to streaming
     # only if the non-streaming load fails (e.g. dataset too large for RAM).
+    # Known huge datasets (STREAMING_ONLY_DATASETS) skip the non-streaming
+    # attempt entirely — load_dataset(streaming=False) would download the
+    # full upstream (hundreds of GB / TB) before iteration starts.
     # Note: trust_remote_code was removed in datasets ≥ 3.x; omit it.
     ds = None
-    for streaming in (False, True):
+    modes = (True,) if dataset_id in STREAMING_ONLY_DATASETS else (False, True)
+    for streaming in modes:
         try:
             ds = load_dataset(dataset_id, split="train", streaming=streaming)
             break

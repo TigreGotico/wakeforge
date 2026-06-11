@@ -106,12 +106,13 @@ class TestMetadataCSV:
 
 class TestPreprocessAudio:
     def test_creates_16khz_mono(self, tmp_path: Path) -> None:
+        from ww_trainer.dataset import _load_audio
         src = _make_wav(tmp_path / "src.wav", sr=22050)
         dst = tmp_path / "out" / "dst.wav"
         ok = preprocess_audio(src, dst, sr=16000, vad_trim=False)
         assert ok
         assert dst.exists()
-        wav, sr = torchaudio.load(str(dst))
+        wav, sr = _load_audio(str(dst))
         assert sr == 16000
         assert wav.shape[0] == 1  # mono
 
