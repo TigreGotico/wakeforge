@@ -10,10 +10,6 @@ Supported backends
                        pip install chatterbox-tts
                        env: WW_VC_BACKEND=chatterbox
 
-  ``linacodec``        Vendored LinaCodec (https://github.com/ysharma3501/LinaCodec).
-                       VC only (no TTS).  48 kHz output.  CPU or GPU.
-                       Requires: huggingface_hub jsonargparse safetensors soundfile vocos
-                       env: WW_VC_BACKEND=linacodec
 
   ``auto``             Priority: GPU chatterbox → chatterbox-onnx (CPU).
                        Default when WW_VC_BACKEND is not set.
@@ -150,33 +146,6 @@ class _TorchBackend(_VCBackend):
 
 
 # ---------------------------------------------------------------------------
-# LinaCodec (vendored) backend  — VC only, 48 kHz, CPU or GPU
-# ---------------------------------------------------------------------------
-
-class _LinaCodecBackend(_VCBackend):
-    name = "linacodec"
-    sample_rate = 48000
-
-    def __init__(self, device: str = "auto") -> None:
-        from ww_trainer.linacodec.codec import LinaCodec
-        logger.info("[VC] Loading LinaCodec (device=%s) — HF download on first run", device)
-        self._model = LinaCodec(device=device)
-        logger.info("[VC] LinaCodec ready  sr=%d", self.sample_rate)
-
-    def tts(self, text, donor_path, out_path, exaggeration=0.4):
-        raise NotImplementedError(
-            "LinaCodec is a codec-based voice converter and does not support TTS. "
-            "Use --vc-backend chatterbox-onnx or chatterbox for TTS."
-        )
-
-    def vc(self, source_path, donor_path, out_path):
-        import torchaudio
-        wav = self._model.convert_voice(str(source_path), str(donor_path))
-        # wav shape: (samples,) or (1, samples)
-        if wav.dim() == 1:
-            wav = wav.unsqueeze(0)
-        from ww_trainer.dataset import _save_audio
-        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
 
 
 def _maybe_kwarg(key: str, value, fn) -> dict:
@@ -244,17 +213,7 @@ def load_vc_backend(
                 "Run: uv pip install chatterbox-tts --python .venv/bin/python"
             )
 
-    if choice == "linacodec":
-        try:
-            return _LinaCodecBackend(device=device)
-        except ImportError as exc:
-            raise RuntimeError(
-                f"LinaCodec vendor deps missing: {exc}\n"
-                "Run: uv pip install huggingface_hub jsonargparse safetensors soundfile vocos"
-                " --python .venv/bin/python"
-            )
-
     raise ValueError(
         f"Unknown VC backend {choice!r}. "
-        "Choose 'chatterbox-onnx', 'chatterbox', 'linacodec', or 'auto'."
+        "Choose 'chatterbox-onnx', 'chatterbox', or 'auto'."
     )

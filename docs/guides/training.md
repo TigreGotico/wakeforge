@@ -466,7 +466,6 @@ Hard-negative inference scores are persisted to `hardneg_cache.pt` and reloaded 
 |---------|------|---------|-------------|
 | `chatterbox-onnx` | CPU TTS + VC | Good | Default. Cross-platform, no GPU required. |
 | `chatterbox` | GPU TTS + VC | Best | When a CUDA GPU is available. |
-| `linacodec` | CPU/GPU VC only | Codec-quality | 48 kHz output; VC only (no TTS). |
 | `auto` | — | — | GPU chatterbox if CUDA available, else chatterbox-onnx. |
 
 **Select backend:**
@@ -477,7 +476,6 @@ export WW_VC_BACKEND=chatterbox-onnx
 
 # Or per-script CLI flag
 .venv/bin/python train_infinite.py --vc-backend chatterbox
-.venv/bin/python generate_vc_positives.py --vc-backend linacodec
 ```
 
 **Python API:**

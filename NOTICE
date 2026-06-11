@@ -15,26 +15,6 @@ limitations under the License.
 
 ---
 
-This project includes vendored and adapted code from third parties.
-Their licenses and copyright notices are reproduced below.
-
-
-## ww_trainer/linacodec/module/transformer.py
-
-Adapted from https://github.com/meta-llama/llama3/blob/main/llama/model.py
-Copyright (c) Meta Platforms, Inc. and affiliates.
-Licensed under the Llama 3 Community License Agreement.
-https://llama.meta.com/llama3/license/
-
-
-## ww_trainer/linacodec/module/distill_wavlm.py
-
-Originally from https://github.com/pytorch/audio/blob/main/torchaudio/models/wav2vec2/model.py
-Copyright (c) 2017 Facebook Inc. (Soumith Chintala)
-Licensed under the BSD 2-Clause License.
-https://github.com/pytorch/audio/blob/main/LICENSE
-
-
 ## SSL Feature Extractors (ONNX checkpoints)
 
 The optional ONNX feature extractors for HuBERT and Wav2Vec2-BERT are derived

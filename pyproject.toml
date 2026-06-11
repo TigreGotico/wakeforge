@@ -83,15 +83,6 @@ vc-torch = [
     "chatterbox-tts",
 ]
 
-# LinaCodec audio-to-audio VC backend (48 kHz, CPU or GPU)
-vc-linacodec = [
-    "vocos",
-    "huggingface-hub",
-    "jsonargparse",
-    "safetensors",
-    # flash-attn is optional within linacodec; omit here as it requires
-    # a CUDA build environment — install manually if desired
-]
 
 # All VC backends (convenience)
 vc = [

@@ -105,7 +105,7 @@ CUDA when available and falls back to CPU otherwise.
 | `sweep` | Optuna Bayesian search |
 | `mlflow` | Experiment tracking |
 | `datagen` | TTS + VAD synthetic dataset generation |
-| `vc`, `vc-onnx`, `vc-torch`, `vc-linacodec` | Voice-conversion backends |
+| `vc`, `vc-onnx`, `vc-torch` | Voice-conversion backends |
 | `ocsvm` | One-Class SVM head (needs scikit-learn at fit time) |
 | `mic` | Live microphone testing (sounddevice) |
 | `viz` | UMAP embedding plots |
