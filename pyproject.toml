@@ -83,15 +83,6 @@ vc-torch = [
     "chatterbox-tts",
 ]
 
-# LinaCodec audio-to-audio VC backend (48 kHz, CPU or GPU)
-vc-linacodec = [
-    "vocos",
-    "huggingface-hub",
-    "jsonargparse",
-    "safetensors",
-    # flash-attn is optional within linacodec; omit here as it requires
-    # a CUDA build environment — install manually if desired
-]
 
 # All VC backends (convenience)
 vc = [
@@ -140,7 +131,7 @@ ww_trainer-benchmark = "ww_trainer.benchmark:main"
 ww_trainer-infer = "ww_trainer.inference:cli_main"
 
 [project.urls]
-Homepage = "https://github.com/TigreGotico/ww_trainer"
+Homepage = "https://github.com/TigreGotico/ww-trainer"
 
 [tool.setuptools.dynamic]
 version = {attr = "ww_trainer.version.__version__"}

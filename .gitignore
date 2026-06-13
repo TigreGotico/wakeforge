@@ -8,12 +8,19 @@ build/
 
 # Virtual environments
 .venv/
-
-# Secrets
 .env
+
+# Secrets / credentials
+*.json.key
+kaggle.json
+.kaggle/
+.netrc
+*.pem
+*.key
 
 # IDE
 .idea/
+.vscode/
 
 # Test/coverage
 .coverage
@@ -28,6 +35,7 @@ mlruns/
 
 # Experiment outputs (datasets, checkpoints, audio)
 experiments/
+/data/
 notebooks/outputs/
 
 # Audio files
@@ -36,5 +44,10 @@ notebooks/outputs/
 *.flac
 *.ogg
 
+# Local ops / roadmap (not for VCS)
+TODO.md
+ROADMAP.md
+
 # OS
 .DS_Store
+Thumbs.db

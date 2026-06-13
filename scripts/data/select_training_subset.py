@@ -73,7 +73,7 @@ DEFAULT_MAX_TOTAL_MB = 0
 
 def _check_hdd4() -> None:
     if not HDD4_BASE.parent.parent.exists():
-        sys.exit("/mnt/hdd4 is not mounted — run: sshfs miro@192.168.1.200:/media/hdd4 /mnt/hdd4")
+        sys.exit("/mnt/hdd4 is not mounted — mount your external dataset drive to /mnt/hdd4 first")
 
 
 def _check_local_disk(required_mb: int) -> None:

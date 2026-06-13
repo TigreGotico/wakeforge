@@ -111,7 +111,7 @@ parser.add_argument("--lr",          type=float, default=_e("WW_LR", 5e-4))
 parser.add_argument("--scan-size",   type=int, default=_e("WW_SCAN_SIZE", 3000),
                     help="NWW files to scan per epoch for hard-neg mining")
 parser.add_argument("--vc-backend",  default=_e("WW_VC_BACKEND", "auto"),
-                    choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"])
+                    choices=["auto", "chatterbox-onnx", "chatterbox"])
 parser.add_argument("--vc-device",   default=_e("WW_VC_DEVICE", "auto"))
 
 # Condition customisation

@@ -84,7 +84,7 @@ parser.add_argument("--budget-hours", type=float,
 parser.add_argument("--wake-word",    default=_e("WW_WAKE_WORD", "hey_mycroft"),
                     help="Wake word slug (used to locate dataset paths)")
 parser.add_argument("--vc-backend",   default=_e("WW_VC_BACKEND", "auto"),
-                    choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"],
+                    choices=["auto", "chatterbox-onnx", "chatterbox"],
                     help="TTS/VC backend. 'auto' uses GPU chatterbox if available, "
                          "else chatterbox-onnx (CPU).")
 parser.add_argument("--vc-device",    default=_e("WW_VC_DEVICE", "auto"),
