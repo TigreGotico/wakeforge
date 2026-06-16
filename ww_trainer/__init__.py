@@ -66,7 +66,7 @@ from ww_trainer.loss import (
 )
 
 # --- Inference ---
-from ww_trainer.inference import OnnxWakeWordInferencer
+from ww_trainer.inference import OnnxWakeWordInferencer, OnnxStreamingWakeWord
 
 # --- Dataset ---
 from ww_trainer.dataset import AudioDataset, collate_fn

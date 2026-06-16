@@ -533,6 +533,104 @@ class GruClassifierHead(ClassifierHead):
         pooled = out.mean(dim=1)
         return F.relu(self.fc1(pooled))
 
+    def export_streaming_onnx(self, out: str, window: int = 50,
+                              metadata: dict = None) -> None:
+        """Export a *stateful* streaming version of this head to ONNX.
+
+        Unlike the batch head (which re-runs the GRU over the whole feature
+        window every call), the streaming head carries the GRU hidden state and
+        a sliding window of GRU outputs as explicit ONNX inputs/outputs, so each
+        chunk costs O(chunk) regardless of history — the always-on / MCU path.
+
+        The exported graph is a single-frame step (so it has no dynamic axes and
+        is trivially traceable); the runtime feeds feature frames one at a time::
+
+            (feat_frame [1, 1, F], h_in [1, 1, H], out_window [1, window, H])
+              -> (logit [1], h_out [1, 1, H], out_window_next [1, window, H])
+
+        The GRU recurrence is implemented with explicit matmul/sigmoid/tanh
+        (not the ONNX ``GRU`` op) because onnxruntime's ``GRU`` mishandles a
+        non-zero initial hidden state vs PyTorch (``linear_before_reset``), which
+        breaks state carry. The explicit form is bit-exact with the batch head.
+
+        Args:
+            out: Output ``.onnx`` path.
+            window: Number of GRU-output frames to mean-pool (match the training
+                clip length in frames for parity with the batch model).
+            metadata: Optional metadata dict embedded in the ONNX.
+        """
+        if self.gru.bidirectional:
+            raise ValueError("Streaming export requires a unidirectional (causal) GRU.")
+        if self.gru.num_layers != 1:
+            raise ValueError("Streaming export currently supports gru_n_layers=1.")
+        self.eval()
+        stream = _GruStreamingHead(self, window).eval()
+        H = self.gru.hidden_size
+        F_dim = self.input_size
+        example = (torch.zeros(1, 1, F_dim), torch.randn(1, 1, H), torch.randn(1, window, H))
+
+        # Parity guard: frame-by-frame streaming must match the batch head.
+        feats = torch.randn(1, window, F_dim)
+        with torch.no_grad():
+            ref = self.forward(feats)
+            h = torch.zeros(1, 1, H)
+            ow = torch.zeros(1, window, H)
+            for t in range(window):
+                logit, h, ow = stream(feats[:, t:t + 1, :], h, ow)
+        if not torch.allclose(ref, logit, atol=1e-3):
+            raise RuntimeError(
+                f"Streaming export parity check failed: batch={float(ref):.5f} "
+                f"stream={float(logit):.5f}")
+
+        torch.onnx.export(
+            stream, example, out,
+            input_names=["feat_frame", "h_in", "out_window"],
+            output_names=["logit", "h_out", "out_window_next"],
+            opset_version=18,
+        )
+        if metadata:
+            embed_onnx_metadata(out, metadata)
+        logger.info("Exported streaming head to %s (window=%d, parity OK)", out, window)
+
+
+class _GruStreamingHead(nn.Module):
+    """Stateful single-layer GRU head for ONNX streaming export.
+
+    Carries the GRU hidden state plus a sliding window of GRU outputs. The GRU
+    recurrence is unrolled with explicit ops (PyTorch convention) so the export
+    is bit-exact across state carry. Not used at training time.
+    """
+
+    def __init__(self, head: "GruClassifierHead", window: int) -> None:
+        super().__init__()
+        g = head.gru
+        self.Wih = nn.Parameter(g.weight_ih_l0.detach().clone())
+        self.Whh = nn.Parameter(g.weight_hh_l0.detach().clone())
+        self.bih = nn.Parameter(g.bias_ih_l0.detach().clone())
+        self.bhh = nn.Parameter(g.bias_hh_l0.detach().clone())
+        self.fc1 = head.fc1
+        self.fc2 = head.fc2
+        self.window = window
+
+    def forward(self, feat_chunk: torch.Tensor, h_in: torch.Tensor,
+                out_window: torch.Tensor):
+        h = h_in[0]                                   # [1, H]
+        gi_all = feat_chunk[0] @ self.Wih.t() + self.bih   # [T, 3H]
+        outs = []
+        for t in range(feat_chunk.shape[1]):
+            gh = h @ self.Whh.t() + self.bhh
+            i_r, i_z, i_n = gi_all[t:t + 1].chunk(3, 1)
+            h_r, h_z, h_n = gh.chunk(3, 1)
+            r = torch.sigmoid(i_r + h_r)
+            z = torch.sigmoid(i_z + h_z)
+            n = torch.tanh(i_n + r * h_n)
+            h = (1 - z) * n + z * h
+            outs.append(h)
+        o = torch.stack(outs, 1)                      # [1, T, H]
+        w = torch.cat([out_window, o], 1)[:, -self.window:, :]
+        logit = self.fc2(F.relu(self.fc1(w.mean(1)))).squeeze(-1)
+        return logit, h.unsqueeze(0), w
+
 
 # ---------------------- BC-ResNet classifier head ----------------------
 
