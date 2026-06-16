@@ -106,37 +106,38 @@ def find_positive_dataset(wake_word: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+_VAD_ENGINE = None  # module-level singleton — loading the model is not free
+
+
 def _load_vad_engine() -> Any:
-    """Load OVOS VAD plugin (silero by default).
+    """Load the pure-ONNX `vadonnx` VAD (bundled Silero by default).
 
-    Returns an object with ``is_silence(chunk_bytes) -> bool``.
+    Cached after the first call. The bundled Silero model works offline.
     """
-    from ovos_plugin_manager.vad import OVOSVADFactory
-
-    return OVOSVADFactory.create({"module": "ovos-vad-plugin-silero"})
+    global _VAD_ENGINE
+    if _VAD_ENGINE is None:
+        from vadonnx import load_vad
+        _VAD_ENGINE = load_vad("silero")
+    return _VAD_ENGINE
 
 
 def trim_silence_vad(wav: np.ndarray, sr: int, frame_ms: int = 30) -> np.ndarray:
-    """Trim leading/trailing silence using OVOS VAD (silero)."""
+    """Trim leading/trailing silence using vadonnx (pure-ONNX Silero VAD).
+
+    ``frame_ms`` is accepted for backwards compatibility but unused — vadonnx
+    handles framing internally. Returns the span from the first speech segment's
+    start to the last segment's end; returns *wav* unchanged if no speech found.
+    """
     vad = _load_vad_engine()
-    frame_len = int(sr * frame_ms / 1000)
-    pcm = (wav * 32767).astype(np.int16).tobytes()
-    voiced: List[bool] = []
-    for i in range(0, len(pcm), frame_len * 2):
-        frame = pcm[i: i + frame_len * 2]
-        if len(frame) < frame_len * 2:
-            break
-        try:
-            # is_silence returns True for silence — invert for voiced detection
-            voiced.append(not vad.is_silence(frame))
-        except Exception:
-            voiced.append(False)
-    if not any(voiced):
+    try:
+        segments = vad.get_speech_segments(wav.astype(np.float32), sample_rate=sr)
+    except Exception:
         return wav
-    idx = np.where(voiced)[0]
-    start = max(0, idx[0] * frame_len)
-    end = min(len(wav), (idx[-1] + 1) * frame_len)
-    return wav[start:end]
+    if not segments:
+        return wav
+    start = max(0, int(segments[0].start * sr))
+    end = min(len(wav), int(segments[-1].end * sr))
+    return wav[start:end] if end > start else wav
 
 
 def preprocess_audio(

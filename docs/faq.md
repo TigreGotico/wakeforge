@@ -714,7 +714,7 @@ Cell 4 is fully resume-safe across all three dataset modes:
 | Readiness score | `compute_readiness()` — `ww_trainer/evaluation.py` |
 | Intermediate checkpoints | `save_intermediate_checkpoint()` — `ww_trainer/checkpoint.py` |
 | TTS plugin discovery | `_collect_tts_plugins()` — uses `ovos_plugin_manager.tts.find_tts_plugins()` (auto-discovers edge-tts, piper, phoonnx, …) |
-| VAD | `OVOSVADFactory` with `ovos-vad-plugin-silero` by default |
+| VAD | `vadonnx` (pure-ONNX, bundled Silero) by default |
 | Feature cache | `FeatureCache` — `ww_trainer/cache.py` |
 | Silero VAD wrapper | `SileroVadWrapper` — `ww_trainer/feats.py` (lazy `torch.hub.load()` on first `forward`) |
 | Hardware tier presets | `ww_trainer/tiers.py` |

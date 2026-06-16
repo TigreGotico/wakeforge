@@ -36,8 +36,7 @@ dev = [
     "markovonnx",      # Markov / HMM extractor tests
     "umap-learn",      # visualisation tests
     "optuna",          # sweep tests
-    # git ref until voiceclonnx is published to PyPI (before ww-trainer's release)
-    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",  # VC delegation tests
+    "voiceclonnx",     # VC delegation tests
 ]
 
 # Alias used by CI (build-tests.yml installs [test])
@@ -48,7 +47,7 @@ test = [
     "markovonnx",
     "umap-learn",
     "optuna",
-    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
+    "voiceclonnx",
 ]
 
 # ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
@@ -88,10 +87,10 @@ markov = [
 # library (14 engines incl. knnvc/facodec/freevc/linacodec/chatterbox), zero
 # PyTorch at runtime. ``vc-onnx`` is kept as a back-compat alias.
 vc = [
-    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
+    "voiceclonnx",
 ]
 vc-onnx = [
-    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
+    "voiceclonnx",
 ]
 
 # ── Dataset generation ─────────────────────────────────────────────────────
@@ -99,7 +98,7 @@ datagen = [
     "datasets",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",    # default TTS; alternatives (piper, google-tx) auto-discovered via OPM
-    "ovos-vad-plugin-silero",      # default VAD
+    "vadonnx @ git+https://github.com/TigreGotico/vadonnx.git",  # pure-ONNX VAD (silence trimming)
 ]
 
 # ── Live microphone testing ────────────────────────────────────────────────
@@ -120,7 +119,7 @@ notebooks = [
     "datasets",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",
-    "ovos-vad-plugin-silero",
+    "vadonnx @ git+https://github.com/TigreGotico/vadonnx.git",
 ]
 
 [project.scripts]

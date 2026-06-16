@@ -62,7 +62,7 @@ logger.info("hdd4 accessible — %.1f GB RAM available, %.1f GB disk free", ram_
 # ---------------------------------------------------------------------------
 
 _REQUIRED_PLUGINS = {
-    "ovos_vad_plugin_silero": "ovos-vad-plugin-silero",
+    "vadonnx": "vadonnx",
     "ovos_tts_plugin_edge_tts": "ovos-tts-plugin-edge-tts",
 }
 _OPTIONAL_PLUGINS = {

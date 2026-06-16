@@ -97,7 +97,7 @@ Expected time: **15–20 min** on Kaggle.
 Troubleshooting:
 - *`datasets` not found* → re-run Cell 3.
 - *Not enough disk space* → set `DOWNLOAD_AUGMENT=false`.
-- *VAD plugin fails* → `!pip install -q ovos-vad-plugin-silero` then re-run.
+- *VAD fails* → `!pip install -q "git+https://github.com/TigreGotico/vadonnx.git"` then re-run.
 
 ### Cell 6 — Train
 
