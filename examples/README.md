@@ -69,6 +69,7 @@ Runnable demos covering every architecture in ww-trainer.
 | 41 | `41_hmm_feature_extraction.py` | Classical HMM feature extraction |
 | 42 | `42_phonmatch_training.py` | PhonMatchNet training with IPA phoneme conditioning |
 | 43 | `43_ocsvm_head.py` | `OCSVMHead` — FFN backbone + One-Class SVM classifier (anomaly-style) |
+| 44 | `44_inference_modes.py` | All four inference modes side by side — batch, rolling window, feature-cache streaming, stateful O(1) streaming (+ parity check) |
 
 ## Browser tester
 

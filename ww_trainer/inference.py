@@ -320,6 +320,75 @@ class OnnxWakeWordInferencer:
         return prob, cache
 
 
+class OnnxStreamingWakeWord:
+    """Stateful streaming wake-word inference — ONNX only, O(chunk) per step.
+
+    Pairs a featurizer ONNX with a *streaming* head ONNX exported via
+    :meth:`ww_trainer.model.GruClassifierHead.export_streaming_onnx`. Unlike
+    :meth:`OnnxWakeWordInferencer.infer_streaming` (which re-runs the head over a
+    cached feature window each call), this carries the GRU hidden state and a
+    sliding window of GRU outputs as model state, so the head never recomputes
+    history — the always-on / MCU pattern. No PyTorch at runtime.
+
+    Usage::
+
+        sw = OnnxStreamingWakeWord("feat.onnx", "head_streaming.onnx")
+        for chunk in audio_chunks:          # e.g. 0.1 s of 16 kHz audio
+            prob = sw.push(chunk)
+
+    Args:
+        featurizer_path: Feature extractor ONNX.
+        streaming_head_path: Streaming head ONNX (state I/O).
+        window: GRU-output window length the head was exported with.
+        hidden_dim: GRU hidden size of the head.
+    """
+
+    def __init__(self, featurizer_path: str, streaming_head_path: str,
+                 window: int = 100, hidden_dim: int = 128,
+                 hop_samples: int = 160, context_samples: int = 640) -> None:
+        providers = ["CPUExecutionProvider"]
+        self.ext = ort.InferenceSession(featurizer_path, providers=providers)
+        self.head = ort.InferenceSession(streaming_head_path, providers=providers)
+        self._ext_in = self.ext.get_inputs()[0].name
+        self._ext_out = self.ext.get_outputs()[0].name
+        self.window = window
+        self.hidden_dim = hidden_dim
+        self.hop = hop_samples            # featurizer hop (for frame accounting)
+        self.context = context_samples    # left-context carried for clean MFCC
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear the carried GRU state and audio context (call between utterances)."""
+        self._h = np.zeros((1, 1, self.hidden_dim), dtype=np.float32)
+        self._ow = np.zeros((1, self.window, self.hidden_dim), dtype=np.float32)
+        self._ctx = np.zeros(0, dtype=np.float32)
+
+    def push(self, audio_chunk: np.ndarray) -> float:
+        """Feed one audio chunk, advance state frame-by-frame, return the score.
+
+        The chunk is featurized *with* a left-context tail from the previous
+        call so MFCC frames are computed with proper context (avoiding chunk-edge
+        artifacts); only the frames belonging to the new audio are streamed
+        through the stateful head (O(1) per frame). Returns the sigmoid
+        probability after the last new frame.
+        """
+        chunk = audio_chunk.astype(np.float32)
+        buf = np.concatenate([self._ctx, chunk])
+        wav = buf[np.newaxis, :]
+        feats = self.ext.run([self._ext_out], {self._ext_in: wav})[0]  # [1, T, F]
+        # Frames attributable to the new chunk (the rest came from context).
+        n_new = max(1, int(round(len(chunk) / self.hop)))
+        n_new = min(n_new, feats.shape[1])
+        self._ctx = buf[-self.context:] if self.context else np.zeros(0, dtype=np.float32)
+        logit_val = 0.0
+        for t in range(feats.shape[1] - n_new, feats.shape[1]):
+            frame = feats[:, t:t + 1, :].astype(np.float32)
+            logit, self._h, self._ow = self.head.run(
+                None, {"feat_frame": frame, "h_in": self._h, "out_window": self._ow})
+            logit_val = float(np.asarray(logit).ravel()[0])
+        return float(1.0 / (1.0 + np.exp(-logit_val)))
+
+
 def cli_main() -> None:
     """CLI entry point for ``ww_trainer-infer``.
 

@@ -4,6 +4,32 @@ How to run wake word detection at runtime using exported ONNX models or PyTorch 
 
 ---
 
+## Inference modes at a glance
+
+There are three ways to run a trained model. They differ in how much audio they
+reconsider each step and how much compute that costs.
+
+| Mode | API | Per-step cost | Live example | Use when |
+|------|-----|--------------|--------------|----------|
+| **Batch / whole-clip** | `OnnxWakeWordInferencer.infer(audio)` | O(clip) | — | Offline scoring, evaluation, fixed-length clips |
+| **Rolling window** | `infer(buffer)` over a sliding raw-audio buffer | O(window), re-featurizes each hop | `scripts/eval/mic_test.py` | **Recommended live default** — model-agnostic, no chunk-edge artifacts |
+| **Feature-cache streaming** | `OnnxWakeWordInferencer.infer_streaming(chunk, cache)` | O(window) head, featurizes only the new chunk | `scripts/eval/mic_feature_cache.py` | Cheaper than rolling window; minor chunk-boundary effects |
+| **Stateful streaming (O(1))** | `OnnxStreamingWakeWord.push(chunk)` + `GruClassifierHead.export_streaming_onnx` | O(chunk) — carries GRU state | `scripts/eval/mic_stream.py` | Always-on / MCU; GRU heads only |
+
+Notes:
+
+- **Whole-clip vs window.** `infer()` mean-pools the GRU over *everything* you
+  give it, so scoring a long clip (with leading/trailing silence) dilutes the
+  wake-word region. For live audio, always score a **window** (~1 clip length),
+  not the whole stream.
+- **Continuous audio is harder than per-clip EER.** A live stream evaluates the
+  detector at hundreds of window positions and you react to the *peak*, so
+  worst-case false scores run higher than a one-score-per-clip test EER. Use a
+  `PredictionSmoother` (EMA + patience) and a threshold around 0.5–0.6 rather
+  than the per-clip-optimal threshold.
+
+---
+
 ## 1. ONNX-Only Inference
 
 After exporting the extractor and head to ONNX, runtime inference requires only `numpy` and `onnxruntime`. PyTorch is not imported at all.
@@ -149,6 +175,55 @@ process_audio_stream(stream)
 ```
 
 **Window size:** The default cache size is 50 frames. For a 10 ms hop (160 samples at 16 kHz), that covers 500 ms of audio — enough for a typical wake word. The window size is hardcoded in `infer_streaming` (`inference.py:97`). To change it, use the PyTorch path with `SlidingFeatureCacheTensor(window_size=N)`.
+
+---
+
+## 5b. Stateful streaming — O(1) per frame (GRU heads)
+
+`infer_streaming` (§5) and the rolling window both re-run the **whole** GRU over
+the feature window every step. For an always-on detector on a tiny CPU/MCU you
+want the GRU to *carry its hidden state* and never recompute history. That is
+what `OnnxStreamingWakeWord` does, paired with a head exported by
+`GruClassifierHead.export_streaming_onnx`.
+
+The streaming head ONNX takes the GRU hidden state and a sliding window of GRU
+outputs as explicit inputs/outputs and advances **one frame at a time**:
+
+```
+(feat_frame [1,1,F], h_in [1,1,H], out_window [1,W,H])
+   -> (logit [1], h_out [1,1,H], out_window_next [1,W,H])
+```
+
+The recurrence is unrolled with explicit matmul/sigmoid/tanh rather than the ONNX
+`GRU` op, because onnxruntime's `GRU` mishandles a non-zero initial hidden state
+relative to PyTorch (`linear_before_reset`), which silently breaks state carry.
+The explicit form is **bit-exact** with the batch head — `export_streaming_onnx`
+runs a parity check and aborts if it ever diverges (see
+`test/test_streaming_stateful.py`).
+
+**Export, then run live:**
+
+```bash
+# 1. Export the streaming head from a trained checkpoint
+python scripts/export_streaming.py --model-dir trained_models/gru/hey_mycroft --window 100
+
+# 2. Live mic, stateful path
+python scripts/eval/mic_stream.py --model-dir trained_models/gru/hey_mycroft --window 100
+```
+
+```python
+from ww_trainer.inference import OnnxStreamingWakeWord
+
+sw = OnnxStreamingWakeWord("best_f1_featurizer.onnx", "best_f1_streaming.onnx",
+                           window=100, hidden_dim=128)
+for chunk in audio_chunks:          # e.g. 0.1 s of 16 kHz audio
+    prob = sw.push(chunk)           # carries GRU state across calls
+```
+
+**Pick `window` ≈ the training clip length in frames** (16 kHz MFCC ≈ 100
+frames/s, so a ~1 s clip → `window=100`). The streaming inferencer also carries a
+short audio left-context so per-chunk MFCC frames are computed with proper
+context. Constraints: unidirectional (causal) GRU, `gru_n_layers=1`.
 
 ---
 

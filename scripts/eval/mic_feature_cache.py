@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Live microphone wake-word test — rolling-window mode (robust, any model).
+"""Live microphone wake-word test — feature-cache streaming mode.
 
-Maintains a rolling window of raw audio and re-runs the whole-clip ONNX path
-(``OnnxWakeWordInferencer.infer``) on it every hop. This is the recommended
-live demo: it re-featurizes the window each step, so it has no chunk-boundary
-artifacts and works for any trained model (MFCC/SincNet/HuBERT, FFN/GRU/...).
+Uses ``OnnxWakeWordInferencer.infer_streaming``: each chunk is featurized once
+(only the new audio), appended to a rolling **feature** cache, and the head runs
+over the cached window. Cheaper than the rolling-window demo (which re-featurizes
+the whole window each hop) at the cost of minor chunk-boundary effects in the
+features. Works for any head.
 
-For the always-on, O(1)-per-frame stateful path (GRU heads), see
-``mic_stream.py``.
+Mic mode trio:
+  - mic_test.py          rolling raw-audio window  (model-agnostic, robust)
+  - mic_feature_cache.py feature-cache streaming   (this file; cheaper)
+  - mic_stream.py        stateful O(1) streaming   (GRU heads; always-on / MCU)
 
 Usage:
-    python scripts/eval/mic_test.py --model-dir trained_models/.../hey_mycroft \
+    python scripts/eval/mic_feature_cache.py --model-dir trained_models/.../hey_mycroft \
         --threshold 0.5
 """
 import argparse
@@ -31,9 +34,8 @@ def main():
     ap.add_argument("--extractor-model", help="Featurizer ONNX (overrides --model-dir)")
     ap.add_argument("--classifier-model", help="Classifier ONNX (overrides --model-dir)")
     ap.add_argument("--threshold", type=float, default=0.5)
-    ap.add_argument("--window", type=float, default=1.5, help="Rolling window seconds")
-    ap.add_argument("--hop", type=float, default=0.25, help="Inference hop seconds")
-    ap.add_argument("--patience", type=int, default=2, help="Consecutive hops to fire")
+    ap.add_argument("--chunk", type=float, default=0.1, help="Audio chunk seconds")
+    ap.add_argument("--patience", type=int, default=2)
     args = ap.parse_args()
 
     if args.extractor_model and args.classifier_model:
@@ -47,26 +49,22 @@ def main():
     inf = OnnxWakeWordInferencer(extractor_path=ext, head_path=clf)
     smoother = PredictionSmoother(method="ema", threshold=args.threshold,
                                   patience=args.patience, ema_alpha=0.5,
-                                  frame_rate_hz=1.0 / args.hop)
+                                  frame_rate_hz=1.0 / args.chunk)
 
-    W, H = int(args.window * SR), int(args.hop * SR)
-    buf = np.zeros(W, dtype=np.float32)
+    H = int(args.chunk * SR)
     q: queue.Queue = queue.Queue()
-    sd.default.samplerate = SR
+    cache = None
 
     def cb(indata, frames, t, status):
         q.put(indata[:, 0].copy() if indata.ndim > 1 else indata.copy())
 
-    print(f"=== LIVE (rolling window): say the wake word  (threshold={args.threshold}) ===")
+    print(f"=== LIVE (feature-cache streaming): say the wake word  (threshold={args.threshold}) ===")
     print("Ctrl+C to stop.\n")
     with sd.InputStream(channels=1, samplerate=SR, blocksize=H, dtype="float32", callback=cb):
         try:
             while True:
                 block = q.get()
-                n = len(block)
-                buf = np.roll(buf, -n)
-                buf[-n:] = block
-                prob = inf.infer(buf)
+                prob, cache = inf.infer_streaming(block, cache)
                 smoothed = smoother.update(prob)
                 bar = "#" * int(smoothed * 40)
                 tag = "WAKE!" if smoother.is_triggered() else " -- "
