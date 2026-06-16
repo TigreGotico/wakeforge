@@ -13,7 +13,7 @@ reconsider each step and how much compute that costs.
 |------|-----|--------------|--------------|----------|
 | **Batch / whole-clip** | `OnnxWakeWordInferencer.infer(audio)` | O(clip) | — | Offline scoring, evaluation, fixed-length clips |
 | **Rolling window** | `infer(buffer)` over a sliding raw-audio buffer | O(window), re-featurizes each hop | `scripts/eval/mic_test.py` | **Recommended live default** — model-agnostic, no chunk-edge artifacts |
-| **Feature-cache streaming** | `OnnxWakeWordInferencer.infer_streaming(chunk, cache)` | O(window) head, featurizes only the new chunk | §5 below | Cheaper than rolling window; minor chunk-boundary effects |
+| **Feature-cache streaming** | `OnnxWakeWordInferencer.infer_streaming(chunk, cache)` | O(window) head, featurizes only the new chunk | `scripts/eval/mic_feature_cache.py` | Cheaper than rolling window; minor chunk-boundary effects |
 | **Stateful streaming (O(1))** | `OnnxStreamingWakeWord.push(chunk)` + `GruClassifierHead.export_streaming_onnx` | O(chunk) — carries GRU state | `scripts/eval/mic_stream.py` | Always-on / MCU; GRU heads only |
 
 Notes:
