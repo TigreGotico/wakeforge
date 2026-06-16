@@ -330,7 +330,6 @@ class TestOCSVMHead:
         assert emb.shape == (3, 32), f"Expected (3, 32), got {emb.shape}"
 
     def test_fit_ocsvm(self):
-        pytest.importorskip("sklearn")
         head = self._make_head()
         # Simulate a dataloader yielding (feats, labels) batches
         batches = [
@@ -342,7 +341,6 @@ class TestOCSVMHead:
         assert head._sv_vectors.shape[1] == 32
 
     def test_forward_shape_fitted(self):
-        pytest.importorskip("sklearn")
         head = self._make_head()
         batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
         head.fit_ocsvm(batches)
@@ -358,7 +356,6 @@ class TestOCSVMHead:
         onnx.checker.check_model(out_path)
 
     def test_onnx_export_fitted(self, tmp_path):
-        pytest.importorskip("sklearn")
         head = self._make_head()
         batches = [(torch.randn(4, 50, 40), torch.tensor([1, 1, 1, 1]))]
         head.fit_ocsvm(batches)
@@ -368,7 +365,6 @@ class TestOCSVMHead:
         onnx.checker.check_model(out_path)
 
     def test_onnx_inference_parity(self, tmp_path):
-        pytest.importorskip("sklearn")
         import onnxruntime as ort
         head = self._make_head()
         head.eval()
@@ -386,7 +382,6 @@ class TestOCSVMHead:
     @pytest.mark.parametrize("kernel", ["rbf", "linear", "poly", "sigmoid"])
     def test_decision_scores_match_sklearn(self, kernel):
         """Torch kernel decision must exactly match sklearn.decision_function for all kernels."""
-        pytest.importorskip("sklearn")
         from sklearn.svm import OneClassSVM
         torch.manual_seed(0)
         head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
@@ -420,7 +415,6 @@ class TestOCSVMHead:
     @pytest.mark.parametrize("kernel", ["linear", "poly", "sigmoid"])
     def test_non_rbf_kernels_fit_and_onnx_parity(self, tmp_path, kernel):
         """All supported kernels must fit, produce correct [B] output, and export valid ONNX."""
-        pytest.importorskip("sklearn")
         import onnx, onnxruntime as ort
         head = OCSVMHead(input_size=40, hidden_dim=32, embed_dim=16,
                          kernel=kernel, device="cpu")

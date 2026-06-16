@@ -29,9 +29,9 @@ evaluate, export, deploy.
 ## Highlights
 
 - **Single-string-to-ONNX** quickstart — `train_from_wakeword("hey jarvis", out)` produces a deployable model.
-- **17 featurizers × 15 classifier heads × 17 losses** — a real research surface.
+- **11 built-in featurizers (+ enrichment wrappers) × 15 classifier heads × 15 losses** — a real research surface.
 - **Genetic + Bayesian HP search** with island-model parallelism, adaptive mutation, two-stage refinement.
-- **Synthetic datagen** — TTS + voice conversion to bootstrap a dataset from zero recordings.
+- **Synthetic datagen** — TTS + pure-ONNX voice conversion ([voiceclonnx](https://github.com/TigreGotico/voiceclonnx)) to bootstrap a dataset from zero recordings.
 - **Hard-negative mining** and **infinite training** for industrial-scale negative pools.
 - **ONNX-first**: featurizer and head export cleanly; no CUDA-only kernels.
 - **Hardware tiers** from `esp32_nano` (sub-1 KB int8) to `hubert_medium`.
@@ -59,7 +59,8 @@ Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,
 
 A default quickstart run needs **≈ 6–8 GB disk** and **~5 GB download**
 (or ~1.5 GB with `--no-augmentation-data`). Voice cloning via `--vc-refs`
-adds **another ~5 GB** for the Chatterbox ONNX weights. Full per-dataset
+adds the per-engine ONNX weights downloaded on first use from the
+HuggingFace Hub (size varies by `voiceclonnx` engine). Full per-dataset
 budget: [`docs/getting_started/requirements.md`](docs/getting_started/requirements.md).
 ## 60-second quickstart
 

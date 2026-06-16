@@ -15,6 +15,55 @@ on:
       - ".github/workflows/notebook-smoke.yml"
 
 jobs:
+  # Cheap coverage for ALL notebooks: validate each is well-formed and that
+  # every code cell compiles (catches syntax errors / obvious breakage without
+  # downloading the multi-GB datasets the heavier notebooks need to execute).
+  compile-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Compile every notebook's code cells
+        run: |
+          python - <<'PY'
+          import json, glob, sys
+
+          def py_lines(src):
+              """Drop IPython magics / shell escapes (incl. backslash-continued)."""
+              out, skip_cont = [], False
+              for line in src.splitlines():
+                  if skip_cont:
+                      skip_cont = line.rstrip().endswith("\\")
+                      continue
+                  if line.lstrip().startswith(("!", "%")):
+                      skip_cont = line.rstrip().endswith("\\")
+                      continue
+                  out.append(line)
+              return "\n".join(out)
+
+          failures, n_cells = [], 0
+          nbs = sorted(glob.glob("notebooks/**/*.ipynb", recursive=True))
+          for nb in nbs:
+              doc = json.load(open(nb))
+              for i, c in enumerate(doc.get("cells", [])):
+                  if c.get("cell_type") != "code":
+                      continue
+                  src = "".join(c.get("source", []))
+                  # Whole-cell magics (e.g. %%bash, %%capture) → not Python.
+                  if src.lstrip().startswith("%%"):
+                      continue
+                  n_cells += 1
+                  try:
+                      compile(py_lines(src), f"{nb}[cell {i}]", "exec")
+                  except SyntaxError as exc:
+                      failures.append(f"{nb}[cell {i}]: {exc}")
+          print(f"Checked {len(nbs)} notebooks, {n_cells} code cells")
+          if failures:
+              print("\n".join(failures)); sys.exit(1)
+          PY
+
   smoke:
     runs-on: ubuntu-latest
 

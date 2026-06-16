@@ -363,25 +363,23 @@ def voice_convert_batch(
     vc_refs_dir: Path,
     device: str = "auto",
     n_target: Optional[int] = None,
+    engine: Optional[str] = None,
 ) -> List[Path]:
-    """Apply Chatterbox VC to all WAVs in *input_dir* using random reference voices.
+    """Voice-convert all WAVs in *input_dir* using random reference voices.
 
-    Each source WAV is converted using a randomly chosen reference voice.
-    If *n_target* > number of source files, sources are reused with different
-    references.
+    Delegates to the pure-ONNX `voiceclonnx` library via
+    :func:`ww_trainer.vc_helpers.load_vc_backend`. Each source WAV is converted
+    using a randomly chosen reference voice. If *n_target* > number of source
+    files, sources are reused with different references.
+
+    Args:
+        engine: voiceclonnx engine alias (default: ``WW_VC_ENGINE`` env, then
+            ``knnvc``). ``device`` is accepted for backwards compatibility but
+            ignored (voiceclonnx is CPU/ONNX).
 
     Returns list of output WAV paths.
     """
-    try:
-        from chatterbox_onnx import ChatterboxOnnx
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            f"Voice conversion dependency missing: {e.name!r}. "
-            "Install a VC backend extra:\n"
-            "    uv pip install -e \".[vc-onnx]\"   # CPU ONNX, recommended\n"
-            "    uv pip install -e \".[vc-torch]\"  # GPU PyTorch backend\n"
-            "Or run datagen without --vc-refs to skip voice conversion."
-        ) from e
+    from ww_trainer.vc_helpers import load_vc_backend
 
     ref_voices = sorted(vc_refs_dir.rglob("*.wav"))
     if not ref_voices:
@@ -394,7 +392,8 @@ def voice_convert_batch(
         return []
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    vc_model = ChatterboxOnnx(device=device)
+    vc_model = load_vc_backend(engine=engine)
+    logger.info("Voice conversion via %s (sr=%d)", vc_model.name, vc_model.sample_rate)
 
     if n_target is None:
         n_target = len(sources)
@@ -405,11 +404,7 @@ def voice_convert_batch(
         ref = random.choice(ref_voices)
         out_path = output_dir / f"vc_{uuid4().hex[:12]}.wav"
         try:
-            vc_model.voice_convert(
-                source_audio_path=str(src),
-                target_voice_path=str(ref),
-                output_file_name=str(out_path),
-            )
+            vc_model.vc(str(src), str(ref), str(out_path))
             if out_path.exists():
                 written.append(out_path)
         except Exception as e:
@@ -953,7 +948,8 @@ def cli_main() -> None:
         "--no-vad", action="store_true", help="Disable VAD trimming"
     )
     parser.add_argument(
-        "--vc-refs", type=str, default=None, help="Reference voices dir for Chatterbox VC"
+        "--vc-refs", type=str, default=None,
+        help="Reference voices dir for voice conversion (voiceclonnx)"
     )
     parser.add_argument(
         "--vc-device",

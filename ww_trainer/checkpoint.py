@@ -152,7 +152,9 @@ def load_checkpoint(
         state = torch.load(trainer_state_path, map_location=device)
         start_epoch = state.get("epoch", 0)
         metrics = state.get("metrics", {})
-        if optimizer is not None and "optimizer_state" in state:
+        # Guard against an empty optimizer_state (saved when optimizer was None):
+        # load_state_dict({}) would raise on the missing ``param_groups`` key.
+        if optimizer is not None and state.get("optimizer_state"):
             optimizer.load_state_dict(state["optimizer_state"])
         logger.info("[Resume] Loaded checkpoint from epoch %d", start_epoch)
     else:

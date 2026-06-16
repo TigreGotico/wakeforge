@@ -241,15 +241,13 @@ class TestLogUmap:
             viz._HAS_UMAP = orig
 
     def test_umap_with_real_umap(self, tmp_path):
-        """If umap is available, uses real UMAP."""
+        """umap-learn is a declared test dependency — exercise the real path."""
         import ww_trainer.visualization as viz
         model = _stub_model()
         dataset = _make_dataset(tmp_path)
-        if viz._HAS_UMAP:
-            result, _ = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
-            assert result is None or isinstance(result, (str, Path))
-        else:
-            pytest.skip("umap-learn not installed")
+        assert viz._HAS_UMAP, "umap-learn is a test dependency and must be importable"
+        result, _ = viz.log_umap(model, dataset, outdir=tmp_path, epoch=1, device="cpu")
+        assert result is None or isinstance(result, (str, Path))
 
     def test_mlflow_logged(self, tmp_path):
         import ww_trainer.visualization as viz

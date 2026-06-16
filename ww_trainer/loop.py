@@ -329,6 +329,25 @@ def training_loop(
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
+    # Resume: restore optimizer state, epoch counter, and best-metric tracking so
+    # training genuinely continues instead of silently re-running from scratch.
+    # (The trainer ctor already restored model weights; here we also recover the
+    # optimizer/LR schedule/best metrics that live in the sibling ``.ts`` file.)
+    start_epoch = 0
+    resumed_metrics: dict = {}
+    if resume:
+        loaded_epoch, resumed_metrics = trainer.load_checkpoint(resume, optimizer)
+        if resumed_metrics:
+            # ``loaded_epoch`` is the last completed epoch → continue from the next.
+            start_epoch = loaded_epoch + 1
+            # Fast-forward the LR schedule so warmup/cosine resumes at the right point.
+            for _ in range(start_epoch):
+                scheduler.step()
+            logger.info(
+                "[Resume] Continuing from epoch %d/%d (best F1 so far: %.4f)",
+                start_epoch + 1, epochs, resumed_metrics.get("f1", 0.0),
+            )
+
     loss_manager = LossManager(
         loss_configs=trainer.losses_cfg, mining_type=mining_type, device=trainer.device,
         neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
@@ -368,6 +387,11 @@ def training_loop(
             logger.warning("Failed to log run params: %s", exc)
 
     best_metrics = {"loss": float("inf"), "precision": 0.0, "recall": 0.0, "f1": 0.0}
+    # Carry forward best metrics from a resumed run so a mediocre first epoch
+    # can't overwrite a previously-saved better checkpoint.
+    for _k in best_metrics:
+        if _k in resumed_metrics:
+            best_metrics[_k] = resumed_metrics[_k]
     best_fitness = -1.0
     epochs_no_new = 0
     hard_negatives: List[Tuple[str, str]] = []
@@ -376,8 +400,9 @@ def training_loop(
     current_threshold = 0.5  # updated each epoch via find_optimal_threshold
     _epoch_history: List[dict] = []  # accumulates per-epoch metrics for summary plots
 
-    ep = 0
-    epoch_bar = tqdm(range(epochs), desc="Epochs", unit="ep", position=0)
+    ep = start_epoch
+    epoch_bar = tqdm(range(start_epoch, epochs), desc="Epochs", unit="ep",
+                     position=0, initial=start_epoch, total=epochs)
     for ep in epoch_bar:
         epoch_bar.set_description(f"Epoch {ep+1}/{epochs}")
         logger.info("=== Epoch %d/%d ===", ep + 1, epochs)

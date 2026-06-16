@@ -82,7 +82,6 @@ class TestOCSVMHeadUnit:
         assert feats.grad is not None
 
     def test_fit_ocsvm_populates_buffers(self):
-        pytest.importorskip("sklearn")
         from ww_trainer.model import OCSVMHead
         import torch
         head = OCSVMHead(input_size=13, hidden_dim=32, embed_dim=16, device="cpu")
@@ -97,7 +96,6 @@ class TestOCSVMHeadUnit:
 
     def test_fit_ocsvm_stores_correct_gamma(self):
         """_gamma_val buffer must match sklearn's actual computed gamma, not 1/embed_dim."""
-        pytest.importorskip("sklearn")
         from sklearn.svm import OneClassSVM
         from ww_trainer.model import OCSVMHead
         import torch
@@ -116,7 +114,6 @@ class TestOCSVMHeadUnit:
 
     def test_fit_ocsvm_changes_output(self):
         """Scores must change after fitting (SV buffers replace zero sentinel)."""
-        pytest.importorskip("sklearn")
         from ww_trainer.model import OCSVMHead
         import torch
         head = OCSVMHead(input_size=13, hidden_dim=32, embed_dim=16, device="cpu")
@@ -142,7 +139,6 @@ class TestOCSVMHeadUnit:
             head.fit_ocsvm(batches)
 
     def test_fit_ocsvm_raises_on_no_positives(self):
-        pytest.importorskip("sklearn")
         from ww_trainer.model import OCSVMHead
         import torch
         head = OCSVMHead(input_size=13, hidden_dim=32, embed_dim=16, device="cpu")
@@ -159,7 +155,6 @@ class TestOCSVMHeadUnit:
         onnx.checker.check_model(path)
 
     def test_onnx_export_fitted(self, tmp_path):
-        pytest.importorskip("sklearn")
         from ww_trainer.model import OCSVMHead
         import torch, onnx
         head = OCSVMHead(input_size=13, hidden_dim=32, embed_dim=16, device="cpu")
@@ -170,7 +165,6 @@ class TestOCSVMHeadUnit:
         onnx.checker.check_model(path)
 
     def test_onnx_inference_parity_fitted(self, tmp_path):
-        pytest.importorskip("sklearn")
         import onnxruntime as ort
         from ww_trainer.model import OCSVMHead
         import torch
@@ -197,7 +191,6 @@ class TestOCSVMTrainingLoop:
 
     def test_train_ocsvm_completes(self, tiny_dataset, tmp_path):
         """Training loop runs to completion without error."""
-        pytest.importorskip("sklearn")
         trainer = _make_ocsvm_trainer()
         result = trainer.train(
             train_data=tiny_dataset,
@@ -213,7 +206,6 @@ class TestOCSVMTrainingLoop:
 
     def test_train_ocsvm_fits_svm_automatically(self, tiny_dataset, tmp_path):
         """fit_ocsvm() is called by the loop — SV buffers must be non-trivial after training."""
-        pytest.importorskip("sklearn")
         trainer = _make_ocsvm_trainer()
         trainer.train(
             train_data=tiny_dataset,
@@ -232,7 +224,6 @@ class TestOCSVMTrainingLoop:
 
     def test_train_ocsvm_onnx_export_after_training(self, tiny_dataset, tmp_path):
         """After training + fitting, ONNX export must produce a valid graph."""
-        pytest.importorskip("sklearn")
         import onnx
         trainer = _make_ocsvm_trainer()
         trainer.train(
@@ -251,7 +242,6 @@ class TestOCSVMTrainingLoop:
 
     def test_train_ocsvm_checkpoint_preserves_sv_buffers(self, tiny_dataset, tmp_path):
         """SV buffers must survive a save/load checkpoint round-trip."""
-        pytest.importorskip("sklearn")
         import torch
         trainer = _make_ocsvm_trainer()
         trainer.train(

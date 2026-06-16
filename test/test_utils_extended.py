@@ -46,11 +46,12 @@ def test_compute_metric_statistics_ap_nonneg():
 # ---- sample_semihard_triplets ----
 
 def test_sample_semihard_triplets_validity():
+    import random
+    random.seed(0)  # mining shuffles anchors via the global RNG
     emb = _emb(8)
     lab = _labels(8).long()
     a, p, n, frac = sample_semihard_triplets(lab, emb, margin=1.0)
-    if a is None:
-        pytest.skip("No semihard triplets found — retry with more samples")
+    assert a is not None, "expected semihard triplets for a balanced, seeded batch"
     B = 8
     assert a.max() < B and p.max() < B and n.max() < B
     for ai, pi in zip(a.tolist(), p.tolist()):
@@ -70,20 +71,20 @@ def test_sample_semihard_triplets_all_negative():
 # ---- sample_triplets with different mining_type ----
 
 def test_sample_triplets_hard_mining():
+    import random
+    random.seed(0)
     emb = _emb(8)
     lab = _labels(8).long()
     a, p, n, frac = sample_triplets(lab, emb, margin=1.0, mining_type="hard")
-    if a is None:
-        pytest.skip("No hard triplets found")
     assert a is not None
 
 
 def test_sample_triplets_random_mining():
+    import random
+    random.seed(0)
     emb = _emb(8)
     lab = _labels(8).long()
     a, p, n, frac = sample_triplets(lab, emb, margin=1.0, mining_type="random")
-    if a is None:
-        pytest.skip("No random triplets found")
     assert a is not None
 
 

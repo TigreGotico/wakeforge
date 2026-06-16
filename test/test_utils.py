@@ -46,12 +46,14 @@ def test_pairwise_distance_nonnegative():
 # ---- sample_triplets ----
 
 def test_sample_triplets_validity():
+    import random
     from ww_trainer.utils import sample_triplets
+    random.seed(0)  # sample_triplets shuffles anchors via the global RNG
     emb = _emb(8)
     lab = _labels(8).long()
     a, p, n, frac = sample_triplets(lab, emb, margin=1.0)
-    if a is None:
-        pytest.skip("No valid triplets found in random batch — retry with more samples")
+    # With 4 positives + 4 negatives and seeded RNG, valid triplets always exist.
+    assert a is not None, "expected valid triplets for a balanced, seeded batch"
     B = 8
     assert a.max() < B and p.max() < B and n.max() < B
     # anchor and positive must have same label

@@ -27,10 +27,16 @@ dependencies = [
 [project.optional-dependencies]
 
 # ── Development & testing ──────────────────────────────────────────────────
+# Optional-feature deps are included here so their tests actually RUN in CI
+# instead of being silently skipped (importorskip hides real breakage).
 dev = [
     "pytest",
     "pytest-cov",
     "onnxscript",
+    "markovonnx",      # Markov / HMM extractor tests
+    "umap-learn",      # visualisation tests
+    "optuna",          # sweep tests
+    "voiceclonnx",     # voice-conversion delegation tests
 ]
 
 # Alias used by CI (build-tests.yml installs [test])
@@ -38,6 +44,10 @@ test = [
     "pytest",
     "pytest-cov",
     "onnxscript",
+    "markovonnx",
+    "umap-learn",
+    "optuna",
+    "voiceclonnx",
 ]
 
 # ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
@@ -72,35 +82,15 @@ markov = [
     "markovonnx",
 ]
 
-# ── Voice conversion backends ──────────────────────────────────────────────
-# CPU ONNX backend — recommended default
-vc-onnx = [
-    "chatterbox-onnx",
-]
-
-# GPU PyTorch backend — requires CUDA
-vc-torch = [
-    "chatterbox-tts",
-]
-
-# LinaCodec audio-to-audio VC backend (48 kHz, CPU or GPU)
-vc-linacodec = [
-    "vocos",
-    "huggingface-hub",
-    "jsonargparse",
-    "safetensors",
-    # flash-attn is optional within linacodec; omit here as it requires
-    # a CUDA build environment — install manually if desired
-]
-
-# All VC backends (convenience)
+# ── Voice conversion ───────────────────────────────────────────────────────
+# Voice conversion is provided exclusively by the pure-ONNX `voiceclonnx`
+# library (14 engines incl. knnvc/facodec/freevc/linacodec/chatterbox), zero
+# PyTorch at runtime. ``vc-onnx`` is kept as a back-compat alias.
 vc = [
-    "chatterbox-onnx",
-    "chatterbox-tts",
-    "vocos",
-    "huggingface-hub",
-    "jsonargparse",
-    "safetensors",
+    "voiceclonnx",
+]
+vc-onnx = [
+    "voiceclonnx",
 ]
 
 # ── Dataset generation ─────────────────────────────────────────────────────

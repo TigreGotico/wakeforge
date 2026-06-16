@@ -155,12 +155,11 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
     try:
         return run_datagen_pipeline(datagen_cfg)
     except ModuleNotFoundError as e:
-        vc_modules = {"chatterbox_onnx", "chatterbox_tts", "vocos"}
-        if e.name in vc_modules or (cfg.vc_refs_dir and e.name and "chatterbox" in e.name):
+        vc_modules = {"voiceclonnx"}
+        if e.name in vc_modules or (cfg.vc_refs_dir and e.name and "voiceclonnx" in e.name):
             hint = (
-                "Voice conversion dependency missing. Install a VC backend:\n"
-                "    uv pip install -e \".[vc-onnx]\"   # CPU ONNX, recommended\n"
-                "    uv pip install -e \".[vc-torch]\"  # GPU PyTorch backend\n"
+                "Voice conversion dependency missing. Install the VC extra:\n"
+                "    uv pip install -e \".[vc]\"   # pure-ONNX voiceclonnx\n"
                 "Or drop --vc-refs to skip voice cloning."
             )
         else:

@@ -113,7 +113,7 @@ Version: `0.4.0a1` — `ww_trainer/version.py`
 | `ww_trainer.evaluation` | `compute_fitness_score`, `compute_readiness` |
 | `ww_trainer.checkpoint` | Save / load / average checkpoints |
 | `ww_trainer.infinite_loop` | Goal-based open-ended training |
-| `ww_trainer.vc_helpers` | TTS / VC backend factory |
+| `ww_trainer.vc_helpers` | voiceclonnx VC delegation |
 | `ww_trainer.env` | `.env` loader |
 
 ---

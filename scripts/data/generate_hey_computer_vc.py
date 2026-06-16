@@ -77,8 +77,7 @@ parser.add_argument("--n-sources", type=int, default=50,
                     help="Source positives from synth_output to clone from")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--budget-hours", type=float, default=12.0)
-parser.add_argument("--vc-backend", default="auto",
-                    choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"])
+parser.add_argument("--vc-backend", default="auto")
 parser.add_argument("--vc-device", default="cpu")
 parser.add_argument("--skip-existing", action="store_true", default=True)
 parser.add_argument("--dry-run", action="store_true")

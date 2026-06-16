@@ -72,7 +72,7 @@ All options:
 | `--n-positive` | `1000` | Positive samples to synthesise |
 | `--lang` | `en` | BCP-47 language for TTS (e.g. `en-us`, `nl-nl`, `pt-br` — pass a region for best voice selection) |
 | `--adversarial/--no-adversarial` | on | Grapheme hard-negatives |
-| `--vc-refs` | unset | Dir of reference WAVs for voice conversion (needs `[vc-onnx]`/`[vc-torch]`) |
+| `--vc-refs` | unset | Dir of reference WAVs for voice conversion (needs `[vc]`) |
 | `--augmentation-data/--no-augmentation-data` | on | Download bg_noise/music/RIR |
 | `--reuse-dataset` | off | Skip datagen if dataset exists |
 | `--device` | `auto` | `auto`, `cpu`, or `cuda` |
@@ -145,8 +145,8 @@ the timbre of a reference speaker, multiplying effective diversity.
 
 VC is opt-in and requires:
 
-1. The VC extra: `uv pip install -e ".[vc-onnx]"` (CPU ONNX, recommended) or
-   `".[vc-torch]"` (GPU PyTorch).
+1. The VC extra: `uv pip install -e ".[vc]"` (pure-ONNX `voiceclonnx`,
+   zero PyTorch at runtime).
 2. A directory of short reference WAVs (3–10 s of clean speech each), one
    per target speaker.
 
@@ -159,9 +159,9 @@ ww_trainer-quickstart \
   --vc-refs ./my_voices/
 ```
 
-Without `--vc-refs`, the VC step is skipped entirely — no `chatterbox_*`
+Without `--vc-refs`, the VC step is skipped entirely — no `voiceclonnx`
 dependency is loaded. With `--vc-refs` but missing extras, the quickstart
-fails fast with a pointer to `[vc-onnx]`.
+fails fast with a pointer to `[vc]`.
 
 ## Skipping Datagen
 

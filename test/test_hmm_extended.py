@@ -1,6 +1,5 @@
 """Extended tests for HMMStateExtractor."""
 import math
-import pytest
 import torch
 import numpy as np
 from ww_trainer.feats import MfccExtractor, HMMStateExtractor
@@ -13,7 +12,6 @@ def test_hmm_fit_updates_parameters():
     uniform initialisation.  This removes the flakiness caused by using identical
     audio samples (uniform K-means convergence, trivially uniform HMM params).
     """
-    pytest.importorskip("markovonnx")
     base = MfccExtractor(n_mfcc=13)
     ext = HMMStateExtractor(base, n_states=4, n_codes=8)
     ext.to("cpu")

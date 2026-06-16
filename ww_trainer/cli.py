@@ -43,10 +43,16 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--batch-size", default=16, type=int, help="Mini-batch size.")
 @click.option("--lr", default=5e-4, type=float, help="Initial learning rate.")
 @click.option("--resume", default=None,  help="Resume training from an existing checkpoint (.pt).")
+@click.option("--seed", default=42, type=int,
+              help="Random seed for the train/test split and training (default: 42).")
 @click.option("--output-dir", default=None, help="Directory to store checkpoints, metrics, and visualizations.")
 @click.option("--save-best", is_flag=True, help="If set, saves separate checkpoints for best precision/recall/F1/loss.")
 # -------------------------- Architecture --------------------------
 @click.option("--featurizer", type=str, help="path feature extractor .onnx model")
+@click.option("--featurizer-type", "featurizer_type", default="onnx",
+              help="Built-in featurizer ('onnx', 'mfcc', 'filterbank', 'sincnet', "
+                   "'gammatone', 'leaf', 'plp', 'pncc', 'cqt', 'delta_mfcc', "
+                   "'delta_filterbank'). Overridden by --tier when a tier is set.")
 @click.option("--feature-dim", type=int,  help="Number of output features from onnx featurizer.")
 @click.option("--arch", default="gru", help="Model architecture (e.g., gru, cnn, ffn).")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
@@ -195,6 +201,7 @@ def train(**opts: dict) -> None:
     arch = opts.pop("arch")
     out_dir = opts.pop("output_dir") or f"trained_models/{arch}/{ww_name}"
     onnx_model = opts.pop("featurizer")
+    featurizer_type = opts.pop("featurizer_type", "onnx")
     feat_dim = opts.pop("feature_dim")
     use_amp = opts.pop("use_amp", False)
     accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
@@ -223,7 +230,7 @@ def train(**opts: dict) -> None:
     if tier is not None:
         tc = get_tier(tier)
         arch = tc.head_arch
-        featurizer_type = tc.extractor_type
+        featurizer_type = tc.extractor_type   # tier overrides --featurizer-type
         opts["hidden_dim"] = tc.hidden_dim
         opts["bidirectional"] = tc.bidirectional
         opts["gru_n_layers"] = tc.gru_n_layers
@@ -255,21 +262,29 @@ def train(**opts: dict) -> None:
             cfg["margin"] = opts.get("triplet_margin", 1.0)
         losses_cfg.append(cfg)
 
+    # Seed the global RNG *before* the shuffle so the train/test split is
+    # reproducible for a given --seed (the trainer seeds itself later, which is
+    # too late to make the split deterministic).
+    from ww_trainer.reproducibility import set_seed
+    seed = opts.pop("seed", 42)
+    set_seed(seed)
+
     with open(metadata, "r", encoding="utf-8") as f:
         entries: List[Tuple[str, str]] = [tuple(line.strip().split(",", 1))
                                           for line in f if line.strip()]
+    # Filter to existing files *before* splitting so missing files don't skew
+    # the train/test ratio away from --split.
+    entries = [e for e in entries if os.path.isfile(e[0])]
     random.shuffle(entries)
 
     if test_metadata:
         with open(test_metadata, "r", encoding="utf-8") as f:
             test_data = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+        test_data = [f for f in test_data if os.path.isfile(f[0])]
         train_data = entries
     else:
         split_idx = int(len(entries) * opts["split"])
         train_data, test_data = entries[:split_idx], entries[split_idx:]
-
-    train_data = [f for f in train_data if os.path.isfile(f[0])]
-    test_data = [f for f in test_data if os.path.isfile(f[0])]
 
     click.secho(f"Training {arch} on {len(train_data)} samples", fg="blue", bold=True)
 
@@ -278,7 +293,8 @@ def train(**opts: dict) -> None:
 
     resume = opts.get("resume")
     trainer = WakeWordTrainer(arch=arch, featurizer=onnx_model, feature_dim=feat_dim,
-                              wake_word=ww_name,
+                              featurizer_type=featurizer_type,
+                              wake_word=ww_name, seed=seed,
                               mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
                               use_amp=use_amp,
                               freeze_extractor=freeze_extractor,
