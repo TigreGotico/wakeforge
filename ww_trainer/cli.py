@@ -196,7 +196,7 @@ def train(**opts: dict) -> None:
 
     metadata = opts.pop("metadata")
     test_metadata = opts.pop("test_metadata")
-    ww_name = opts.get("wake_word")
+    ww_name = opts.pop("wake_word")
     mlflow_uri = opts.pop("mlflow_uri")
     arch = opts.pop("arch")
     out_dir = opts.pop("output_dir") or f"trained_models/{arch}/{ww_name}"
@@ -301,12 +301,15 @@ def train(**opts: dict) -> None:
                               freeze_layers=freeze_layers,
                               unfreeze_at_epoch=unfreeze_at_epoch,
                               **opts)
-    # Wire FeatureCache into trainer.augment_opts so AudioDataset can use it
+    # Build a FeatureCache and hand it to the training loop (which forwards it
+    # to AudioDataset). It must NOT go into augment_opts — the loop already
+    # passes feature_cache= explicitly, so duplicating it there collides.
+    feature_cache_obj = None
     if not no_feature_cache:
         from ww_trainer.cache import FeatureCache
         ext = trainer.model.feature_extractor
         ext_hash = f"{ext.feature_dim}_{ext.sample_rate}"
-        trainer.augment_opts["feature_cache"] = FeatureCache(
+        feature_cache_obj = FeatureCache(
             feature_cache_dir, type(ext).__name__, ext_hash
         )
         click.secho(f"[FeatureCache] dir={feature_cache_dir}", fg="cyan")
@@ -369,6 +372,7 @@ def train(**opts: dict) -> None:
             balanced_replacement=balanced_replacement,
             fitness_checkpoint=fitness_checkpoint,
             fitness_param_budget=fitness_param_budget,
+            feature_cache=feature_cache_obj,
         )
 
     # Post-training: C header export
