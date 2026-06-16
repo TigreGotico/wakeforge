@@ -36,7 +36,8 @@ dev = [
     "markovonnx",      # Markov / HMM extractor tests
     "umap-learn",      # visualisation tests
     "optuna",          # sweep tests
-    "voiceclonnx",     # voice-conversion delegation tests
+    # git ref until voiceclonnx is published to PyPI (before ww-trainer's release)
+    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",  # VC delegation tests
 ]
 
 # Alias used by CI (build-tests.yml installs [test])
@@ -47,7 +48,7 @@ test = [
     "markovonnx",
     "umap-learn",
     "optuna",
-    "voiceclonnx",
+    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
 ]
 
 # ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
@@ -87,10 +88,10 @@ markov = [
 # library (14 engines incl. knnvc/facodec/freevc/linacodec/chatterbox), zero
 # PyTorch at runtime. ``vc-onnx`` is kept as a back-compat alias.
 vc = [
-    "voiceclonnx",
+    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
 ]
 vc-onnx = [
-    "voiceclonnx",
+    "voiceclonnx @ git+https://github.com/TigreGotico/voiceclonnx.git",
 ]
 
 # ── Dataset generation ─────────────────────────────────────────────────────
