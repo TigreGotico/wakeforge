@@ -105,7 +105,7 @@ CUDA when available and falls back to CPU otherwise.
 | `sweep` | Optuna Bayesian search |
 | `mlflow` | Experiment tracking |
 | `datagen` | TTS + VAD synthetic dataset generation |
-| `vc`, `vc-onnx`, `vc-torch`, `vc-linacodec` | Voice-conversion backends |
+| `vc` (alias `vc-onnx`) | Voice conversion — pure-ONNX [voiceclonnx](https://github.com/TigreGotico/voiceclonnx), 14 engines |
 | `ocsvm` | One-Class SVM head (needs scikit-learn at fit time) |
 | `mic` | Live microphone testing (sounddevice) |
 | `viz` | UMAP embedding plots |
@@ -735,10 +735,10 @@ entry-point discovery picks it up automatically — no code changes.
 
 ## 15. Troubleshooting
 
-**Q: `ModuleNotFoundError: No module named 'chatterbox_onnx'`**
+**Q: `ModuleNotFoundError: No module named 'voiceclonnx'`**
 
 Optional voice-conversion dependency. Only needed when `vc_folder` is set on
-`AudioDataset`. `pip install ww_trainer[vc-onnx]`.
+`AudioDataset`. `uv pip install "ww_trainer[vc]"`.
 
 **Q: `ModuleNotFoundError: No module named 'torchcodec'` / `ImportError: TorchCodec is required for save_with_torchcodec`**
 

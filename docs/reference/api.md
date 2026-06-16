@@ -894,7 +894,7 @@ def __init__(
 
 On construction: validates files (warns on missing), logs label distribution (`dataset.py:154`–`167`).
 
-When `vc_folder` and `vc_prob > 0`: loads `chatterbox_onnx.ChatterboxOnnx` (`dataset.py:145`–`148`), raising `ImportError` if not installed.
+When `vc_folder` and `vc_prob > 0`: loads the selected `voiceclonnx` VC engine (`dataset.py:145`–`148`), raising `ImportError` if `voiceclonnx` is not installed.
 
 #### `__len__` — `dataset.py:169`
 

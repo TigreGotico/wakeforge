@@ -203,8 +203,8 @@ class TestAudioDatasetGetitem:
         ds.vc = MagicMock()
         ds.vc_prob = 1.0
         ds.vc_files = ["fake_voice.wav"]
-        # Make revoice raise an exception
-        ds.vc.voice_convert.side_effect = RuntimeError("VC failed")
+        # Make revoice raise an exception (revoice() calls vc.vc(...))
+        ds.vc.vc.side_effect = RuntimeError("VC failed")
         with patch("random.random", return_value=0.0):  # ensure random < vc_prob
             wav, label, path, kw_ids = ds[0]
         assert isinstance(wav, torch.Tensor)

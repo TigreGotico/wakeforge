@@ -1334,8 +1334,6 @@ class _MixConvBlock(nn.Module):
             k = kernels[0] if kernels else 3
             self.groups.append(_MixConvGroup(g_channels, k))
 
-        self.residual = nn.Identity() if True else None
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward with mixed kernel groups + residual."""
         residual = x

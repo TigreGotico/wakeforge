@@ -440,7 +440,7 @@ Each epoch:
 # Basic — run until F1 ≥ 0.92 and EER ≤ 0.08
 .venv/bin/python train_infinite.py
 
-# With VC synthesis (5 new positives per epoch from chatterbox-onnx)
+# With VC synthesis (5 new positives per epoch via voiceclonnx)
 .venv/bin/python train_infinite.py --vc-per-epoch 5 --vc-text "hey mycroft"
 
 # Larger NWW scan, stricter targets
@@ -460,24 +460,31 @@ Hard-negative inference scores are persisted to `hardneg_cache.pt` and reloaded 
 
 ## 12. Voice Conversion Backends
 
-`ww_trainer/vc_helpers.py` provides a unified interface for TTS and voice conversion. All three backends implement `.tts(text, donor_path, out_path)` and `.vc(source_path, donor_path, out_path)`.
+`ww_trainer/vc_helpers.py` is a thin delegation to the pure-ONNX
+[voiceclonnx](https://github.com/TigreGotico/voiceclonnx) library — there is no
+bespoke backend hierarchy. Voice conversion is audio-to-audio only; pick one of
+voiceclonnx's 14 engines. Text→speech is handled separately by the OVOS TTS
+datagen pipeline.
 
-| Backend | Mode | Quality | When to use |
-|---------|------|---------|-------------|
-| `chatterbox-onnx` | CPU TTS + VC | Good | Default. Cross-platform, no GPU required. |
-| `chatterbox` | GPU TTS + VC | Best | When a CUDA GPU is available. |
-| `linacodec` | CPU/GPU VC only | Codec-quality | 48 kHz output; VC only (no TTS). |
-| `auto` | — | — | GPU chatterbox if CUDA available, else chatterbox-onnx. |
+| Engine | SR | Notes |
+|--------|----|-------|
+| `knnvc` | 16 kHz | **Default.** Zero-shot any-to-any, pure-numpy kNN matching. |
+| `facodec` / `freevc` / `openvoice` | 16–24 kHz | Zero-shot any-to-any neural converters. |
+| `rvc` | 40 kHz | Any-to-one (reference is a trained `.onnx` model). |
+| `linacodec` | 48 kHz | Codec-quality (formerly vendored, now a voiceclonnx engine). |
+| `chatterbox` | 24 kHz | Chatterbox AR codec-LM, VC path. |
 
-**Select backend:**
+See `voiceclonnx` for the full list; `from ww_trainer.vc_helpers import list_engines`.
+
+**Select an engine:**
 
 ```bash
 # Environment variable (persists across scripts)
-export WW_VC_BACKEND=chatterbox-onnx
+export WW_VC_ENGINE=knnvc        # any of the 14 voiceclonnx engines
 
 # Or per-script CLI flag
-.venv/bin/python train_infinite.py --vc-backend chatterbox
-.venv/bin/python generate_vc_positives.py --vc-backend linacodec
+.venv/bin/python generate_vc_positives.py --vc-engine facodec
+.venv/bin/python train_infinite.py --vc-backend linacodec
 ```
 
 **Python API:**

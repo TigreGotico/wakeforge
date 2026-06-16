@@ -71,14 +71,14 @@ AudioDataset(
     bg_speech_folder: str = None,   # competing speaker / babble files
     mic_noise_folder: str = None,   # microphone hiss / silence noise
     rir_folder: str = None,         # room impulse responses for reverb
-    vc_folder: str = None,          # reference voice WAVs for Chatterbox voice conversion
+    vc_folder: str = None,          # reference voice WAVs for voiceclonnx voice conversion
     snr_min: float = 0.0,           # minimum SNR (dB) for noise mixing
     snr_max: float = 20.0,          # maximum SNR (dB) for noise mixing
     pitch_min: float = -1.0,        # minimum pitch shift (semitones)
     pitch_max: float = 1.0,         # maximum pitch shift (semitones)
     speed_min: float = 0.95,        # minimum speed perturbation factor
     speed_max: float = 1.05,        # maximum speed perturbation factor
-    device="auto"                   # device for Chatterbox VC model ("auto" → cuda/cpu)
+    device="auto"                   # device for the voiceclonnx VC engine ("auto" → cuda/cpu)
 )
 ```
 
@@ -114,7 +114,7 @@ logs the label distribution at `INFO` level (`dataset.py:163-167`) so you can ve
 before training starts.
 
 For **disk and bandwidth costs** of the auto-downloaded HF datasets, the
-synthesised positives, and the Chatterbox VC model, see
+synthesised positives, and the voiceclonnx VC engine weights, see
 [`docs/getting_started/requirements.md`](../getting_started/requirements.md).
 
 ---
@@ -133,9 +133,9 @@ A fully-featured pipeline producing large synthetic datasets.
 | 0 — Config | Sets all paths via `os.environ.setdefault` | Environment variables |
 | 1 — Adversarial generation | GraphemeAug + LLM-based phonetically confusable hard-negatives | `$ADV_OUTPUT_DIR/<ww>.txt` |
 | 2 — Normalize | Lowercase / sort / deduplicate adversarial word lists | Updated `.txt` files |
-| 3 — TTS Synthesis + VC | Edge TTS / Google TTS / Piper → optional Chatterbox VC | `$SYNTH_OUTPUT_DIR/<ww>/*.wav` |
-| 4 — Bulk VC augmentation | Revoice Stage 3 output with `chatterbox_bulk_vc` CLI | `$VC_AUG_OUTPUT_DIR/<ww>/*.wav` |
-| 5 — VC TTS | Direct Chatterbox TTS with varied exaggeration via `chatterbox_bulk_tts` | `$VC_TTS_OUTPUT_DIR/<ww>/*.wav` |
+| 3 — TTS Synthesis + VC | Edge TTS / Google TTS / Piper → optional voiceclonnx VC | `$SYNTH_OUTPUT_DIR/<ww>/*.wav` |
+| 4 — Bulk VC augmentation | Re-voice Stage 3 output through voiceclonnx (audio-to-audio) | `$VC_AUG_OUTPUT_DIR/<ww>/*.wav` |
+| 5 — Extra TTS | Additional TTS synthesis with varied prosody | `$VC_TTS_OUTPUT_DIR/<ww>/*.wav` |
 | 6 — Training augmentation | Reads `metadata.csv`, applies noise/reverb/pitch/speed, writes new CSV | `$AUG_OUTPUT_DIR/metadata.csv` + audio |
 | 7 — Benchmark generation | Deterministic test sets at fixed SNRs | `$BENCH_OUTPUT_DIR/` sub-folders |
 
@@ -164,7 +164,7 @@ is identical: absolute path + comma + label.
 ### 2.2 `ww_dataset_generator_ovos_vc.ipynb` — integrated single-notebook pipeline
 
 A simpler alternative that runs TTS + VC + augmentation in one go using OVOS TTS plugins
-(Edge, Google, Phoonnx) and Chatterbox ONNX.
+(Edge, Google, Phoonnx) and voiceclonnx VC.
 
 **Output directory layout:**
 
@@ -189,7 +189,7 @@ yourself after the notebook finishes (see §3 below).
 ```bash
 # 1. Install dependencies
 pip install ovos-tts-plugin-edge-tts ovos-tts-plugin-google-tx \
-            chatterbox_onnx librosa soundfile tqdm
+            voiceclonnx librosa soundfile tqdm
 
 # 2. Set key env vars before opening Jupyter
 export WW_BASE_DIR=/data/ww
@@ -284,7 +284,7 @@ augmentation type is silently skipped (`dataset.py:136-140`).
 | `--bg-speech-folder` | `bg_speech_folder` | Competing speaker / babble | 50 % per sample; SNR 10–25 dB (quieter) |
 | `--mic-noise-folder` | `mic_noise_folder` | Microphone hiss / silence noise | 80 % per sample |
 | `--rir-folder` | `rir_folder` | Room impulse responses | 30 % per sample |
-| `--vc-folder` | `vc_folder` | Reference voice WAVs for Chatterbox VC | `vc_prob` (default 30 %) on positives only |
+| `--vc-folder` | `vc_folder` | Reference voice WAVs for voiceclonnx VC | `vc_prob` (default 30 %) on positives only |
 
 Source: `dataset.py:186-235` (augmentation probabilities hardcoded in `get_augmented`).
 

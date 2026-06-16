@@ -9,9 +9,9 @@ What `ww_trainer-quickstart` will actually cost you before you run it.
 | **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~1.5 GB | ~10 min | ~3 min |
 | **Known phrase** | `--wake-word "hey jarvis"` (any phrase in [§ Pre-built positives](#pre-built-positives--skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
 | **Default** | (no flags, novel phrase) | ~6–8 GB | ~5 GB | ~3 GB | ~30–60 min | ~10–15 min |
-| **Default + VC** | `--vc-refs <dir>` | + ~5 GB | + ~5 GB (Chatterbox ONNX) | ~5 GB | + ~15 min | + ~5 min |
+| **Default + VC** | `--vc-refs <dir>` | + engine ONNX | + engine ONNX (voiceclonnx, downloaded on first use) | ~5 GB | + ~15 min | + ~5 min |
 | **Production** | `--n-positive 5000 --epochs 100 --tier large` | ~15–20 GB | ~7 GB | ~8 GB | not recommended | ~1–2 h |
-| **Kitchen sink** | every dataset + both VC backends + all SSL featurizers — see [§ All-in](#all-in-budget) | ~30–35 GB | ~25 GB | ~8 GB | — | — |
+| **Kitchen sink** | every dataset + VC engine weights + all SSL featurizers — see [§ All-in](#all-in-budget) | ~30–35 GB | ~25 GB | ~8 GB | — | — |
 
 HF caches the raw dataset under `~/.cache/huggingface/` and ww-trainer
 re-writes each used sample as a 16 kHz mono WAV into
@@ -118,13 +118,24 @@ typically 10–30 % smaller after silence removal.
 > TTS clips into 1 000 *uniquely voiced* training samples. For any
 > from-zero training run on a novel phrase, **plan to enable VC**.
 
-VC is opt-in via `--vc-refs <dir>`. There is no implicit Chatterbox
+VC is opt-in via `--vc-refs <dir>`. There is no implicit model
 download otherwise.
 
-| Backend | Extra | HF repo | First-time download | RAM during VC |
-|---|---|---|---|---|
-| `chatterbox-onnx` (CPU, recommended) | `[vc-onnx]` | [`onnx-community/chatterbox-onnx`](https://huggingface.co/onnx-community/chatterbox-onnx) | ~5.0 GB | ~3 GB |
-| `chatterbox-tts` (GPU) | `[vc-torch]` | [`ResembleAI/chatterbox`](https://huggingface.co/ResembleAI/chatterbox) | ~11.7 GB | ~6 GB + VRAM |
+VC is provided exclusively by the pure-ONNX
+[voiceclonnx](https://github.com/TigreGotico/voiceclonnx) library (install via
+`[vc]`, zero PyTorch at runtime). It exposes 14 audio-to-audio engines; the
+per-engine ONNX weights are downloaded on first use from the HuggingFace Hub
+(sizes vary by engine — the default `knnvc`/WavLM-based path is a few hundred
+MB; `linacodec` and others differ).
+
+| Engine | SR | Notes |
+|---|---|---|
+| `knnvc` (default) | 16 kHz | Zero-shot any-to-any, pure-numpy kNN matching. |
+| `facodec` / `freevc` / `openvoice` | 16–24 kHz | Zero-shot any-to-any neural converters. |
+| `linacodec` | 48 kHz | Codec-quality converter. |
+
+Set the engine with `WW_VC_ENGINE` (or `--vc-engine` / `--vc-backend`). See
+`voiceclonnx` for the full engine list.
 
 ### Where to get reference voices (zero extra disk)
 
@@ -140,7 +151,7 @@ ww_trainer-quickstart \
 ```
 
 Other donors: any directory of short (3–10 s) clean speech WAVs at any
-sample rate (Chatterbox resamples internally). LibriSpeech, phone
+sample rate (the engine resamples internally). LibriSpeech, phone
 memos, or a single friend's voice all work.
 
 See [`voice_convert_batch` — `ww_trainer/datagen.py:349`](../../ww_trainer/datagen.py).
@@ -174,16 +185,15 @@ Pre-exported feature-extractor ONNX files for SSL tiers live in the
 
 ## All-in budget
 
-Pulling **every** HF asset ww-trainer can use, with both Chatterbox
-backends installed and one cached SSL featurizer per tier:
+Pulling **every** HF asset ww-trainer can use, with voiceclonnx VC
+engine weights cached and one cached SSL featurizer per tier:
 
 | Category | Subtotal |
 |---|---|
 | Negative + augmentation HF datasets (table above, AudioSet capped) | ~3.4 GB |
 | All pre-built positive wake-word datasets + OpenVoiceOS megapack | ~2.9 GB |
 | Pre-exported ONNX feature extractors (full collection) | ~155 MB |
-| Chatterbox ONNX (`vc-onnx`) | ~5.0 GB |
-| Chatterbox PyTorch (`vc-torch`) | ~11.7 GB |
+| voiceclonnx VC engine weights (`[vc]`, per-engine ONNX from HF, downloaded on first use) | varies by engine |
 | Auto-downloaded HuggingFace SSL weights for SSL tier training (HuBERT-base + Wav2Vec2-base + Wav2Vec2-BERT) | ~3 GB |
 | Local outputs (one training run, default tier) | ~2 GB |
 | HF cache Parquet/Arrow overhead | ~2 GB |
@@ -214,4 +224,4 @@ In order of impact:
 3. `--reuse-dataset` — skip datagen on subsequent runs.
 4. `--n-positive 200` — fewer TTS calls and fewer mined negatives.
 5. `--tier esp32_nano` / `micro` — smallest models, no SSL featurizer.
-6. Skip `--vc-refs` — no Chatterbox download.
+6. Skip `--vc-refs` — no VC engine download.

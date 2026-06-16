@@ -1,260 +1,123 @@
-"""Voice-conversion / TTS backend abstraction.
+"""Voice conversion via `voiceclonnx <https://github.com/TigreGotico/voiceclonnx>`_.
 
-Supported backends
-------------------
-  ``chatterbox-onnx``  CPU-only ONNX runtime.  Supports TTS + VC.
-                       pip install chatterbox-onnx
-                       env: WW_VC_BACKEND=chatterbox-onnx
+This module is a thin delegation to the **voiceclonnx** unified API — a pure-ONNX
+voice-conversion library (zero PyTorch at runtime, 14 engines).  There is no
+bespoke backend hierarchy any more: pick an engine and convert.
 
-  ``chatterbox``       Original PyTorch model (GPU recommended).  TTS + VC.
-                       pip install chatterbox-tts
-                       env: WW_VC_BACKEND=chatterbox
+Audio-to-audio only.  Text→speech (TTS) is a separate concern handled by the
+OVOS TTS plugins in :mod:`ww_trainer.datagen`.
 
-  ``linacodec``        Vendored LinaCodec (https://github.com/ysharma3501/LinaCodec).
-                       VC only (no TTS).  48 kHz output.  CPU or GPU.
-                       Requires: huggingface_hub jsonargparse safetensors soundfile vocos
-                       env: WW_VC_BACKEND=linacodec
+Selecting an engine
+-------------------
+* ``WW_VC_ENGINE`` env var (e.g. ``knnvc``, ``facodec``, ``freevc``,
+  ``openvoice``, ``rvc``, ``linacodec``, ``chatterbox`` …), or
+* the ``engine=`` argument to :func:`load_vc_backend`.
 
-  ``auto``             Priority: GPU chatterbox → chatterbox-onnx (CPU).
-                       Default when WW_VC_BACKEND is not set.
+``knnvc`` is the default: zero-shot any-to-any, pure-numpy kNN matching, 16 kHz
+output that matches the wake-word training sample rate.
 
 Usage
 -----
-    from ww_trainer.vc_helpers import load_vc_backend
+    from ww_trainer.vc_helpers import load_vc_backend, list_engines
 
-    backend = load_vc_backend()            # auto-detect
-    backend.tts("hey mycroft", donor_path, out_path, exaggeration=0.4)
-    backend.vc(source_path, donor_path, out_path)
-    backend.sample_rate   # int, e.g. 24000 or 48000
+    vc = load_vc_backend()                 # WW_VC_ENGINE or knnvc
+    vc = load_vc_backend(engine="facodec") # explicit engine
+    vc.vc(source_path, donor_path, out_path)
+    vc.sample_rate                         # int, engine-dependent
+    list_engines()                         # -> ['bicodec', 'chatterbox', ...]
 """
 from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Default backend from env; callers can override with load_vc_backend(backend=...)
-_DEFAULT_BACKEND = os.environ.get("WW_VC_BACKEND", "auto")
+# Default engine: env override, else knnvc (16 kHz zero-shot any-to-any).
+DEFAULT_ENGINE = os.environ.get("WW_VC_ENGINE", "knnvc").strip()
+
+# Legacy backend names (from the old multi-backend wrapper) → voiceclonnx engines.
+# Kept so existing scripts / .env files keep working without edits.
+_LEGACY_ALIASES = {
+    "auto": DEFAULT_ENGINE,
+    "voiceclonnx": DEFAULT_ENGINE,
+    "chatterbox-onnx": "chatterbox",
+    "chatterbox": "chatterbox",
+    "linacodec": "linacodec",
+}
 
 
-# ---------------------------------------------------------------------------
-# Unified backend interface
-# ---------------------------------------------------------------------------
+class VoiceConverter:
+    """Thin wrapper over :class:`voiceclonnx.VoiceCloner`.
 
-class _VCBackend:
-    """Abstract base — subclasses implement tts() and vc()."""
+    Exposes the ``.vc()`` / ``.sample_rate`` / ``.name`` interface the rest of
+    the codebase expects, delegating all real work to voiceclonnx.
+    """
 
-    sample_rate: int = 24000
-    name: str = "unknown"
+    def __init__(self, engine: str = DEFAULT_ENGINE) -> None:
+        from voiceclonnx import VoiceCloner  # pip: voiceclonnx
+        logger.info("[VC] Loading voiceclonnx engine=%s (HF download on first use)", engine)
+        self._cloner = VoiceCloner(engine=engine)
+        self.engine = engine
+        self.name = f"voiceclonnx:{engine}"
+        self.sample_rate = self._cloner.sample_rate
+        logger.info("[VC] ready  engine=%s  sr=%d", engine, self.sample_rate)
 
-    def tts(
-        self,
-        text: str,
-        donor_path: "str | Path",
-        out_path: "str | Path",
-        exaggeration: float = 0.4,
-    ) -> None:
-        """Synthesise *text* in *donor_path*'s voice, write to *out_path*."""
-        raise NotImplementedError
-
-    def vc(
-        self,
-        source_path: "str | Path",
-        donor_path: "str | Path",
-        out_path: "str | Path",
-    ) -> None:
-        """Voice-convert *source_path* to *donor_path*'s voice, write to *out_path*."""
-        raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# chatterbox-onnx backend  (CPU, quantized ONNX)
-# ---------------------------------------------------------------------------
-
-class _OnnxBackend(_VCBackend):
-    name = "chatterbox-onnx"
-    sample_rate = 24000
-
-    def __init__(self, quantized: bool = True) -> None:
-        from chatterbox_onnx import ChatterboxOnnx  # type: ignore — pip: chatterbox-onnx
-        logger.info("[VC] Loading ChatterboxOnnx (quantized=%s)", quantized)
-        self._model = ChatterboxOnnx(quantized=quantized)
-        logger.info("[VC] chatterbox-onnx ready")
-
-    def tts(self, text, donor_path, out_path, exaggeration=0.4):
-        self._model.synthesize(
-            text=text,
-            target_voice_path=str(donor_path),
-            exaggeration=exaggeration,
-            output_file_name=str(out_path),
+    def vc(self, source_path, donor_path, out_path) -> None:
+        """Voice-convert *source_path* to *donor_path*'s voice → *out_path*."""
+        self._cloner.clone_voice(
+            audio=str(source_path),
+            reference_voice=str(donor_path),
+            out_path=str(out_path),
         )
 
-    def vc(self, source_path, donor_path, out_path):
-        self._model.voice_convert(
-            source_audio_path=str(source_path),
-            target_voice_path=str(donor_path),
-            output_file_name=str(out_path),
-        )
+    # Alias matching voiceclonnx's own naming.
+    convert = vc
 
 
-# ---------------------------------------------------------------------------
-# chatterbox (PyTorch) backend  (GPU recommended)
-# ---------------------------------------------------------------------------
+def list_engines() -> List[str]:
+    """Return the sorted list of available voiceclonnx engine aliases."""
+    from voiceclonnx import ENGINE_REGISTRY
+    return sorted(ENGINE_REGISTRY.keys())
 
-class _TorchBackend(_VCBackend):
-    name = "chatterbox"
-
-    def __init__(self, device: str = "auto") -> None:
-        import torch
-        from chatterbox.tts import ChatterboxTTS  # type: ignore
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info("[VC] Loading ChatterboxTTS on %s", device)
-        self._model = ChatterboxTTS.from_pretrained(device=device)
-        self.sample_rate = self._model.sr
-        self._device = device
-        logger.info("[VC] chatterbox (torch) ready on %s  sr=%d", device, self.sample_rate)
-
-    def tts(self, text, donor_path, out_path, exaggeration=0.4):
-        import torchaudio
-        wav = self._model.generate(
-            text,
-            audio_prompt_path=str(donor_path),
-            exaggeration=exaggeration,
-        )
-        from ww_trainer.dataset import _save_audio
-        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
-
-    def vc(self, source_path, donor_path, out_path):
-        import torchaudio
-        # ChatterboxTTS uses generate() with cfm_steps or a dedicated vc method.
-        # Try the dedicated vc method first, fall back to generate().
-        if hasattr(self._model, "voice_convert"):
-            wav = self._model.voice_convert(
-                source_audio_path=str(source_path),
-                target_voice_path=str(donor_path),
-            )
-        else:
-            # Fallback: use generate() — the donor voice guides prosody/timbre
-            wav = self._model.generate(
-                "",  # empty text = voice conversion mode on some versions
-                audio_prompt_path=str(donor_path),
-                # Some versions accept source_audio for VC:
-                **_maybe_kwarg("source_audio_path", str(source_path), self._model.generate),
-            )
-        from ww_trainer.dataset import _save_audio
-        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
-
-
-# ---------------------------------------------------------------------------
-# LinaCodec (vendored) backend  — VC only, 48 kHz, CPU or GPU
-# ---------------------------------------------------------------------------
-
-class _LinaCodecBackend(_VCBackend):
-    name = "linacodec"
-    sample_rate = 48000
-
-    def __init__(self, device: str = "auto") -> None:
-        from ww_trainer.linacodec.codec import LinaCodec
-        logger.info("[VC] Loading LinaCodec (device=%s) — HF download on first run", device)
-        self._model = LinaCodec(device=device)
-        logger.info("[VC] LinaCodec ready  sr=%d", self.sample_rate)
-
-    def tts(self, text, donor_path, out_path, exaggeration=0.4):
-        raise NotImplementedError(
-            "LinaCodec is a codec-based voice converter and does not support TTS. "
-            "Use --vc-backend chatterbox-onnx or chatterbox for TTS."
-        )
-
-    def vc(self, source_path, donor_path, out_path):
-        import torchaudio
-        wav = self._model.convert_voice(str(source_path), str(donor_path))
-        # wav shape: (samples,) or (1, samples)
-        if wav.dim() == 1:
-            wav = wav.unsqueeze(0)
-        from ww_trainer.dataset import _save_audio
-        _save_audio(str(out_path), wav.cpu(), self.sample_rate)
-
-
-def _maybe_kwarg(key: str, value, fn) -> dict:
-    """Return {key: value} only if fn accepts *key* as a keyword argument."""
-    import inspect
-    try:
-        sig = inspect.signature(fn)
-        return {key: value} if key in sig.parameters else {}
-    except (ValueError, TypeError):
-        return {}
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
 
 def load_vc_backend(
     backend: Optional[str] = None,
-    device: str = "auto",
-    quantized: bool = True,
-) -> _VCBackend:
-    """Instantiate and return the requested VC backend.
+    engine: Optional[str] = None,
+    **_ignored,
+) -> VoiceConverter:
+    """Return a :class:`VoiceConverter` for the requested voiceclonnx engine.
 
     Args:
-        backend: ``"chatterbox-onnx"``, ``"chatterbox"``, or ``"auto"``.
-                 Defaults to the ``WW_VC_BACKEND`` env var, then ``"auto"``.
-        device:  PyTorch device for the torch backend (``"auto"`` = GPU if available).
-        quantized: Whether to use quantized ONNX weights (onnx backend only).
-
-    Returns:
-        A ``_VCBackend`` instance with ``.tts()`` and ``.vc()`` methods.
+        backend: Legacy alias for ``engine`` (kept for older callers / ``.env``
+            files). Legacy values ``auto``/``voiceclonnx`` map to the default
+            engine; ``chatterbox-onnx``/``chatterbox`` → the ``chatterbox``
+            engine; ``linacodec`` → the ``linacodec`` engine.
+        engine: voiceclonnx engine alias (see :func:`list_engines`). Takes
+            precedence over ``backend``. Defaults to ``WW_VC_ENGINE`` then
+            ``knnvc``.
+        **_ignored: Accepts and ignores obsolete kwargs (``device``,
+            ``quantized``) so existing call sites need no changes — voiceclonnx
+            is CPU/ONNX and engine-agnostic about device.
 
     Raises:
-        RuntimeError: if the requested backend is not installed.
+        RuntimeError: if voiceclonnx is not installed.
     """
-    choice = (backend or _DEFAULT_BACKEND).lower().strip()
+    choice = (engine or backend or DEFAULT_ENGINE).strip()
+    if choice.startswith("voiceclonnx:"):
+        choice = choice.split(":", 1)[1]
+    choice = _LEGACY_ALIASES.get(choice, choice)
 
-    if choice == "auto":
-        # Prefer GPU chatterbox if importable and GPU available
-        try:
-            import torch
-            if torch.cuda.is_available():
-                import chatterbox.tts  # noqa: F401
-                return _TorchBackend(device=device)
-        except ImportError:
-            pass
-        # Fall through to CPU onnx
-        choice = "chatterbox-onnx"
-
-    if choice == "chatterbox-onnx":
-        try:
-            return _OnnxBackend(quantized=quantized)
-        except ImportError:
-            raise RuntimeError(
-                "chatterbox-onnx not installed.\n"
-                "Run: uv pip install chatterbox-onnx --python .venv/bin/python"
-            )
-
-    if choice == "chatterbox":
-        try:
-            return _TorchBackend(device=device)
-        except ImportError:
-            raise RuntimeError(
-                "chatterbox not installed.\n"
-                "Run: uv pip install chatterbox-tts --python .venv/bin/python"
-            )
-
-    if choice == "linacodec":
-        try:
-            return _LinaCodecBackend(device=device)
-        except ImportError as exc:
-            raise RuntimeError(
-                f"LinaCodec vendor deps missing: {exc}\n"
-                "Run: uv pip install huggingface_hub jsonargparse safetensors soundfile vocos"
-                " --python .venv/bin/python"
-            )
-
-    raise ValueError(
-        f"Unknown VC backend {choice!r}. "
-        "Choose 'chatterbox-onnx', 'chatterbox', 'linacodec', or 'auto'."
-    )
+    try:
+        return VoiceConverter(engine=choice)
+    except ImportError as exc:
+        raise RuntimeError(
+            f"voiceclonnx not installed ({exc}).\n"
+            "Run: uv pip install voiceclonnx --python .venv/bin/python"
+        ) from exc
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown voiceclonnx engine {choice!r}. "
+            f"Available engines: {', '.join(list_engines())}"
+        ) from exc

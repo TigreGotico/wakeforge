@@ -1,6 +1,5 @@
 """Tests for advanced ONNX export features and metadata embedding."""
 import os
-import pytest
 import torch
 import numpy as np
 from pathlib import Path
@@ -181,7 +180,10 @@ def test_markov_transition_extractor_onnx_parity(tmp_path):
     np.testing.assert_allclose(py_out.numpy(), ort_out, atol=1e-3)
 
 def test_hmm_state_extractor_onnx_parity(tmp_path):
-    pytest.importorskip("markovonnx")
+    # Seed so the fitted HMM/codebook is deterministic regardless of test order
+    # (parity tolerance otherwise depends on leftover global RNG state).
+    torch.manual_seed(0)
+    np.random.seed(0)
     base = MfccExtractor(n_mfcc=13, sr=16000)
     ext = HMMStateExtractor(base, n_states=4, n_codes=8)
     ext.to("cpu")

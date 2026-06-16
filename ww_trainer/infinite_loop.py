@@ -7,7 +7,7 @@ over a fixed dataset, this module treats training as an open-ended search:
   - Each epoch a random ``scan_size`` subset is inferred → only the hard
     negatives (conf ≥ neg_threshold) survive into training.
   - Optionally, ``vc_per_epoch`` new voice-cloned positives are synthesised
-    at the start of every epoch via chatterbox-onnx (CPU-only, ~1-3s each).
+    at the start of every epoch via voiceclonnx (pure-ONNX, CPU).
   - Stopping is goal-based, not epoch-count-based.
 
 Usage
@@ -119,7 +119,7 @@ def _synthesise_positives(
     """Generate up to *n* VC positives by cloning existing wake-word clips into donor voices.
 
     Each output = one real wake-word audio clip voice-converted to a random donor's timbre.
-    No text synthesis — chatterbox is used in VC mode only.
+    No text synthesis — voiceclonnx is audio-to-audio only.
 
     Returns list of (path, "1") pairs for newly created files.
     Failures are silently skipped — the caller continues with fewer samples.
@@ -219,7 +219,7 @@ def infinite_training_loop(
     spec_augment: bool = True,
     neg_weight_schedule: str = "linear",
     vc_per_epoch: int = 0,             # how many VC positives to generate per epoch
-    vc_backend: str = "auto",          # "auto", "chatterbox-onnx", or "chatterbox"
+    vc_backend: str = "auto",          # voiceclonnx engine alias (e.g. "knnvc", "linacodec")
     vc_device: str = "auto",           # PyTorch device for torch backend
     vc_out_dir: Optional["str | Path"] = None,
     eval_every: int = 1,               # evaluate every N epochs

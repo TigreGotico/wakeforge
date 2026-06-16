@@ -112,7 +112,6 @@ parser.add_argument("--neg-multiplier", type=float, default=_e("WW_NEG_MULTIPLIE
 parser.add_argument("--vc-per-epoch",    type=int,   default=_e("WW_VC_PER_EPOCH", 0),
                     help="VC positives to generate per epoch via voice conversion (0=disabled)")
 parser.add_argument("--vc-backend",      default=_e("WW_VC_BACKEND", "auto"),
-                    choices=["auto", "chatterbox-onnx", "chatterbox", "linacodec"],
                     help="VC backend (audio-to-audio voice cloning)")
 parser.add_argument("--vc-device",       default=_e("WW_VC_DEVICE", "auto"),
                     help="PyTorch device for torch VC backend")

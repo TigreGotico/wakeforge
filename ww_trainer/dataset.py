@@ -180,9 +180,9 @@ class AudioDataset(Dataset):
 
         self.vc = None
         if vc_folder and vc_prob > 0:
-            from chatterbox_onnx import ChatterboxOnnx  # optional dependency
-            device: str = device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
-            self.vc = ChatterboxOnnx(device=device)
+            # Voice conversion is delegated to the pure-ONNX voiceclonnx library.
+            from ww_trainer.vc_helpers import load_vc_backend
+            self.vc = load_vc_backend()
             self.vc_files = _collect_audio_files(vc_folder)
 
         # Store data alias for validation (samples may be list of (path, label) tuples)
@@ -308,11 +308,7 @@ class AudioDataset(Dataset):
         target_voice = random.choice(self.vc_files)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             vc_path = f.name
-        self.vc.voice_convert(
-            source_audio_path=path,
-            target_voice_path=target_voice,
-            output_file_name=vc_path,
-        )
+        self.vc.vc(path, target_voice, vc_path)
         wav, sr = _load_audio(vc_path)
         return wav, sr
 

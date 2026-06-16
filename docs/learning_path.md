@@ -212,7 +212,7 @@ implementation. Full bibliography in [`references.md`](research/references.md).
 - **Island-model GA** — Cantú-Paz, *Efficient and Accurate Parallel Genetic Algorithms*, 2000.
 - **Knowledge distillation** — Hinton, Vinyals, Dean, NeurIPS 2014 workshop. ArXiv <https://arxiv.org/abs/1503.02531>
 - **Synthesized speech for KWS** — Lin et al., *Training Keyword Spotters with Limited and Synthesized Speech Data*, ArXiv <https://arxiv.org/abs/2002.01322>
-- **Voice conversion (Chatterbox)** — GitHub <https://github.com/resemble-ai/chatterbox>
+- **Voice conversion (voiceclonnx)** — GitHub <https://github.com/TigreGotico/voiceclonnx>
 
 ### Data & deployment
 - **AudioSet** — Gemmeke et al., ICASSP 2017. <https://research.google.com/audioset/>

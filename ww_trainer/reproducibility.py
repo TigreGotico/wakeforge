@@ -9,11 +9,14 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 import os
 import random
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def set_seed(seed: int = 42, deterministic: bool = True) -> None:
@@ -40,8 +43,13 @@ def set_seed(seed: int = 42, deterministic: bool = True) -> None:
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
         try:
             torch.use_deterministic_algorithms(True)
-        except Exception:
-            pass  # Not all operations support deterministic mode
+        except Exception as exc:
+            # Not all operations support deterministic mode — warn rather than
+            # silently leaving the run non-reproducible.
+            logger.warning(
+                "Could not enable fully deterministic algorithms (%s); "
+                "results may not be bit-for-bit reproducible.", exc,
+            )
 
 
 def get_seed_info() -> dict:

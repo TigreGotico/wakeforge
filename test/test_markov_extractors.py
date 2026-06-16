@@ -1,5 +1,4 @@
 """Tests for Markov-based feature extractors."""
-import pytest
 import torch
 
 from ww_trainer.feats import (
@@ -70,7 +69,6 @@ class TestHMMStateExtractor:
         torch.testing.assert_close(sums, torch.ones_like(sums), atol=0.01, rtol=0.01)
 
     def test_fit_with_markovonnx(self):
-        pytest.importorskip("markovonnx")
         base = MfccExtractor(n_mfcc=13)
         ext = HMMStateExtractor(base, n_states=4, n_codes=8)
         audio_list = [torch.randn(8000) for _ in range(3)]

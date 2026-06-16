@@ -1,5 +1,4 @@
 """Smoke tests: feature enrichment wrappers on top of MfccExtractor."""
-import pytest
 import torch
 
 DUMMY_WAV = torch.randn(2, 16000)
@@ -73,7 +72,6 @@ class TestHMMStateWrapper:
         assert out.shape[2] == 13 + 4
 
     def test_forward_fitted(self) -> None:
-        pytest.importorskip("markovonnx")
         from ww_trainer.feats import MfccExtractor, HMMStateExtractor
         base = MfccExtractor(n_mfcc=13)
         ext = HMMStateExtractor(base, n_states=4, n_codes=8)
