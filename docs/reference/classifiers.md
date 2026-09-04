@@ -225,7 +225,7 @@ Two-stage head: FFN backbone maps pooled frame features to a fixed-size embeddin
 - `poly` — captures interactions; use with small `degree` (2-3); slow for large SV counts.
 - `sigmoid` — resembles a two-layer neural network; sensitive to `gamma` and `coef0`.
 
-**Optional dependency:** `fit_ocsvm()` requires `scikit-learn`. Install with `pip install ww_trainer[ocsvm]`.
+**Optional dependency:** `fit_ocsvm()` requires `scikit-learn`. Install with `pip install wakeforge[ocsvm]`.
 
 **Tier preset:** `ocsvm_small` — MFCC-40 + OCSVMHead (hidden=128, embed=64) — `ww_trainer/tiers.py:174`.
 

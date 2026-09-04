@@ -3,7 +3,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ww_trainer"
+name = "wakeforge"
 dynamic = ["version"]
 description = "Full training and research suite for wake words — MFCC to HuBERT, all exported to ONNX"
 license = {text = "Apache-2.0"}
@@ -98,7 +98,7 @@ datagen = [
     "datasets",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",    # default TTS; alternatives (piper, google-tx) auto-discovered via OPM
-    "vadonnx @ git+https://github.com/TigreGotico/vadonnx.git",  # pure-ONNX VAD (silence trimming)
+    "vadonnx>=0.1.0",  # pure-ONNX VAD (silence trimming)
 ]
 
 # ── Live microphone testing ────────────────────────────────────────────────
@@ -119,7 +119,7 @@ notebooks = [
     "datasets",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",
-    "vadonnx @ git+https://github.com/TigreGotico/vadonnx.git",
+    "vadonnx>=0.1.0",
 ]
 
 [project.scripts]

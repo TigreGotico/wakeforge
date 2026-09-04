@@ -538,7 +538,7 @@ positive embedding manifold rather than discriminating against negatives.
 OCSVMHead.fit_ocsvm(dataloader)         # model.py:392
 ```
 
-Requires `pip install ww_trainer[ocsvm]` (scikit-learn at fit time only). Tier
+Requires `pip install wakeforge[ocsvm]` (scikit-learn at fit time only). Tier
 preset: `ocsvm_small` — `ww_trainer/tiers.py:174`.
 
 **Q: Which OCSVM kernels are supported?**
@@ -738,20 +738,20 @@ entry-point discovery picks it up automatically — no code changes.
 **Q: `ModuleNotFoundError: No module named 'voiceclonnx'`**
 
 Optional voice-conversion dependency. Only needed when `vc_folder` is set on
-`AudioDataset`. `uv pip install "ww_trainer[vc]"`.
+`AudioDataset`. `uv pip install "wakeforge[vc]"`.
 
 **Q: `ModuleNotFoundError: No module named 'torchcodec'` / `ImportError: TorchCodec is required for save_with_torchcodec`**
 
 torchaudio ≥ 2.9 defaults to torchcodec for `load`/`save`. ww-trainer's
 `dataset._load_audio` and `dataset._save_audio` already fall back to
 `soundfile`; this error means external code is calling `torchaudio.load`/`save`
-directly. Either route it through the helpers, or `pip install ww_trainer[torchcodec]`
+directly. Either route it through the helpers, or `pip install wakeforge[torchcodec]`
 (needs system FFmpeg).
 
 **Q: `ModuleNotFoundError: No module named 'onnxscript'`**
 
 PyTorch ≥ 2.x ONNX export requires `onnxscript`. It is included in the `[dev]`
-and `[test]` extras. `pip install ww_trainer[dev]` or `pip install onnxscript`.
+and `[test]` extras. `pip install wakeforge[dev]` or `pip install onnxscript`.
 
 **Q: `ValueError: Ambiguous feature shape` in GRU**
 

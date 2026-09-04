@@ -46,6 +46,13 @@ evaluate, export, deploy.
 ## Install
 
 ```bash
+# Published package (import name stays ww_trainer):
+pip install --pre "wakeforge[datagen,torchcodec]"
+```
+
+For development, clone the repo and install it editable instead:
+
+```bash
 # Core library + tests
 uv pip install -e ".[dev]"
 

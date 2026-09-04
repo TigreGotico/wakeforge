@@ -337,7 +337,7 @@ Augmentation is applied on-the-fly in `AudioDataset.get_augmented` (`dataset.py:
 | Reverb (RIR) | 0.3 (if folder set) | `--rir-folder` |
 | Pitch shift | 0.3 (always) | `--pitch-min/max` in semitones |
 | Speed perturbation | 0.3 (always) | `--speed-min/max` as factor |
-| Voice cloning | `--vc-prob` (wake only) | `--vc-folder`, requires `ww_trainer[vc]` |
+| Voice cloning | `--vc-prob` (wake only) | `--vc-folder`, requires `wakeforge[vc]` |
 
 `--aug-prob` is the master gate: a sample is augmented only if `random() < aug_prob`. Set `--aug-prob 0` to disable all augmentation.
 
