@@ -48,7 +48,7 @@ Click the badge at the top of this page.
 ### Local CPU
 
 ```bash
-pip install "ww_trainer[datagen,torchcodec]"
+pip install "wakeforge[datagen,torchcodec]"
 jupyter notebook notebooks/kaggle_quickstart.ipynb
 ```
 
@@ -77,7 +77,7 @@ All other variables have safe defaults.
 
 ### Cell 3 — Install
 
-Installs `ww_trainer[datagen,torchcodec]`.  Takes 3–5 min on Kaggle.
+Installs `wakeforge[datagen,torchcodec]`.  Takes 3–5 min on Kaggle.
 
 ### Cell 4 — Platform setup
 
