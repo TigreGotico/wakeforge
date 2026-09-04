@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1a3](https://github.com/TigreGotico/wakeforge/tree/0.4.1a3) (2026-09-04)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.1a2...0.4.1a3)
+
+**Merged pull requests:**
+
+- chore: rename distribution to wakeforge [\#31](https://github.com/TigreGotico/wakeforge/pull/31) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.4.1a2](https://github.com/TigreGotico/wakeforge/tree/0.4.1a2) (2026-08-10)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.1a1...0.4.1a2)
