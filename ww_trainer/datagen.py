@@ -171,6 +171,106 @@ def preprocess_audio(
         return False
 
 
+def fit_to_window(wav: np.ndarray, sr: int, window_s: float, rng: random.Random) -> np.ndarray:
+    """Crop or zero-pad *wav* to exactly ``window_s`` seconds, at a random offset."""
+    n = int(sr * window_s)
+    if len(wav) >= n:
+        start = rng.randint(0, len(wav) - n)
+        return wav[start:start + n]
+    out = np.zeros(n, dtype=np.float32)
+    start = rng.randint(0, n - len(wav))
+    out[start:start + len(wav)] = wav
+    return out
+
+
+def negative_windows(wav: np.ndarray, sr: int, window_s: float, per_clip: int,
+                     rng: random.Random) -> List[np.ndarray]:
+    """Cut a raw negative clip into up to *per_clip* windows of ``window_s``.
+
+    Long clips give windows at random offsets. Every clip also yields one short
+    fragment (0.4 to 1.0 s) zero-padded into a window, so that short padded
+    audio exists in both classes and neither length nor padding marks a class.
+    """
+    n = int(sr * window_s)
+    out: List[np.ndarray] = []
+    if len(wav) >= n:
+        for _ in range(per_clip):
+            out.append(fit_to_window(wav, sr, window_s, rng))
+    else:
+        out.append(fit_to_window(wav, sr, window_s, rng))
+    frag = int(sr * rng.uniform(0.4, 1.0))
+    if len(wav) > frag:
+        start = rng.randint(0, len(wav) - frag)
+        out.append(fit_to_window(wav[start:start + frag], sr, window_s, rng))
+    return out
+
+
+def trim_silence_energy(wav: np.ndarray, sr: int, frame_ms: int = 20, floor_db: float = -40.0,
+                        margin_db: float = 8.0) -> np.ndarray:
+    """Trim leading and trailing frames that sit near the clip's noise floor.
+
+    A frame is kept when it exceeds both *floor_db* under the loudest frame and
+    *margin_db* over the clip's noise floor, taken as the 10th percentile of
+    frame energy, so recorded clips with background noise trim as well as
+    digitally padded ones.
+    """
+    frame = max(1, int(sr * frame_ms / 1000))
+    n_frames = len(wav) // frame
+    if n_frames == 0:
+        return wav
+    rms = np.sqrt((wav[:n_frames * frame].reshape(n_frames, frame) ** 2).mean(axis=1))
+    peak = rms.max()
+    if peak <= 0:
+        return wav
+    threshold = max(peak * 10 ** (floor_db / 20), np.percentile(rms, 10) * 10 ** (margin_db / 20))
+    voiced = np.flatnonzero(rms > threshold)
+    if len(voiced) == 0:
+        return wav
+    return wav[voiced[0] * frame:(voiced[-1] + 1) * frame]
+
+
+def split_groups(groups: List[List[tuple[str, int]]], test_split: float,
+                 ) -> tuple[List[tuple[str, int]], List[tuple[str, int]]]:
+    """Split entries into train and test, keeping each group on one side.
+
+    A group is every window cut from one source clip: windows of one clip
+    overlap, so a test window with a sibling in train measures memorised audio.
+    Independent examples (a silence window, a single-window positive) are
+    groups of one and are split at random. At least one group stays in train.
+    """
+    groups = [g for g in groups if g]
+    random.shuffle(groups)
+    if len(groups) < 2:
+        return [e for g in groups for e in g], []
+    total = sum(len(g) for g in groups)
+    n_test = max(1, int(total * test_split))
+    test: List[tuple[str, int]] = []
+    train: List[tuple[str, int]] = []
+    for i, g in enumerate(groups):
+        if len(test) < n_test and i < len(groups) - 1:
+            test.extend(g)
+        else:
+            train.extend(g)
+    return train, test
+
+
+def _load_mono(src: Path, sr: int) -> np.ndarray:
+    arr, orig_sr = sf.read(str(src), dtype="float32", always_2d=True)
+    wav = arr.mean(axis=1)
+    if orig_sr != sr:
+        import librosa
+        wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=sr)
+    return wav
+
+
+def _write_window(wav: np.ndarray, dst: Path, sr: int) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    max_abs = np.max(np.abs(wav))
+    if max_abs > 0:
+        wav = wav / max_abs
+    _save_audio(str(dst), torch.tensor(wav).unsqueeze(0).float(), sr)
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace dataset download
 # ---------------------------------------------------------------------------
@@ -835,6 +935,11 @@ class DatagenConfig:
     lang: str = "en"
     sample_rate: int = 16000
     vad_trim: bool = True
+    window_s: float = 1.5
+    neg_windows_per_clip: int = 3
+    adversarial_file: Optional[str] = None
+    adversarial_per_text: int = 3
+    allow_positive_skips: bool = False
     test_split: float = 0.2
     # Voice cloning
     vc_refs_dir: Optional[str] = None
@@ -973,6 +1078,7 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     }
 
     neg_files: List[Path] = []
+    phrase_of: dict[Path, str] = {}
     for category in ("general", "speech"):
         for ds_id in NEGATIVE_DATASETS.get(category, []):
             ds_name = ds_id.split("/")[-1]
@@ -1011,6 +1117,9 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             llm_url=config.llm_url,
             llm_model=config.llm_model,
         )
+        if config.adversarial_file:
+            with open(config.adversarial_file, encoding="utf-8") as fh:
+                adv_texts += [line.strip() for line in fh if line.strip() and not line.startswith("#")]
         if adv_texts:
             adv_dir = negatives_dir / "adversarial"
             try:
@@ -1020,30 +1129,112 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
                 )
                 # Synthesize each adversarial text
                 for text in adv_texts:
-                    files = synthesize_positives(text, adv_dir, n=1, lang=config.lang,
+                    files = synthesize_positives(text, adv_dir, n=config.adversarial_per_text, lang=config.lang,
                                                  tts_config=load_tts_config(config.tts_config))
                     neg_files.extend(files)
+                    phrase_of.update({f: text for f in files})
             except RuntimeError:
                 logger.warning("No TTS available for adversarial synthesis")
 
     # ── Stage 4: Preprocess all audio ───────────────────────────────────
-    logger.info("Stage 4: Preprocessing audio files")
+    # Every training example is exactly window_s long: positives are VAD
+    # trimmed then placed at a random offset in a zero-padded window; negatives
+    # are windows cut from the full clips plus one short zero-padded fragment
+    # per clip. Length and padding therefore mark neither class. window_s=0
+    # keeps the clips as they are.
+    logger.info("Stage 4: Preprocessing audio files (window %.2f s)", config.window_s)
+    rng = random.Random(config.seed)
 
     processed_positives: List[Path] = []
+    skipped_too_long = 0
+    skipped_other = 0
     proc_pos_dir = positives_dir / "processed"
     for f in pos_files:
         dst = proc_pos_dir / f.name
-        if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+        if config.window_s <= 0:
+            if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+                processed_positives.append(dst)
+            else:
+                skipped_other += 1
+            continue
+        try:
+            wav = _load_mono(f, config.sample_rate)
+            if config.vad_trim:
+                wav = trim_silence_vad(wav, config.sample_rate)
+            window = int(config.sample_rate * config.window_s)
+            if len(wav) > window:
+                # VAD is off, raised or found nothing: cut the padding a TTS
+                # engine leaves around the word before judging the length.
+                wav = trim_silence_energy(wav, config.sample_rate)
+            # fit_to_window crops a clip longer than the window at a uniform
+            # random offset with no notion of where the wake word sits in it,
+            # so a positive still longer than the window is skipped rather
+            # than cropped: a blind crop can carry none of the word under the
+            # positive label.
+            if len(wav) > window:
+                logger.warning(
+                    "Skipping %s: %.2fs after trimming exceeds the %.2fs window; "
+                    "a blind crop could drop the wake word", f,
+                    len(wav) / config.sample_rate, config.window_s,
+                )
+                skipped_too_long += 1
+                continue
+            _write_window(fit_to_window(wav, config.sample_rate, config.window_s, rng), dst, config.sample_rate)
             processed_positives.append(dst)
+        except Exception as e:
+            logger.warning("Error preprocessing %s: %s", f, e)
+            skipped_other += 1
+
+    skipped = skipped_too_long + skipped_other
+    logger.info("Positives: %d kept, %d skipped too long, %d skipped other (of %d)",
+                len(processed_positives), skipped_too_long, skipped_other, len(pos_files))
+    if skipped > 0.2 * len(pos_files) and not config.allow_positive_skips:
+        raise RuntimeError(
+            f"{skipped} of {len(pos_files)} positives were skipped "
+            f"({skipped_too_long} longer than the {config.window_s:.2f} s window after "
+            f"trimming, {skipped_other} unreadable); the positive class would be a "
+            "biased remainder. Raise --window-s, fix the source clips, or pass "
+            "--allow-positive-skips to continue."
+        )
 
     processed_negatives: List[Path] = []
+    negative_groups: List[List[tuple[str, int]]] = []
+    phrase_groups: dict[str, List[tuple[str, int]]] = {}
     proc_neg_dir = negatives_dir / "processed"
+
+    def _group_for(f: Path) -> List[tuple[str, int]]:
+        # Renderings of one near-miss phrase share a group: the split keeps
+        # them on one side, so a phrase is never in both train and test.
+        if f not in phrase_of:
+            group: List[tuple[str, int]] = []
+            negative_groups.append(group)
+            return group
+        if phrase_of[f] not in phrase_groups:
+            phrase_groups[phrase_of[f]] = []
+            negative_groups.append(phrase_groups[phrase_of[f]])
+        return phrase_groups[phrase_of[f]]
+
     for f in neg_files:
         # Each repo numbers its clips from 000000.wav; the source directory
         # keeps two repos from writing the same processed file.
-        dst = proc_neg_dir / f"{f.parent.name}_{f.name}"
-        if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+        if config.window_s <= 0:
+            dst = proc_neg_dir / f"{f.parent.name}_{f.name}"
+            if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+                processed_negatives.append(dst)
+                _group_for(f).append((str(dst), 0))
+            continue
+        try:
+            wav = _load_mono(f, config.sample_rate)
+        except Exception as e:
+            logger.warning("Error preprocessing %s: %s", f, e)
+            continue
+        group = _group_for(f)
+        for i, win in enumerate(negative_windows(wav, config.sample_rate, config.window_s,
+                                                 config.neg_windows_per_clip, rng)):
+            dst = proc_neg_dir / f"{f.parent.name}_{f.stem}_w{i}.wav"
+            _write_window(win, dst, config.sample_rate)
             processed_negatives.append(dst)
+            group.append((str(dst), 0))
 
     # ── Stage 5: Train/test split + metadata CSVs ───────────────────────
     if not processed_positives or not processed_negatives:
@@ -1058,26 +1249,12 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     # test set whenever the set is small: with one positive and one negative it
     # does so every time, and the guard above then reports the dataset as
     # complete. Partitioning first means both files hold both labels whenever
-    # the input does.
+    # the input does. Windows cut from one negative clip stay on one side.
     positive_entries: List[tuple[str, int]] = [(str(p), 1) for p in processed_positives]
-    negative_entries: List[tuple[str, int]] = [(str(p), 0) for p in processed_negatives]
+    negative_entries: List[tuple[str, int]] = [e for g in negative_groups for e in g]
 
-    random.shuffle(positive_entries)
-    random.shuffle(negative_entries)
-
-    def _split(
-        entries: List[tuple[str, int]],
-    ) -> tuple[List[tuple[str, int]], List[tuple[str, int]]]:
-        """Take the test share of one label, leaving at least one for train."""
-        if len(entries) < 2:
-            # One clip of this label cannot be in both files. Training needs it
-            # more than the test set does.
-            return entries, []
-        n_test = min(len(entries) - 1, max(1, int(len(entries) * config.test_split)))
-        return entries[n_test:], entries[:n_test]
-
-    train_positive, test_positive = _split(positive_entries)
-    train_negative, test_negative = _split(negative_entries)
+    train_positive, test_positive = split_groups([[e] for e in positive_entries], config.test_split)
+    train_negative, test_negative = split_groups(negative_groups, config.test_split)
 
     train_entries = train_positive + train_negative
     test_entries = test_positive + test_negative
@@ -1182,6 +1359,16 @@ def cli_main() -> None:
     parser.add_argument(
         "--test-split", type=float, default=0.2, help="Test set fraction (default: 0.2)"
     )
+    parser.add_argument("--window-s", type=float, default=1.5,
+                        help="Length of every training example in seconds (0 keeps clips as they are)")
+    parser.add_argument("--neg-windows-per-clip", type=int, default=3,
+                        help="Windows cut from each long negative clip")
+    parser.add_argument("--adversarial-file", default=None,
+                        help="Text file of near-miss phrases to synthesise as hard negatives, one per line")
+    parser.add_argument("--allow-positive-skips", action="store_true",
+                        help="Continue when more than 20%% of positives are skipped for exceeding the window")
+    parser.add_argument("--adversarial-per-text", type=int, default=3,
+                        help="Renderings per near-miss phrase")
     parser.add_argument(
         "--no-vad", action="store_true", help="Disable VAD trimming"
     )
@@ -1236,6 +1423,11 @@ def cli_main() -> None:
         lang=args.lang,
         sample_rate=16000,
         vad_trim=not args.no_vad,
+        window_s=args.window_s,
+        neg_windows_per_clip=args.neg_windows_per_clip,
+        adversarial_file=args.adversarial_file,
+        adversarial_per_text=args.adversarial_per_text,
+        allow_positive_skips=args.allow_positive_skips,
         test_split=args.test_split,
         vc_refs_dir=args.vc_refs,
         vc_device=args.vc_device,

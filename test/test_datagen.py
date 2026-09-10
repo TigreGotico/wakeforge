@@ -4,6 +4,7 @@ import csv
 import random
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -684,3 +685,348 @@ class TestSplitKeepsBothLabelsInBothFiles:
         )
         with pytest.raises(RuntimeError, match="single-class test set"):
             datagen.run_datagen_pipeline(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Every training example is a fixed-length window
+# ---------------------------------------------------------------------------
+
+
+class TestFixedWindows:
+    def test_every_example_is_window_long_and_negatives_include_a_short_fragment(self) -> None:
+        import random
+        import numpy as np
+        from ww_trainer.datagen import fit_to_window, negative_windows
+
+        rng = random.Random(0)
+        sr, w = 16000, 1.5
+        short = np.ones(int(0.6 * sr), dtype=np.float32)
+        assert len(fit_to_window(short, sr, w, rng)) == int(w * sr)
+        long = np.random.RandomState(0).randn(10 * sr).astype(np.float32)
+        wins = negative_windows(long, sr, w, 3, rng)
+        assert len(wins) == 4 and all(len(x) == int(w * sr) for x in wins)
+        assert any((x == 0).mean() > 0.3 for x in wins)      # the short zero-padded fragment
+        assert sum((x == 0).mean() < 0.01 for x in wins) == 3  # three full windows
+        one_second = np.ones(sr, dtype=np.float32)
+        wins = negative_windows(one_second, sr, w, 3, rng)
+        assert len(wins) == 2 and all(len(x) == int(w * sr) for x in wins)
+
+
+# ---------------------------------------------------------------------------
+# A positive longer than the window is not blind-cropped
+# ---------------------------------------------------------------------------
+
+
+def _make_word_clip(path: Path, word_start: float, word_dur: float, total_dur: float,
+                     sr: int = 16000) -> Path:
+    """A clip of silence with one loud burst (the "word") at *word_start*."""
+    wav = np.zeros(int(sr * total_dur), dtype=np.float32)
+    start = int(sr * word_start)
+    end = start + int(sr * word_dur)
+    wav[start:end] = 0.8
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from ww_trainer.dataset import _save_audio
+    _save_audio(str(path), torch.tensor(wav).unsqueeze(0).float(), sr)
+    return path
+
+
+def _add_burst(path: Path, start: float, dur: float, sr: int = 16000) -> Path:
+    import soundfile as sf
+    wav, _ = sf.read(str(path), dtype="float32")
+    wav[int(sr * start):int(sr * (start + dur))] = 0.8
+    sf.write(str(path), wav, sr)
+    return path
+
+
+class TestLongPositiveIsNotBlindCropped:
+    def test_off_centre_long_positive_is_skipped_not_corrupted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if dataset_id != "TigreGotico/synthetic-wakeword-hey_mycroft":
+                # One short negative clip per negative dataset, so Stage 5's
+                # empty-class check does not fire on an unrelated class.
+                return [_make_word_clip(output_dir / "neg.wav", 0.0, 0.1, 1.0)]
+            return [
+                # Two clips short enough to survive as-is: PR #74's split
+                # guard refuses a test set holding only one class, so the
+                # intentional skip below needs at least two survivors.
+                _make_word_clip(output_dir / "good.wav", word_start=0.5, word_dur=0.4, total_dur=1.0),
+                _make_word_clip(output_dir / "good2.wav", word_start=0.3, word_dur=0.4, total_dur=1.0),
+                # The word sits at 0.2-0.6s of a 5s clip, well off-centre: a
+                # uniform random crop to the 1.5s window misses it most of
+                # the time (the reviewer's probe lost it in 83% of trials).
+                # A second burst at 4.5s keeps the clip long after the
+                # silence trim, so only the skip can protect the word.
+                _add_burst(_make_word_clip(output_dir / "bad_long.wav", word_start=0.2, word_dur=0.4,
+                                           total_dur=5.0), 4.5, 0.4),
+            ]
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", fake_download)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds", n_positive=3,
+            vad_trim=False, download_augmentation=False, adversarial=False, seed=1,
+            allow_positive_skips=True,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = run_datagen_pipeline(cfg)
+
+        proc_pos = sorted((tmp_path / "ds" / "positives" / "processed").glob("*.wav"))
+        assert [p.name for p in proc_pos] == ["good.wav", "good2.wav"]
+        assert result.n_positive == 2
+        assert any("bad_long.wav" in r.message and "window" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Windows of one source clip stay on one side of the split
+# ---------------------------------------------------------------------------
+
+
+def _source_of(path: str) -> str:
+    import re
+    return re.sub(r"_w\d+$", "", Path(path).stem)
+
+
+class TestSplitKeepsSourceClipsApart:
+    def _download(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if dataset_id == "TigreGotico/synthetic-wakeword-hey_mycroft":
+                return [_make_word_clip(output_dir / f"pos{i}.wav", 0.2, 0.4, 1.0) for i in range(10)]
+            return [_make_wav(output_dir / f"neg{i}.wav", duration=4.0 + i % 3) for i in range(12)]
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", fake_download)
+
+    def test_no_source_clip_is_in_both_train_and_test(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._download(monkeypatch)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds", n_positive=10,
+            vad_trim=False, download_augmentation=False, adversarial=False, seed=3,
+        )
+
+        result = run_datagen_pipeline(cfg)
+
+        train = {_source_of(p) for p, _ in read_metadata_csv(result.train_csv)}
+        test = {_source_of(p) for p, _ in read_metadata_csv(result.test_csv)}
+        assert test and train
+        assert train & test == set()
+
+    def test_whole_groups_are_assigned_and_singletons_split_randomly(self) -> None:
+        from ww_trainer.datagen import split_groups
+
+        random.seed(0)
+        groups = [[(f"a{i}_w{j}", 0) for j in range(4)] for i in range(5)]
+        groups += [[(f"s{i}", 0)] for i in range(20)]
+        train, test = split_groups(groups, 0.2)
+
+        assert len(train) + len(test) == 40
+        assert test and train
+        sources = lambda es: {n.split("_w")[0] for n, _ in es if "_w" in n}
+        assert sources(train) & sources(test) == set()
+
+    def test_a_single_group_stays_in_train(self) -> None:
+        from ww_trainer.datagen import split_groups
+
+        train, test = split_groups([[("a_w0", 0), ("a_w1", 0)]], 0.2)
+        assert len(train) == 2 and test == []
+
+
+class TestNearMissPhraseStaysOnOneSide:
+    def test_renderings_of_one_phrase_are_not_split_across_train_and_test(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stem_phrase: dict = {}
+
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return [_make_wav(output_dir / f"neg{i}.wav") for i in range(4)]
+
+        def fake_synth(text: str, output_dir: Path, n: int = 1, lang: str = "en", tts_config=None) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            files = [_make_wav(output_dir / f"{uuid.uuid4().hex[:8]}.wav", duration=1.0) for _ in range(n)]
+            stem_phrase.update({f.stem: text for f in files})
+            return files
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", fake_download)
+        monkeypatch.setattr(datagen, "generate_adversarial_texts", lambda *a, **k: [])
+        monkeypatch.setattr(datagen, "synthesize_positives", fake_synth)
+        adv_file = tmp_path / "near_miss.txt"
+        adv_file.write_text("".join(f"hey phrase{i}\n" for i in range(8)))
+        cfg = DatagenConfig(
+            wake_word="hey test", output_dir=tmp_path / "ds", n_positive=3,
+            vad_trim=False, download_augmentation=False, seed=1,
+            adversarial=True, adversarial_file=str(adv_file), adversarial_per_text=3,
+        )
+
+        result = run_datagen_pipeline(cfg)
+
+        def phrases(csv_path: Path) -> set:
+            out = set()
+            for path, label in read_metadata_csv(csv_path):
+                if label == 0 and "adversarial" in path:
+                    out.add(stem_phrase[_source_of(path).split("adversarial_")[-1]])
+            return out
+
+        train, test = phrases(result.train_csv), phrases(result.test_csv)
+        assert train and test
+        assert train & test == set()
+
+
+# ---------------------------------------------------------------------------
+# Skipped positives are counted and a mostly-skipped run is refused
+# ---------------------------------------------------------------------------
+
+
+def _padded_clip(path: Path, pad_s: float, word_s: float, sr: int = 16000) -> Path:
+    return _make_word_clip(path, word_start=pad_s, word_dur=word_s, total_dur=2 * pad_s + word_s, sr=sr)
+
+
+class TestEnergyTrimOnNoisyClips:
+    @pytest.mark.parametrize("snr_db", [30, 20])
+    def test_padding_with_recording_noise_is_trimmed(self, snr_db: int) -> None:
+        from ww_trainer.datagen import trim_silence_energy
+
+        rng = np.random.RandomState(snr_db)
+        sr = 16000
+        word = rng.randn(int(0.8 * sr)).astype(np.float32) * 0.3
+        noise_rms = 0.3 / 10 ** (snr_db / 20)
+        wav = rng.randn(int(2.0 * sr)).astype(np.float32) * noise_rms
+        wav[int(0.5 * sr):int(1.3 * sr)] += word
+
+        trimmed = trim_silence_energy(wav, sr)
+
+        assert len(trimmed) <= int(1.5 * sr)
+        assert len(trimmed) >= int(0.75 * sr)
+
+
+class TestPositiveSkipSummary:
+    def _download(self, monkeypatch: pytest.MonkeyPatch, positives) -> None:
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if dataset_id == "TigreGotico/synthetic-wakeword-hey_mycroft":
+                return [make(output_dir / f"pos{i}.wav") for i, make in enumerate(positives)]
+            return [_make_wav(output_dir / f"neg{i}.wav", duration=3.0) for i in range(6)]
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", fake_download)
+
+    def _cfg(self, tmp_path: Path, n: int, **kw) -> DatagenConfig:
+        return DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds", n_positive=n,
+            vad_trim=False, download_augmentation=False, adversarial=False, seed=1, **kw,
+        )
+
+    def test_padded_clips_are_trimmed_and_kept_without_vad(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._download(monkeypatch, [lambda p, i=i: _padded_clip(p, 0.4 + 0.05 * (i % 4), 0.6) for i in range(8)])
+
+        result = run_datagen_pipeline(self._cfg(tmp_path, 8))
+
+        assert result.n_positive == 8
+
+    def test_summary_line_reports_counts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                         caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        positives = [lambda p: _make_word_clip(p, 0.5, 0.4, 1.0)] * 9
+        positives.append(lambda p: _make_word_clip(p, 0.5, 2.0, 3.0))
+        self._download(monkeypatch, positives)
+
+        with caplog.at_level(logging.INFO):
+            run_datagen_pipeline(self._cfg(tmp_path, 10))
+
+        assert any("Positives: 9 kept, 1 skipped too long, 0 skipped other (of 10)" in r.message
+                   for r in caplog.records)
+
+    def test_refuses_when_over_a_fifth_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        positives = [lambda p: _make_word_clip(p, 0.5, 0.4, 1.0)] * 3
+        positives += [lambda p: _make_word_clip(p, 0.5, 2.0, 3.0)] * 2
+        self._download(monkeypatch, positives)
+
+        with pytest.raises(RuntimeError, match="2 of 5 positives were skipped"):
+            run_datagen_pipeline(self._cfg(tmp_path, 5))
+
+    def test_allow_flag_overrides_the_refusal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        positives = [lambda p: _make_word_clip(p, 0.5, 0.4, 1.0)] * 3
+        positives += [lambda p: _make_word_clip(p, 0.5, 2.0, 3.0)] * 2
+        self._download(monkeypatch, positives)
+
+        result = run_datagen_pipeline(self._cfg(tmp_path, 5, allow_positive_skips=True))
+
+        assert result.n_positive == 3
+
+
+# ---------------------------------------------------------------------------
+# --adversarial-file
+# ---------------------------------------------------------------------------
+
+
+class TestAdversarialFile:
+    def _patch_pipeline(self, monkeypatch: pytest.MonkeyPatch):
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            # One real negative per negative dataset, so Stage 5's
+            # empty-class check never fires for a reason unrelated to the
+            # adversarial-file handling under test here.
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return [_make_wav(output_dir / "neg.wav")]
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", fake_download)
+        monkeypatch.setattr(datagen, "generate_adversarial_texts", lambda *a, **k: [])
+        calls: list = []
+
+        def fake_synth(text: str, output_dir: Path, n: int = 1, lang: str = "en", tts_config=None) -> list:
+            calls.append((text, n))
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return [_make_wav(output_dir / f"{uuid.uuid4().hex[:8]}.wav") for _ in range(n)]
+
+        monkeypatch.setattr(datagen, "synthesize_positives", fake_synth)
+        return calls
+
+    def _cfg(self, tmp_path: Path, adv_file: str | None, adversarial: bool = True) -> DatagenConfig:
+        return DatagenConfig(
+            wake_word="hey test", output_dir=tmp_path / "ds", n_positive=3,
+            vad_trim=False, download_augmentation=False, seed=1,
+            adversarial=adversarial, adversarial_file=adv_file, adversarial_per_text=2,
+        )
+
+    def test_phrases_from_file_become_negatives(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_pipeline(monkeypatch)
+        adv_file = tmp_path / "near_miss.txt"
+        adv_file.write_text("hey rest\nhey west\n")
+
+        result = run_datagen_pipeline(self._cfg(tmp_path, str(adv_file)))
+
+        texts_rendered_per_text = {text for text, n in calls if n == 2}
+        assert {"hey rest", "hey west"} <= texts_rendered_per_text
+        entries = read_metadata_csv(result.train_csv) + read_metadata_csv(result.test_csv)
+        negatives = [p for p, label in entries if label == 0]
+        assert any("adversarial" in p for p in negatives)
+
+    def test_missing_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_pipeline(monkeypatch)
+        cfg = self._cfg(tmp_path, str(tmp_path / "does_not_exist.txt"))
+        with pytest.raises(FileNotFoundError):
+            run_datagen_pipeline(cfg)
+
+    def test_empty_or_comment_only_file_is_a_noop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_pipeline(monkeypatch)
+        adv_file = tmp_path / "near_miss.txt"
+        adv_file.write_text("# nothing here\n\n   \n")
+
+        run_datagen_pipeline(self._cfg(tmp_path, str(adv_file)))
+
+        # Only Stage 1's positive synthesis call (n=3) happened; no
+        # adversarial text reached synthesize_positives.
+        assert all(n == 3 for _, n in calls)
+
+    def test_file_without_adversarial_flag_is_a_noop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_pipeline(monkeypatch)
+        # A missing file would raise if ever opened; adversarial=False must
+        # keep it unopened (datagen.py gates the read behind `if config.adversarial`).
+        cfg = self._cfg(tmp_path, str(tmp_path / "does_not_exist.txt"), adversarial=False)
+
+        result = run_datagen_pipeline(cfg)
+
+        assert result.n_positive == 3
