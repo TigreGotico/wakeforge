@@ -345,3 +345,21 @@ class TestPipelineMockedEndToEnd:
         # All labels are 0 or 1
         for _, label in train + test:
             assert label in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# The pipeline refuses to finish with an empty class
+# ---------------------------------------------------------------------------
+
+class TestPipelineRefusesEmptyClasses:
+    def test_no_downloads_is_an_error_not_a_dataset(self, tmp_path, monkeypatch) -> None:
+        import pytest
+        from ww_trainer import datagen
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", lambda *a, **k: [])
+        monkeypatch.setattr(datagen, "find_positive_dataset", lambda ww: "org/positives")
+        cfg = datagen.DatagenConfig(wake_word="hey test", output_dir=tmp_path,
+                                    n_positive=10, download_augmentation=False, adversarial=False)
+        with pytest.raises(RuntimeError, match="0 positives and 0 negatives"):
+            datagen.run_datagen_pipeline(cfg)
+        assert not (tmp_path / "train" / "metadata.csv").exists()
