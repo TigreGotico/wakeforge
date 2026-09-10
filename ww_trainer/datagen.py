@@ -10,6 +10,7 @@ Entry point: ``ww_trainer-datagen`` (see :func:`cli_main`).
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import os
@@ -183,6 +184,43 @@ def preprocess_audio(
 # ---------------------------------------------------------------------------
 
 
+
+def _list_repo_audio_files(dataset_id: str) -> List[str]:
+    """Sorted audio file paths in a Hugging Face dataset repo, or [] when it is
+    not a plain folder of audio files (or the listing fails)."""
+    from huggingface_hub import HfApi
+
+    try:
+        files = HfApi().list_repo_files(dataset_id, repo_type="dataset")
+    except Exception as exc:
+        logger.warning("Could not list files of %s: %s", dataset_id, exc)
+        return []
+    return sorted(f for f in files if Path(f).suffix.lower() in AUDIO_EXTS)
+
+
+def _download_audio_files(dataset_id: str, files: List[str], output_dir: Path, sr: int) -> List[Path]:
+    """Download each audio file, decode it with soundfile and save 16-bit mono WAV at *sr*."""
+    from huggingface_hub import hf_hub_download
+
+    written: List[Path] = []
+    for i, name in enumerate(files):
+        try:
+            local = hf_hub_download(dataset_id, name, repo_type="dataset")
+            arr, orig_sr = sf.read(local, dtype="float32")
+        except Exception as exc:
+            logger.warning("Skipping %s/%s: %s", dataset_id, name, exc)
+            continue
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1)
+        if orig_sr != sr:
+            arr = torchaudio.functional.resample(torch.tensor(arr), orig_sr, sr).numpy()
+        fname = output_dir / f"{i:06d}.wav"
+        _save_audio(str(fname), torch.tensor(arr).unsqueeze(0).float(), sr)
+        written.append(fname)
+    logger.info("  Downloaded %d files from %s", len(written), dataset_id)
+    return written
+
+
 def download_hf_audio_dataset(
     dataset_id: str,
     output_dir: Path,
@@ -199,7 +237,7 @@ def download_hf_audio_dataset(
 
     Returns list of written file paths.
     """
-    from datasets import load_dataset
+    from datasets import Audio, load_dataset
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -211,6 +249,15 @@ def download_hf_audio_dataset(
         return existing[:max_samples] if max_samples is not None else existing
 
     logger.info("Downloading %s → %s (max=%s)", dataset_id, output_dir, max_samples)
+
+    # ── Repos that are folders of audio files: fetch the files themselves ──
+    # This needs no `datasets` builder at all, so it works where torchcodec
+    # (which the Audio feature requires to encode or decode) cannot load.
+    audio_files = _list_repo_audio_files(dataset_id)
+    if audio_files:
+        if max_samples is not None:
+            audio_files = audio_files[:max_samples]
+        return _download_audio_files(dataset_id, audio_files, output_dir, sr)
 
     # ── Prefer cached (non-streaming) download ──────────────────────────────
     # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
@@ -225,6 +272,13 @@ def download_hf_audio_dataset(
     for streaming in modes:
         try:
             ds = load_dataset(dataset_id, split="train", streaming=streaming)
+            # Read the encoded bytes and decode them with soundfile: the default
+            # decoder needs torchcodec, whose wheel links CUDA libraries and
+            # cannot load next to a ROCm or CPU-only torch.
+            for col in ("audio", "Audio", "sound", "file"):
+                if col in ds.features and isinstance(ds.features[col], Audio):
+                    ds = ds.cast_column(col, Audio(decode=False))
+                    break
             break
         except Exception as exc:
             if not streaming:
@@ -261,18 +315,18 @@ def download_hf_audio_dataset(
                 return written
 
         audio = example[audio_col]
-        if hasattr(audio, "get_all_samples"):
-            # datasets ≥ 3.x with torchcodec backend: AudioDecoder object
-            samples = audio.get_all_samples()
-            # samples.data shape: (channels, num_samples) — mix down to mono 1D
-            arr = samples.data.float().mean(dim=0).numpy().astype(np.float32)
-            orig_sr = int(samples.sample_rate)
-        elif isinstance(audio, dict):
-            # datasets < 3.x: {"array": np.ndarray, "sampling_rate": int}
+        if isinstance(audio, dict) and audio.get("bytes") is not None:
+            # encoded file bytes (Audio(decode=False))
+            arr, orig_sr = sf.read(io.BytesIO(audio["bytes"]), dtype="float32")
+        elif isinstance(audio, dict) and audio.get("path"):
+            arr, orig_sr = sf.read(audio["path"], dtype="float32")
+        elif isinstance(audio, dict) and "array" in audio:
             arr = np.array(audio["array"], dtype=np.float32)
             orig_sr = audio.get("sampling_rate", sr)
         else:
             continue
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1)
 
         if orig_sr != sr:
             arr = torchaudio.functional.resample(
