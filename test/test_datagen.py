@@ -345,3 +345,21 @@ class TestPipelineMockedEndToEnd:
         # All labels are 0 or 1
         for _, label in train + test:
             assert label in (0, 1)
+class TestFixedWindows:
+    def test_every_example_is_window_long_and_negatives_include_a_short_fragment(self) -> None:
+        import random
+        import numpy as np
+        from ww_trainer.datagen import fit_to_window, negative_windows
+
+        rng = random.Random(0)
+        sr, w = 16000, 1.5
+        short = np.ones(int(0.6 * sr), dtype=np.float32)
+        assert len(fit_to_window(short, sr, w, rng)) == int(w * sr)
+        long = np.random.RandomState(0).randn(10 * sr).astype(np.float32)
+        wins = negative_windows(long, sr, w, 3, rng)
+        assert len(wins) == 4 and all(len(x) == int(w * sr) for x in wins)
+        assert any((x == 0).mean() > 0.3 for x in wins)      # the short zero-padded fragment
+        assert sum((x == 0).mean() < 0.01 for x in wins) == 3  # three full windows
+        one_second = np.ones(sr, dtype=np.float32)
+        wins = negative_windows(one_second, sr, w, 3, rng)
+        assert len(wins) == 2 and all(len(x) == int(w * sr) for x in wins)
