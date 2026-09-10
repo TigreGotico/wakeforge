@@ -221,21 +221,27 @@ class TestGraphemeAugmenter:
 # ---------------------------------------------------------------------------
 
 class TestNegativeDatasetPurposeMapping:
-    def test_general_has_esc50_and_nar(self) -> None:
-        assert "TigreGotico/ESC-50" in NEGATIVE_DATASETS["general"]
-        assert "TigreGotico/NAR" in NEGATIVE_DATASETS["general"]
+    def test_general_and_speech_sources(self) -> None:
+        assert NEGATIVE_DATASETS["general"] == ["agkphysics/AudioSet"]
+        assert NEGATIVE_DATASETS["speech"] == ["TigreGotico/not-wake-words-speech-en"]
 
-    def test_bg_noise_datasets(self) -> None:
-        bg = NEGATIVE_DATASETS["bg_noise"]
-        assert "TigreGotico/ambient_noises" in bg
-        assert "TigreGotico/building_106_kitchen_3secs" in bg
-        assert "TigreGotico/public_domain_sounds_3secs" in bg
+    def test_every_pipeline_dataset_has_a_permissive_licence(self) -> None:
+        """A dataset enters the pipeline only with a permissive licence on record."""
+        from ww_trainer.datagen import DATASET_LICENSES, KNOWN_POSITIVE_DATASETS, PERMISSIVE_LICENSES
+        used = {d for ds in NEGATIVE_DATASETS.values() for d in ds} | set(KNOWN_POSITIVE_DATASETS.values())
+        missing = used - set(DATASET_LICENSES)
+        assert not missing, missing
+        non_permissive = {d: lic for d, lic in DATASET_LICENSES.items() if lic not in PERMISSIVE_LICENSES}
+        assert not non_permissive, non_permissive
 
-    def test_music_datasets(self) -> None:
-        assert "TigreGotico/FMA_3secs" in NEGATIVE_DATASETS["music"]
-
-    def test_rir_datasets(self) -> None:
-        assert "davidscripka/MIT_environmental_impulse_responses" in NEGATIVE_DATASETS["rir"]
+    def test_excluded_sources_stay_out(self) -> None:
+        """NC and unlicensed sources ruled out of the training set never come back."""
+        used = {d for ds in NEGATIVE_DATASETS.values() for d in ds}
+        for banned in ("TigreGotico/ESC-50", "TigreGotico/NAR", "hf-internal-testing/librispeech_asr_demo",
+                       "TigreGotico/ambient_noises", "TigreGotico/building_106_kitchen_3secs",
+                       "TigreGotico/public_domain_sounds_3secs", "TigreGotico/FMA_3secs",
+                       "davidscripka/MIT_environmental_impulse_responses"):
+            assert banned not in used
 
     def test_no_augmentation_in_general(self) -> None:
         """Augmentation datasets must NOT appear in the general category."""
