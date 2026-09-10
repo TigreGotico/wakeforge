@@ -45,31 +45,40 @@ KNOWN_POSITIVE_DATASETS: Dict[str, str] = {
     "home_assistant": "TigreGotico/synthetic-wakeword-home_assistant",
 }
 
+# Every dataset the pipeline reads, with the licence its Hugging Face card
+# states. Only permissive licences (CC0, CC BY, Apache, MIT) may enter a
+# training set that becomes a published model; a dataset whose card states no
+# licence, or a NC / ND one, is not listed here and must not be added below.
+DATASET_LICENSES: Dict[str, str] = {
+    "agkphysics/AudioSet": "cc-by-4.0",
+    "TigreGotico/not-wake-words-speech-en": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-alexa": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-hey_mycroft": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-hey_siri": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-wake_up": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-hey_computer": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-voice_assistant": "cc-by-4.0",
+    "TigreGotico/synthetic-wakeword-home_assistant": "cc-by-4.0",
+}
+
+PERMISSIVE_LICENSES = {"cc0-1.0", "cc-by-4.0", "cc-by-3.0", "apache-2.0", "mit", "bsd-3-clause"}
+
 NEGATIVE_DATASETS: Dict[str, List[str]] = {
-    # Non-speech environmental sounds (label=0)
+    # Non-speech general audio (label=0)
     "general": [
-        "TigreGotico/ESC-50",
-        "TigreGotico/NAR",
         "agkphysics/AudioSet",          # large general audio; capped by max_negative
     ],
     # Human speech that is NOT the wake word — critical for preventing
     # models from learning "speech vs silence" instead of the specific phrase.
-    # These are downloaded alongside "general" negatives and mixed in.
     "speech": [
-        "TigreGotico/not-wake-words-speech-en",        # primary: curated NWW speech
-        "hf-internal-testing/librispeech_asr_demo",    # ~70 clips, LibriSpeech clean
+        "TigreGotico/not-wake-words-speech-en",        # curated NWW speech
     ],
-    "bg_noise": [
-        "TigreGotico/ambient_noises",
-        "TigreGotico/building_106_kitchen_3secs",
-        "TigreGotico/public_domain_sounds_3secs",
-    ],
-    "music": [
-        "TigreGotico/FMA_3secs",
-    ],
-    "rir": [
-        "davidscripka/MIT_environmental_impulse_responses",
-    ],
+    # Augmentation sources (background noise, music, room impulse responses)
+    # are empty until a permissively licensed source is listed in
+    # DATASET_LICENSES; pass the folders explicitly to use your own.
+    "bg_noise": [],
+    "music": [],
+    "rir": [],
 }
 
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}

@@ -26,26 +26,23 @@ Sources are declared in `NEGATIVE_DATASETS` —
 loaded non-streaming). "Local output" is what ww-trainer writes under
 `<output-dir>/dataset/` after sampling and resampling to 16 kHz WAV.
 
-| Dataset | Role | Default cap | Upstream | Local output |
-|---|---|---|---|---|
-| [`TigreGotico/ESC-50`](https://huggingface.co/datasets/TigreGotico/ESC-50) | General negatives (env. sounds) | none (~2 000 clips) | 883 MB | ~200 MB |
-| [`TigreGotico/NAR`](https://huggingface.co/datasets/TigreGotico/NAR) | General negatives | none | 45 MB | ~30 MB |
-| [`agkphysics/AudioSet`](https://huggingface.co/datasets/agkphysics/AudioSet) | General negatives | **5 000 samples** | 2.4 TB total — streamed, only the 5 000 capped samples are kept | ~500 MB |
-| [`TigreGotico/not-wake-words-speech-en`](https://huggingface.co/datasets/TigreGotico/not-wake-words-speech-en) | Speech negatives (primary), also a voice-donor pool for VC | none | 320 MB | ~250 MB |
-| [`hf-internal-testing/librispeech_asr_demo`](https://huggingface.co/datasets/hf-internal-testing/librispeech_asr_demo) | Speech negatives | ~70 clips | 9 MB | ~7 MB |
-| [`TigreGotico/ambient_noises`](https://huggingface.co/datasets/TigreGotico/ambient_noises) | `bg_noise/` augmentation | none | 297 MB | ~250 MB |
-| [`TigreGotico/building_106_kitchen_3secs`](https://huggingface.co/datasets/TigreGotico/building_106_kitchen_3secs) | `bg_noise/` augmentation | none | 432 MB | ~400 MB |
-| [`TigreGotico/public_domain_sounds_3secs`](https://huggingface.co/datasets/TigreGotico/public_domain_sounds_3secs) | `bg_noise/` augmentation | none | 902 MB | ~850 MB |
-| [`TigreGotico/FMA_3secs`](https://huggingface.co/datasets/TigreGotico/FMA_3secs) | `music/` augmentation | none | 5 MB | ~5 MB |
-| [`davidscripka/MIT_environmental_impulse_responses`](https://huggingface.co/datasets/davidscripka/MIT_environmental_impulse_responses) | `rir/` augmentation | none | 8 MB | ~8 MB |
+| Dataset | Role | Licence | Default cap | Upstream | Local output |
+|---|---|---|---|---|---|
+| [`agkphysics/AudioSet`](https://huggingface.co/datasets/agkphysics/AudioSet) | General negatives | CC BY 4.0 | **5 000 samples** | 2.4 TB total — streamed, only the 5 000 capped samples are kept | ~500 MB |
+| [`TigreGotico/not-wake-words-speech-en`](https://huggingface.co/datasets/TigreGotico/not-wake-words-speech-en) | Speech negatives (primary), also a voice-donor pool for VC | CC BY 4.0 | none | 320 MB | ~250 MB |
+| [`TigreGotico/synthetic-wakeword-<phrase>`](https://huggingface.co/collections/TigreGotico/wakeword-datasets) | Positives for a known phrase | CC BY 4.0 | `--n-positive` | ~90 MB per phrase | ~90 MB |
+
+Only datasets whose Hugging Face card states a permissive licence are read;
+the table `DATASET_LICENSES` in `ww_trainer/datagen.py` is the record and a
+test refuses any dataset missing from it. Background noise, music and room
+impulse response augmentation ship no default source; pass
+`--bg-noise-folder`, `--music-folder` and `--rir-folder` with your own audio
+to use them.
 
 Sum of upstream sizes, default preset (excluding AudioSet which is
-streamed): ~2.9 GB. Add locally written outputs (~2 GB) plus HF cache
-Parquet/Arrow intermediates (~30–50 % overhead) → ~6–8 GB for the
+streamed): ~0.4 GB. Add locally written outputs (~1 GB) plus HF cache
+Parquet/Arrow intermediates (~30–50 % overhead) → ~2 GB for the
 default run.
-
-Pass `--no-augmentation-data` to skip the bottom five rows — saves
-~1.6 GB upstream + ~1.5 GB local.
 
 ### If you already cached the full AudioSet by mistake
 
