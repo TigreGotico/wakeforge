@@ -179,6 +179,57 @@ def preprocess_audio(
         return False
 
 
+def fit_to_window(wav: np.ndarray, sr: int, window_s: float, rng: random.Random) -> np.ndarray:
+    """Crop or zero-pad *wav* to exactly ``window_s`` seconds, at a random offset."""
+    n = int(sr * window_s)
+    if len(wav) >= n:
+        start = rng.randint(0, len(wav) - n)
+        return wav[start:start + n]
+    out = np.zeros(n, dtype=np.float32)
+    start = rng.randint(0, n - len(wav))
+    out[start:start + len(wav)] = wav
+    return out
+
+
+def negative_windows(wav: np.ndarray, sr: int, window_s: float, per_clip: int,
+                     rng: random.Random) -> List[np.ndarray]:
+    """Cut a raw negative clip into up to *per_clip* windows of ``window_s``.
+
+    Long clips give windows at random offsets. Every clip also yields one short
+    fragment (0.4 to 1.0 s) zero-padded into a window, so that short padded
+    audio exists in both classes and neither length nor padding marks a class.
+    """
+    n = int(sr * window_s)
+    out: List[np.ndarray] = []
+    if len(wav) >= n:
+        for _ in range(per_clip):
+            out.append(fit_to_window(wav, sr, window_s, rng))
+    else:
+        out.append(fit_to_window(wav, sr, window_s, rng))
+    frag = int(sr * rng.uniform(0.4, 1.0))
+    if len(wav) > frag:
+        start = rng.randint(0, len(wav) - frag)
+        out.append(fit_to_window(wav[start:start + frag], sr, window_s, rng))
+    return out
+
+
+def _load_mono(src: Path, sr: int) -> np.ndarray:
+    arr, orig_sr = sf.read(str(src), dtype="float32", always_2d=True)
+    wav = arr.mean(axis=1)
+    if orig_sr != sr:
+        import librosa
+        wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=sr)
+    return wav
+
+
+def _write_window(wav: np.ndarray, dst: Path, sr: int) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    max_abs = np.max(np.abs(wav))
+    if max_abs > 0:
+        wav = wav / max_abs
+    _save_audio(str(dst), torch.tensor(wav).unsqueeze(0).float(), sr)
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace dataset download
 # ---------------------------------------------------------------------------
@@ -709,6 +760,10 @@ class DatagenConfig:
     lang: str = "en"
     sample_rate: int = 16000
     vad_trim: bool = True
+    window_s: float = 1.5
+    neg_windows_per_clip: int = 3
+    adversarial_file: Optional[str] = None
+    adversarial_per_text: int = 3
     test_split: float = 0.2
     # Voice cloning
     vc_refs_dir: Optional[str] = None
@@ -881,6 +936,9 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             llm_url=config.llm_url,
             llm_model=config.llm_model,
         )
+        if config.adversarial_file:
+            with open(config.adversarial_file, encoding="utf-8") as fh:
+                adv_texts += [line.strip() for line in fh if line.strip() and not line.startswith("#")]
         if adv_texts:
             adv_dir = negatives_dir / "adversarial"
             try:
@@ -889,26 +947,54 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
                 )
                 # Synthesize each adversarial text
                 for text in adv_texts:
-                    files = synthesize_positives(text, adv_dir, n=1, lang=config.lang)
+                    files = synthesize_positives(text, adv_dir, n=config.adversarial_per_text, lang=config.lang)
                     neg_files.extend(files)
             except RuntimeError:
                 logger.warning("No TTS available for adversarial synthesis")
 
     # ── Stage 4: Preprocess all audio ───────────────────────────────────
-    logger.info("Stage 4: Preprocessing audio files")
+    # Every training example is exactly window_s long: positives are VAD
+    # trimmed then placed at a random offset in a zero-padded window; negatives
+    # are windows cut from the full clips plus one short zero-padded fragment
+    # per clip. Length and padding therefore mark neither class. window_s=0
+    # keeps the clips as they are.
+    logger.info("Stage 4: Preprocessing audio files (window %.2f s)", config.window_s)
+    rng = random.Random(config.seed)
 
     processed_positives: List[Path] = []
     proc_pos_dir = positives_dir / "processed"
     for f in pos_files:
         dst = proc_pos_dir / f.name
-        if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+        if config.window_s <= 0:
+            if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+                processed_positives.append(dst)
+            continue
+        try:
+            wav = _load_mono(f, config.sample_rate)
+            if config.vad_trim:
+                wav = trim_silence_vad(wav, config.sample_rate)
+            _write_window(fit_to_window(wav, config.sample_rate, config.window_s, rng), dst, config.sample_rate)
             processed_positives.append(dst)
+        except Exception as e:
+            logger.warning("Error preprocessing %s: %s", f, e)
 
     processed_negatives: List[Path] = []
     proc_neg_dir = negatives_dir / "processed"
     for f in neg_files:
-        dst = proc_neg_dir / f.name
-        if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+        if config.window_s <= 0:
+            dst = proc_neg_dir / f.name
+            if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
+                processed_negatives.append(dst)
+            continue
+        try:
+            wav = _load_mono(f, config.sample_rate)
+        except Exception as e:
+            logger.warning("Error preprocessing %s: %s", f, e)
+            continue
+        for i, win in enumerate(negative_windows(wav, config.sample_rate, config.window_s,
+                                                 config.neg_windows_per_clip, rng)):
+            dst = proc_neg_dir / f"{f.stem}_w{i}.wav"
+            _write_window(win, dst, config.sample_rate)
             processed_negatives.append(dst)
 
     # ── Stage 5: Train/test split + metadata CSVs ───────────────────────
@@ -1008,6 +1094,14 @@ def cli_main() -> None:
     parser.add_argument(
         "--test-split", type=float, default=0.2, help="Test set fraction (default: 0.2)"
     )
+    parser.add_argument("--window-s", type=float, default=1.5,
+                        help="Length of every training example in seconds (0 keeps clips as they are)")
+    parser.add_argument("--neg-windows-per-clip", type=int, default=3,
+                        help="Windows cut from each long negative clip")
+    parser.add_argument("--adversarial-file", default=None,
+                        help="Text file of near-miss phrases to synthesise as hard negatives, one per line")
+    parser.add_argument("--adversarial-per-text", type=int, default=3,
+                        help="Renderings per near-miss phrase")
     parser.add_argument(
         "--no-vad", action="store_true", help="Disable VAD trimming"
     )
@@ -1057,6 +1151,10 @@ def cli_main() -> None:
         lang=args.lang,
         sample_rate=16000,
         vad_trim=not args.no_vad,
+        window_s=args.window_s,
+        neg_windows_per_clip=args.neg_windows_per_clip,
+        adversarial_file=args.adversarial_file,
+        adversarial_per_text=args.adversarial_per_text,
         test_split=args.test_split,
         vc_refs_dir=args.vc_refs,
         vc_device=args.vc_device,
