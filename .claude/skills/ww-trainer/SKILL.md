@@ -1,6 +1,6 @@
 ---
 name: ww-trainer
-description: "Train, evaluate, and export wake-word detection models using the ww-trainer toolkit (pip: ww_trainer). Covers dataset generation, single-run training, genetic HP search, multi-tier experiments, ONNX export, and live inference testing."
+description: "Train, evaluate, and export wake-word detection models using wakeforge (pip: wakeforge, import name ww_trainer). Covers dataset generation, single-run training, genetic HP search, multi-tier experiments, ONNX export, and live inference testing."
 ---
 
 Check availability:
@@ -10,10 +10,24 @@ python -c "import ww_trainer; print(ww_trainer.__version__)"
 
 Install:
 ```bash
-pip install ww_trainer                                      # minimal
-pip install "ww_trainer[datagen]"                          # +TTS dataset generation
-pip install "ww_trainer[datagen,mlflow,vc-onnx,sweep,viz]" # full research stack
+pip install --pre wakeforge                                # minimal (import name stays ww_trainer)
+pip install --pre "wakeforge[datagen]"                     # +TTS dataset generation
+pip install --pre "wakeforge[datagen,mlflow,vc,sweep,viz]" # full research stack
 ```
+
+---
+
+## Before training anything, read AGENTS.md
+
+`AGENTS.md` at the repository root states what a good model must pass
+(false rejects, near-miss acceptance, false accepts per hour on speech,
+conversational speech, noise and music, chunk robustness), how the training
+data must be shaped (every example the same length, negatives cut from full
+clips per class, near-miss phrases as negatives, held-out voices kept out),
+the licence rule for datasets, and the runtime facts (torchcodec, ROCm,
+the plugin's chunk handling). A model that only scores well on its own
+synthetic test split has not been validated; do not call it good and do not
+publish it.
 
 ---
 
@@ -33,7 +47,7 @@ score = model.infer(wav_float32_array)  # float in [0, 1]
 
 ## CLI entry points
 
-All installed by `pip install ww_trainer`:
+All installed by `pip install --pre wakeforge`:
 
 | Command | Purpose |
 |---------|---------|
