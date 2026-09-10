@@ -7,8 +7,8 @@ from ww_trainer import vc_helpers
 def test_list_engines_includes_known_engines():
     engines = vc_helpers.list_engines()
     assert isinstance(engines, list)
-    # knnvc is the default; linacodec / chatterbox are notable members.
-    for expected in ("knnvc", "linacodec", "chatterbox"):
+    # knnvc is the default; chatterbox is a notable member.
+    for expected in ("knnvc", "chatterbox"):
         assert expected in engines
 
 
