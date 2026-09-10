@@ -117,24 +117,30 @@ def test_size_aware_loss_increases_with_larger_model() -> None:
     assert val_l > val_s
 
 
-def test_size_aware_loss_l1_encourages_sparsity() -> None:
-    """Training with L1 should push weights toward zero."""
+def _train_all_ones_linear(l1_weight: float, seed: int) -> float:
+    torch.manual_seed(seed)
     model = nn.Linear(8, 1, bias=False)
-    nn.init.ones_(model.weight)  # start at all-ones
+    nn.init.ones_(model.weight)
     base = nn.BCEWithLogitsLoss()
-    loss_fn = SizeAwareLoss(base, l1_weight=0.1, size_weight=0, param_budget=100)
-
+    loss_fn = SizeAwareLoss(base, l1_weight=l1_weight, size_weight=0, param_budget=100)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     for _ in range(50):
         logits = model(torch.randn(4, 8)).squeeze(-1)
-        labels = torch.tensor([0.0, 0.0, 0.0, 0.0])
+        labels = torch.zeros(4)
         loss = loss_fn(logits, labels, model)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    return model.weight.abs().mean().item()
 
-    # Weights should be closer to zero than initial all-ones
-    assert model.weight.abs().mean().item() < 0.9
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_size_aware_loss_l1_encourages_sparsity(seed: int) -> None:
+    """The L1 term must pull weights closer to zero than the same run without it."""
+    without_l1 = _train_all_ones_linear(0.0, seed)
+    with_l1 = _train_all_ones_linear(0.1, seed)
+    assert with_l1 < without_l1
+    assert with_l1 < 1.0
 
 
 # ---- Micro search space ----

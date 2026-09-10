@@ -10,6 +10,10 @@ jobs:
     uses: OpenVoiceOS/gh-automations/.github/workflows/license-check.yml@dev
     secrets: inherit
     with:
-      # soxr (LGPL-2.1) and tqdm (MPL-2.0) are transitive deps of librosa/core.
-      # Both are dynamically linked — distribution complies with their licenses.
-      exclude_packages: "^(soxr|tqdm)$"
+      # pilosus matches each exclude against the resolved "name==version" string,
+      # so every entry anchors the name and allows a version suffix.
+      # soxr (LGPL-2.1) is a transitive dep of librosa, dynamically linked.
+      # nvidia-* and cuda-toolkit are the proprietary CUDA runtime wheels that
+      # torch's Linux wheel pulls in; they are loaded at runtime on GPU hosts
+      # and are not part of what wakeforge ships.
+      exclude_packages: '(?i:^soxr([=<>!~ @;].*)?$)|(?i:^(nvidia[-_].*|cuda[-_]toolkit)([=<>!~ @;].*)?$)'
