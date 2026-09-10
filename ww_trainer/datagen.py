@@ -849,6 +849,12 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             processed_negatives.append(dst)
 
     # ── Stage 5: Train/test split + metadata CSVs ───────────────────────
+    if not processed_positives or not processed_negatives:
+        raise RuntimeError(
+            f"datagen produced {len(processed_positives)} positives and "
+            f"{len(processed_negatives)} negatives; a training set needs both. "
+            "Check the download errors above (network, disk space, HF_HOME)."
+        )
     logger.info("Stage 5: Splitting into train/test sets")
 
     all_entries: List[tuple[str, int]] = []
