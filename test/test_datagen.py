@@ -351,14 +351,30 @@ class TestPipelineMockedEndToEnd:
 # download_hf_audio_dataset decodes encoded bytes without torchcodec
 # ---------------------------------------------------------------------------
 
+def _fake_datasets_module(load_dataset=None):
+    """A stand-in `datasets` module: the test extra does not install it."""
+    import types
+
+    class Audio:
+        def __init__(self, decode: bool = True) -> None:
+            self.decode = decode
+
+    mod = types.ModuleType("datasets")
+    mod.Audio = Audio
+    mod.load_dataset = load_dataset
+    return mod
+
+
 class TestDownloadDecodesWithSoundfile:
     def test_encoded_bytes_become_16k_wavs(self, tmp_path, monkeypatch) -> None:
         import io
         import sys
         import numpy as np
         import soundfile as sf
-        import datasets as hf_datasets
         from ww_trainer import datagen
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
 
         sr_in = 22050
         tone = (0.2 * np.sin(2 * np.pi * 440 * np.arange(sr_in) / sr_in)).astype(np.float32)
@@ -405,7 +421,7 @@ class TestFolderReposBypassTheDatasetsBuilder:
         import huggingface_hub
         monkeypatch.setattr(huggingface_hub, "hf_hub_download",
                             lambda repo, name, repo_type=None: str(src / name))
-        monkeypatch.setattr(datagen, "load_dataset", None, raising=False)
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
 
         files = datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=1, sr=16000)
 
