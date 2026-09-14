@@ -4,7 +4,7 @@
 > This page mirrors [`notebooks/kaggle_quickstart.ipynb`](../notebooks/kaggle_quickstart.ipynb)
 > step by step.  Open the notebook link when you are ready to run.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TigreGotico/ww-trainer/blob/dev/notebooks/kaggle_quickstart.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TigreGotico/wakeforge/blob/dev/notebooks/kaggle_quickstart.ipynb)
 
 ---
 
@@ -30,7 +30,7 @@ Together these are typically under 1 MB.  Runtime inference needs only
 1. Create a free [Kaggle account](https://www.kaggle.com).
 2. Open the notebook:
    **Code → + New Notebook → Import from GitHub URL**  
-   `https://github.com/TigreGotico/ww-trainer/blob/dev/notebooks/kaggle_quickstart.ipynb`
+   `https://github.com/TigreGotico/wakeforge/blob/dev/notebooks/kaggle_quickstart.ipynb`
 3. Set **Session options → Accelerator → GPU T4 × 1** (free, no credit card).
 4. Edit Cell 2: set `WAKE_WORD` to your phrase.
 5. Click **Run All**.

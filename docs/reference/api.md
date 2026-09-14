@@ -1,4 +1,4 @@
-# ww-trainer — API Reference
+# wakeforge — API Reference
 
 Complete reference for every public class and method. All line numbers reference the current source.
 

@@ -1,4 +1,4 @@
-# ww-trainer — Architecture
+# wakeforge — Architecture
 
 Deep-dive into the system design: why it is structured the way it is, how data flows through it, and what every major component does.
 
@@ -42,7 +42,7 @@ Combines one extractor and one head. Holds no learnable parameters directly; the
 
 ## Hybrid & Multi-ONNX Pipelines
 
-While the standard architecture uses a single feature extractor and a single head, `ww-trainer` supports two advanced patterns for robust edge deployment:
+While the standard architecture uses a single feature extractor and a single head, `wakeforge` supports two additional patterns for constrained edge deployment:
 
 ### 1. Hybrid Pipeline Export (Markov/HMM)
 For classical sequential extractors like `MarkovTransitionExtractor` or `HMMStateExtractor`, the entire processing chain—from raw waveforms to enriched features—is symbolic and can be traced into a single ONNX graph. This includes the base featurizer (e.g., MFCC), the vector quantization (VQ) codebook, and the Markov/HMM logic.

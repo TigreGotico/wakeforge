@@ -5,7 +5,7 @@ conditions wake-word detection on the **phoneme sequence** of the target keyword
 learning its raw acoustic fingerprint. This improves generalisation across speakers, accents,
 and recording conditions — particularly for under-represented speakers.
 
-ww-trainer integrates PhonMatchNet as a native modality with two usage modes.
+wakeforge integrates PhonMatchNet as a native modality with two usage modes.
 
 ---
 
@@ -33,7 +33,7 @@ single-keyword setup; the relevant keyword in a multi-keyword setup).
 
 ## Phoneme vocabulary
 
-ww-trainer uses **IPA (International Phonetic Alphabet)** — 159 symbols covering all major
+wakeforge uses **IPA (International Phonetic Alphabet)** — 159 symbols covering all major
 world languages (`ww_trainer/phonmatch.py:IPA_VOCAB`). ARPAbet is English-only; IPA is the
 correct choice for any multilingual or non-English wake word.
 
@@ -47,7 +47,7 @@ ids = ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])
 ids = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
 ```
 
-**Obtaining IPA phonemes** (ww-trainer never does G2P internally):
+**Obtaining IPA phonemes** (wakeforge never does G2P internally):
 
 | Tool | Command | Notes |
 |------|---------|-------|

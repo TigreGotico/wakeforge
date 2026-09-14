@@ -1,4 +1,4 @@
-# ww-trainer — Benchmarking Guide
+# wakeforge — Benchmarking Guide
 
 How to measure feature extractor and model latency, and compare PyTorch vs ONNX Runtime performance.
 

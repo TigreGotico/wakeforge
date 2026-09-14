@@ -1,4 +1,4 @@
-# ww-trainer — Training Guide
+# wakeforge — Training Guide
 
 Step-by-step guide for training a wake word model from raw audio data to a deployed ONNX checkpoint.
 

@@ -1,4 +1,4 @@
-# Notebook → ww-trainer Data Contract
+# Notebook → wakeforge Data Contract
 
 This document describes the exact interface between dataset-generation notebooks and the
 `ww_trainer` training pipeline.  Every claim about runtime behaviour cites the source file
