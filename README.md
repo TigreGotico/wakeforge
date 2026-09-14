@@ -1,20 +1,33 @@
-# Wake Word Trainer
+# wakeforge
 
-A research-grade training suite for **wake-word detection** — the always-on
-keyword spotter that wakes "Hey Siri", "OK Google", or your own custom phrase.
-Train, evaluate, and ship lightweight on-device detectors that run anywhere
-from an ESP32 to a GPU server. Every component exports to ONNX; production
-inference requires only `onnxruntime` and `numpy` — no PyTorch at runtime.
+wakeforge is a research framework for **wake-word detection**. It implements
+architectures, losses, and featurizers from the published wake-word
+literature, so you can reproduce a paper's result or compare methods
+side by side. Some included architectures exist to reproduce a published
+result, not because they are the best default — the per-architecture pages
+under `docs/reference/` say which is which. Train, evaluate, and export
+lightweight on-device detectors that run anywhere from an ESP32 to a GPU
+server. Every component exports to ONNX; production inference requires only
+`onnxruntime` and `numpy` — no PyTorch at runtime.
+
+An easy training run is not the same thing as a good detector. Loss going
+down and a quickstart command exiting 0 prove the pipeline works, not that
+the result is safe to ship — see
+[`docs/guides/expectations.md`](docs/guides/expectations.md) for what a
+deployable wake word actually looks like in false-accept and false-reject
+numbers, and how much data each tier needs to get there.
 
 ## What is a wake word?
 
 A short phrase ("hey jarvis", "computer", "alexa") that a device listens for
 continuously. When detected, downstream STT/NLU runs. A useful detector must
 run on tiny hardware (sub-100 KB, <10 % CPU, no internet), tolerate noise and
-distance, almost never false-fire (< 1 FA / hour), and trigger reliably when
-spoken (> 90 % recall at that operating point). ww-trainer is the toolchain
-that builds such a detector from a single phrase — synthesise data, train,
-evaluate, export, deploy.
+distance, almost never false-fire, and trigger reliably when spoken. wakeforge
+is the toolchain that builds such a detector from a single phrase —
+synthesise data, train, evaluate, export, deploy. What counts as "almost
+never" and "reliably" in numbers is in
+[`docs/guides/expectations.md`](docs/guides/expectations.md), not repeated
+here.
 
 ## Who is this for?
 
@@ -105,11 +118,11 @@ run with `uv run pytest`.
 ## Citation
 
 ```bibtex
-@software{ww_trainer,
-  title  = {ww-trainer: a research suite for on-device wake-word detection},
+@software{wakeforge,
+  title  = {wakeforge: a research framework for on-device wake-word detection},
   author = {TigreGotico contributors},
   year   = {2026},
-  url    = {https://github.com/TigreGotico/ww-trainer},
+  url    = {https://github.com/TigreGotico/wakeforge},
   note   = {Funded by NGI0 Commons Fund / NLnet, grant 101135429}
 }
 ```

@@ -1,10 +1,17 @@
-# ww-trainer Documentation
+# wakeforge Documentation
 
-Training and research suite for wake-word detection — from microcontrollers
-to GPU servers. Every component exports to ONNX; production inference
-requires only `onnxruntime` and `numpy`.
+wakeforge is a research framework for wake-word detection — from
+microcontrollers to GPU servers. It implements architectures, losses, and
+featurizers from the published literature; some exist to reproduce a
+paper's result, not because they are the best default. An easy training run
+is not proof of a good detector: see
+[guides/expectations.md](guides/expectations.md) for what "good" means in
+false-accept and false-reject numbers, and how to tell a demonstration
+preset from a deployable one. Every component exports to ONNX; production
+inference requires only `onnxruntime` and `numpy`.
 
-Version: `0.4.0a1` — `ww_trainer/version.py`
+Version: `0.4.1a3` — `ww_trainer/version.py` (import path and CLI scripts
+stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 
 ---
 
@@ -26,7 +33,8 @@ Version: `0.4.0a1` — `ww_trainer/version.py`
 |---|---|
 | [guides/datasets.md](guides/datasets.md) | `AudioDataset`, CSV format, augmentation folders, label convention |
 | [guides/training.md](guides/training.md) | Full CLI, losses, augmentation, hard-negative mining, infinite training, VC backends |
-| [guides/evaluation.md](guides/evaluation.md) | Latency, RTF, FA/hour estimation, threshold tuning |
+| [guides/evaluation.md](guides/evaluation.md) | Latency, RTF, ONNX-vs-PyTorch benchmarking |
+| [guides/expectations.md](guides/expectations.md) | What a deployable wake word looks like in FA/hour and FRR, data budget per tier, how to measure with `ww-benchmarks` |
 | [guides/inference.md](guides/inference.md) | Single, batch, and streaming inference (PyTorch and ONNX) |
 | [guides/export.md](guides/export.md) | ONNX export, quantization, metadata embedding |
 | [guides/embedded.md](guides/embedded.md) | ESP32 / MCU tiers, `SizeAwareLoss`, micro genetic search, C header |
@@ -120,6 +128,6 @@ Version: `0.4.0a1` — `ww_trainer/version.py`
 
 ## External
 
-- GitHub: <https://github.com/TigreGotico/ww-trainer>
+- GitHub: <https://github.com/TigreGotico/wakeforge>
 - Pre-exported MFCC ONNX: <https://huggingface.co/TigreGotico/mfcc-onnx>
 - Funded by NGI0 Commons Fund / NLnet

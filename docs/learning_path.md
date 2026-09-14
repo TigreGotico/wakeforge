@@ -1,4 +1,4 @@
-# Zero to Hero — ww-trainer Learning Path
+# Zero to Hero — wakeforge Learning Path
 
 A staged curriculum that takes you from "I have never trained a wake-word
 detector" to "I am shipping a custom model to embedded hardware and running
@@ -165,7 +165,7 @@ If you prefer notebooks over scripts, the same curriculum is mirrored in
 
 ## Literature anchors
 
-Every component in ww-trainer has an academic ancestor. The list below ties
+Every component in wakeforge has an academic ancestor. The list below ties
 the code to the paper and (when available) a canonical reference
 implementation. Full bibliography in [`references.md`](research/references.md).
 
@@ -205,7 +205,7 @@ implementation. Full bibliography in [`references.md`](research/references.md).
 - **NT-Xent / SimCLR** — Chen et al., ICML 2020. ArXiv <https://arxiv.org/abs/2002.05709>
 - **Triplet loss** — Schroff et al., *FaceNet*, CVPR 2015. ArXiv <https://arxiv.org/abs/1503.03832>
 - **HALO** — Hou et al., *Regional Hard-Example mining for KWS*, ICASSP 2020. <https://ieeexplore.ieee.org/document/9053009>
-- **RPPL** — Robust Prototype Diversity Loss, ww-trainer in-house. See [`rppl_whitepaper.md`](research/rppl.md).
+- **RPPL** — wakeforge's own prototype-diversity loss. See [`rppl_whitepaper.md`](research/rppl.md) for the full name and formulation.
 
 ### Search & training
 - **Optuna** — Akiba et al., KDD 2019. ArXiv <https://arxiv.org/abs/1907.10902> · GitHub <https://github.com/optuna/optuna>
@@ -220,5 +220,5 @@ implementation. Full bibliography in [`references.md`](research/references.md).
 - **MIT IR Survey (RIRs)** — Traer & McDermott, 2016. <https://mcdermottlab.mit.edu/Reverb/IR_Survey.html>
 - **ONNX Runtime** — GitHub <https://github.com/microsoft/onnxruntime>
 - **onnxruntime-web** — same repo, browser/WASM bindings.
-- **OpenVoiceOS** — downstream consumer of ww-trainer models. GitHub <https://github.com/OpenVoiceOS>
+- **OpenVoiceOS** — downstream consumer of wakeforge models. GitHub <https://github.com/OpenVoiceOS>
 

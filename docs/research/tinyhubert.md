@@ -37,7 +37,7 @@ intuitions driving the design:
    distillation loss meaningful at every timestep.
 
 The resulting student can be used as a drop-in `OnnxFeatureExtractor` for wake-word training
-inside ww-trainer.
+inside wakeforge.
 
 This document describes the recipe. Whether it actually beats the alternatives (MFCC, SincNet,
 DistilHuBERT off-the-shelf) for downstream wake-word F1 is an open question — see §7.
@@ -150,7 +150,7 @@ torch.onnx.export(
 )
 ```
 
-The exported `tinyhubert.onnx` can then be loaded as an `OnnxFeatureExtractor` in ww-trainer
+The exported `tinyhubert.onnx` can then be loaded as an `OnnxFeatureExtractor` in wakeforge
 for downstream wake-word classification training.
 
 ---
@@ -173,7 +173,7 @@ for downstream wake-word classification training.
     --resume last_checkpoint.pt
 ```
 
-After training, load the exported embedding model in ww-trainer:
+After training, load the exported embedding model in wakeforge:
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
