@@ -383,7 +383,7 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
 
 **Config:** `{"name": "size_aware", "weight": 1.0, "lambda": 0.01}`
 
-**When to use:** MCU-target genetic search where parameter count is a first-class objective. See [`docs/esp32.md`](../esp32.md) for the full ESP32 workflow.
+**When to use:** MCU-target genetic search where parameter count is a primary optimisation objective, not a side constraint. See [`docs/guides/embedded.md`](../guides/embedded.md) for the full ESP32 workflow.
 
 **When NOT to use:** When model size is fixed — no benefit over BCE. When `λ` is set too aggressively (> 0.05) it dominates classification and the search collapses to the smallest possible model regardless of accuracy. Start at `0.001` and ramp up.
 
