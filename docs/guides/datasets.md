@@ -24,7 +24,7 @@ which must be an **iterable of 2-tuples**:
   Voice conversion is gated on `label == "1"` (`dataset.py:273`), so the string comparison is
   literal — any value other than `"1"` is treated as negative.
 
-The trainer CLI reads the metadata CSV into this format directly (`trainer.py:830-832`):
+The trainer CLI reads the metadata CSV into this format directly (`cli.py:273`–`274`):
 
 ```python
 entries = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
@@ -47,7 +47,7 @@ Rules:
 - Column 1: absolute path to the audio file.
 - Column 2: label string `"1"` or `"0"`.
 - No header line.
-- Empty lines are skipped (`trainer.py:831`: `if line.strip()`).
+- Empty lines are skipped (`cli.py:274`: `if line.strip()`).
 
 Concrete example:
 
@@ -268,7 +268,7 @@ ww_trainer-train \
 
 `--metadata` is required; `--test-metadata` is optional.  When `--test-metadata` is
 omitted the trainer uses `--split` (default 0.8) to divide `--metadata` into train and
-validation sets (`trainer.py:838-841`).
+validation sets (`cli.py:280`–`286`).
 
 ---
 

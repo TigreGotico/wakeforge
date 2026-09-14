@@ -130,7 +130,7 @@ ww_trainer-train \
 
 ## 4. Full CLI Reference
 
-All options for `ww_trainer-train` (`trainer.py:668`):
+All options for `ww_trainer-train` (`cli.py:188`):
 
 ### Hardware tier preset
 
@@ -349,7 +349,7 @@ Post-augmentation: peak normalization to `[-1, 1]` (`dataset.py:239`–`241`).
 
 ### Mixed precision (`--amp`)
 
-Enables `torch.amp.autocast` + `GradScaler` (`trainer.py:339`–`342`, `trainer.py:447`). Requires CUDA. Reduces memory usage and speeds up training on modern GPUs (Ampere and newer benefit most). On CPU it has no effect.
+Enables `torch.amp.autocast` (`loop.py:125`) + `GradScaler` (`loop.py:301`–`303`). Requires CUDA. Reduces memory usage and speeds up training on modern GPUs (Ampere and newer benefit most). On CPU it has no effect.
 
 ```bash
 ww_trainer-train ... --amp --device cuda
@@ -357,7 +357,7 @@ ww_trainer-train ... --amp --device cuda
 
 ### Gradient accumulation (`--accumulate-grad-batches N`)
 
-Accumulates gradients over N batches before calling `optimizer.step()` (`trainer.py:457`–`463`). Simulates a larger effective batch size without increasing memory:
+Accumulates gradients over N batches before calling `optimizer.step()` (`loop.py:130`–`136`). Simulates a larger effective batch size without increasing memory:
 
 ```bash
 # Effective batch size = 16 * 4 = 64
@@ -374,7 +374,7 @@ Pass a tracking URI to enable MLflow logging:
 ww_trainer-train ... --mlflow-uri http://localhost:5000
 ```
 
-What gets logged (`trainer.py:99`–`116`, `trainer.py:479`–`534`):
+What gets logged (init-time params: `trainer.py:99`–`116`; per-epoch metrics: `loop.py:424`–`501`):
 
 - **Params**: arch, device, featurizer, feature_dim, loss types/weights, all model kwargs.
 - **Per-epoch metrics**: total loss, per-loss breakdown, accuracy, precision, recall, F1, AUC, mean confidence (wake/nonwake), learning rate, hard/easy/random ratios, embedding stats (norm, variance), readiness score.
@@ -511,7 +511,7 @@ ww_trainer-train \
   --output-dir ./models/hey_jarvis_small
 ```
 
-On resume (`trainer.py:94`–`95`, `trainer.py:344`–`350`):
+On resume (model weights, at trainer construction: `trainer.py:94`–`95`; hard-negative cache and optimizer/LR state, in the training loop: `loop.py:307`–`344`):
 - Model weights are loaded from `resume`.
 - If a `hardneg_cache.pt` file exists in the checkpoint directory, the hard-negative cache is restored.
 - The optimizer state is loaded from the `.ts` file if it exists.
