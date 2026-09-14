@@ -14,7 +14,7 @@ prerequisites.
 **Goal:** understand what a wake-word detector is and what we are optimising.
 
 Read in order:
-1. The "What is a wake word?" section in [`../README.md`](../README.md).
+1. The "What is a wake word?" section in [`README.md`](https://github.com/TigreGotico/wakeforge/blob/dev/README.md).
 2. The "Newcomer questions" section in [`faq.md`](faq.md) — metric glossary
    (F1, EER, FAR, FRR, FA/hour), the two-ONNX-file contract, deployment scope.
 3. The pipeline diagram in [`architecture.md`](internals/architecture.md).
@@ -62,7 +62,7 @@ Run these examples in order and read the matching doc for each:
 | `examples/02_mfcc_gru_small.py` | [`classifiers.md`](reference/classifiers.md) | Temporal modelling with GRU |
 | `examples/04_filterbank_cnn.py` | [`extractors.md`](reference/extractors.md) | Log-mel filterbanks, 1D CNN |
 | `examples/05_sincnet_gru.py` | [`extractors.md`](reference/extractors.md) | Learnable filterbank (SincNet) |
-| `examples/11_hardware_tiers.py` | [`hardware_guide.md`](guides/embedded.md), [`tiers.py`](../ww_trainer/tiers.py) | Tier presets and when to use each |
+| `examples/11_hardware_tiers.py` | [`hardware_guide.md`](guides/embedded.md), [`tiers.py`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/tiers.py) | Tier presets and when to use each |
 | `examples/09_streaming_inference.py` | [`streaming.md`](guides/inference.md) | `SlidingFeatureCacheTensor` — real-time chunks |
 
 At the end you should be able to look at any `WakeWordTrainer(...)`
@@ -151,7 +151,7 @@ and `ww_trainer.export_c.export_to_c_header` for the actual C header output.
 | Ablation grids | `notebooks/nb09_ablation.ipynb`, `scripts/train/train_ablation.py` |
 
 For framework contributions, read [`architecture.md`](internals/architecture.md),
-[`audit.md`](internals/known_issues.md) (known issues), and [`../TODO.md`](../TODO.md) (open
+[`audit.md`](internals/known_issues.md) (known issues), and [`TODO.md`](https://github.com/TigreGotico/wakeforge/blob/dev/TODO.md) (open
 backlog) before starting.
 
 ---

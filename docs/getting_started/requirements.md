@@ -7,7 +7,7 @@ What `ww_trainer-quickstart` will actually cost you before you run it.
 | Preset | Flags | Disk (HF cache + outputs) | Network, first run | Peak RAM | Time, CPU | Time, GPU |
 |---|---|---|---|---|---|---|
 | **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~1.5 GB | ~10 min | ~3 min |
-| **Known phrase** | `--wake-word "hey jarvis"` (any phrase in [§ Pre-built positives](#pre-built-positives--skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
+| **Known phrase** | `--wake-word "hey jarvis"` (any phrase in [§ Pre-built positives](#pre-built-positives-skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
 | **Default** | (no flags, novel phrase) | ~6–8 GB | ~5 GB | ~3 GB | ~30–60 min | ~10–15 min |
 | **Default + VC** | `--vc-refs <dir>` | + engine ONNX | + engine ONNX (voiceclonnx, downloaded on first use) | ~5 GB | + ~15 min | + ~5 min |
 | **Production** | `--n-positive 5000 --epochs 100 --tier large` | ~15–20 GB | ~7 GB | ~8 GB | not recommended | ~1–2 h |
@@ -21,7 +21,7 @@ laptop; GPU times a mid-range consumer card (RTX 3060 or similar).
 ## Datasets downloaded
 
 Sources are declared in `NEGATIVE_DATASETS` —
-[`ww_trainer/datagen.py:47-73`](../../ww_trainer/datagen.py).
+[`ww_trainer/datagen.py:47-73`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
 "Upstream" is the full repo size on HF (what ends up in the HF cache if
 loaded non-streaming). "Local output" is what ww-trainer writes under
 `<output-dir>/dataset/` after sampling and resampling to 16 kHz WAV.
@@ -60,7 +60,7 @@ rm -rf ~/.cache/huggingface/datasets/datasets--agkphysics--AudioSet
 ```
 
 This release forces streaming for AudioSet
-([`STREAMING_ONLY_DATASETS` — `ww_trainer/datagen.py`](../../ww_trainer/datagen.py)),
+([`STREAMING_ONLY_DATASETS` — `ww_trainer/datagen.py`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py)),
 so the cache will not balloon again.
 
 ## Pre-built positives — skip the synth step
@@ -69,7 +69,7 @@ When your wake word is one of the phrases in the
 [**Synthetic WakeWord Datasets** collection](https://huggingface.co/collections/TigreGotico/synthetic-wakeword-datasets-68ee52b6976ed8a20c8cf98f),
 `run_datagen_pipeline` downloads them instead of running TTS. The
 mapping lives in
-[`KNOWN_POSITIVE_DATASETS` — `ww_trainer/datagen.py:37`](../../ww_trainer/datagen.py).
+[`KNOWN_POSITIVE_DATASETS` — `ww_trainer/datagen.py:37`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
 Just type the phrase — no `--vc-refs`, no TTS plugins, no language tag.
 
 | Wake word phrase | HF dataset | Size |
@@ -99,7 +99,7 @@ When the phrase is novel, datagen falls back to TTS. Per-sample size:
 ```
 
 For the default `n_positive=1000`
-([`QuickstartConfig` — `ww_trainer/quickstart.py:50`](../../ww_trainer/quickstart.py)):
+([`QuickstartConfig` — `ww_trainer/quickstart.py:50`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/quickstart.py)):
 
 | n_positive | Pre-VAD | Post-VAD trim |
 |---|---|---|
@@ -107,7 +107,7 @@ For the default `n_positive=1000`
 | 1 000 (default) | ~48 MB | ~35 MB |
 | 5 000 (production) | ~240 MB | ~175 MB |
 
-VAD trim is [`trim_silence_vad` — `ww_trainer/datagen.py:111`](../../ww_trainer/datagen.py),
+VAD trim is [`trim_silence_vad` — `ww_trainer/datagen.py:111`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py),
 typically 10–30 % smaller after silence removal.
 
 ## Voice conversion — essential for no-real-data runs
@@ -154,11 +154,11 @@ Other donors: any directory of short (3–10 s) clean speech WAVs at any
 sample rate (the engine resamples internally). LibriSpeech, phone
 memos, or a single friend's voice all work.
 
-See [`voice_convert_batch` — `ww_trainer/datagen.py:349`](../../ww_trainer/datagen.py).
+See [`voice_convert_batch` — `ww_trainer/datagen.py:349`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
 
 ## Trained-model footprint
 
-Tier definitions live in [`ww_trainer/tiers.py:29-185`](../../ww_trainer/tiers.py).
+Tier definitions live in [`ww_trainer/tiers.py:29-185`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/tiers.py).
 ONNX sizes are estimates for the **head** only; SSL tiers also ship a
 ~300 MB–2 GB frozen featurizer ONNX alongside.
 
