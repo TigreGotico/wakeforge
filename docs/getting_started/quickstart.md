@@ -59,6 +59,11 @@ On completion:
 ✓ Model:   ./hey_jarvis/model/best_f1.onnx  (F1=0.923)
 ```
 
+That F1 score is a training-set metric. It is not a measured FA/hour or
+real-world recall figure — see
+[`../guides/expectations.md`](../guides/expectations.md) for what those
+numbers mean and how to measure them before shipping this model.
+
 All options:
 
 | Flag | Default | Description |

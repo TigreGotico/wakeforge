@@ -39,10 +39,12 @@ Wav2Vec2-BERT) are used as pre-exported ONNX and run on CPU.
 
 **Q: How much data do I need?**
 
-For a smoke test, **zero** real recordings — TTS synthesises positives. For
-production: hundreds of real far-field positives from multiple speakers plus
-tens of hours of real negative audio. Hard-negative mining and voice conversion
-close the rest of the gap.
+For a smoke test, **zero** real recordings — TTS synthesises positives. Moving
+toward production needs real far-field positives from multiple speakers and
+real negative audio, in quantities this project has not itself validated
+end to end — see [`guides/expectations.md`](guides/expectations.md) for
+what is and is not a measured figure. Hard-negative mining and voice
+conversion close part of the gap, not all of it.
 
 **Q: Why are there two ONNX files instead of one?**
 
@@ -57,16 +59,21 @@ Use `OnnxWakeWordInferencer(featurizer_path, head_path)` —
 
 **Q: What's the difference between F1, EER, FAR, FRR, and FA/hour?**
 
-| Metric | Meaning | Typical target |
-|---|---|---|
-| **F1** | Harmonic mean of precision and recall | > 0.90 |
-| **EER** | Operating point where false-accept = false-reject | < 0.05 |
-| **FAR / FRR** | False-accept and false-reject at a chosen threshold | depends on product |
-| **FA/hour** | False fires per hour of continuous ambient listening | < 1 |
-| **AUT** | Area under the DET curve — lower is better, 0 is perfect. `area_under_det` — `ww_trainer/metrics.py` | the LiveKit operating metric |
+| Metric | Meaning |
+|---|---|
+| **F1** | Harmonic mean of precision and recall |
+| **EER** | Operating point where false-accept = false-reject |
+| **FAR / FRR** | False-accept and false-reject at a chosen threshold |
+| **FA/hour** | False fires per hour of continuous ambient listening |
+| **AUT** | Area under the DET curve — lower is better, 0 is perfect. `area_under_det` — `ww_trainer/metrics.py` |
 
 Wake-word users care most about FA/hour and recall. Threshold tuning trades
-one for the other; only data and loss choices can shift the whole curve.
+one for the other; only data and loss choices can shift the whole curve. For
+what a good number looks like, and which of these numbers this project has
+actually measured on its own models, see
+[`guides/expectations.md`](guides/expectations.md) — none of these
+"typical target" figures should be read as a wakeforge-measured result
+unless that page says so.
 
 **Q: Where do I start if my model false-fires or misses?**
 
