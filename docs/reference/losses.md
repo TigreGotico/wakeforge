@@ -66,7 +66,9 @@ These act on the scalar logit and directly minimise classification error.
 
 **Intuition.** Standard BCE wastes gradient on easy examples. Once the model is confident-and-correct on the millions of obvious non-wake clips, those gradients add noise without improving the decision boundary. Focal loss multiplies BCE by `(1 - p_t)^γ` — a confident-correct prediction (p_t close to 1) gets its loss almost zeroed out, while a misclassified hard example keeps full weight. The `alpha` term separately re-weights the positive class to counter prior imbalance.
 
-**Theory.** `FL(p_t) = -α_t · (1 - p_t)^γ · log(p_t)` (Lin et al., ICCV 2017, "Focal Loss for Dense Object Detection"). At `γ=0` reduces to weighted BCE. `α` in this implementation defaults to 0.90 (positive-class up-weight) — the paper's 0.25 default down-weights positives and is wrong for binary KWS with negative-heavy data.
+**Theory.** `FL(p_t) = -α_t · (1 - p_t)^γ · log(p_t)` (Lin et al., *Focal Loss for Dense Object Detection*, ICCV 2017. ArXiv <https://arxiv.org/abs/1708.02002>). At `γ=0` reduces to weighted BCE. `α` in this implementation defaults to 0.90 (positive-class up-weight) — the paper's 0.25 default down-weights positives and is wrong for binary KWS with negative-heavy data.
+
+**Status:** `wakeforge`'s own implementation of the published loss, applied to binary KWS; the paper's own results are on dense object detection, not audio, and are not reproduced here.
 
 **Config:** `{"name": "focal", "weight": 1.0, "alpha": 0.90, "gamma": 2.0}`
 
@@ -100,7 +102,9 @@ The shared intuition: pull same-class embeddings together, push different-class 
 
 **Intuition.** Pick an anchor wake clip, one other wake clip (positive), one non-wake clip (negative). Penalise the model whenever the anchor is closer to the negative than the positive by less than `margin`. Geometrically, you carve a margin-sized buffer around every positive pair.
 
-**Theory.** `L = max(0, d(a, p) - d(a, n) + margin)` (Schroff et al., CVPR 2015, "FaceNet"). Mining matters: random triplets are usually trivially correct and yield no gradient. "Semi-hard" mining picks negatives that are inside the margin but still further than the positive — the sweet spot for stable learning.
+**Theory.** `L = max(0, d(a, p) - d(a, n) + margin)` (Schroff et al., *FaceNet*, CVPR 2015. ArXiv <https://arxiv.org/abs/1503.03832>). Mining matters: random triplets are usually trivially correct and yield no gradient. "Semi-hard" mining picks negatives that are inside the margin but still further than the positive — the region that in the paper's own results gave stable learning.
+
+**Status:** `wakeforge`'s own implementation of the published margin loss and mining strategy, applied to binary KWS; the paper's own results are on face verification, not audio, and are not reproduced here.
 
 **Config:** `{"name": "triplet", "weight": 0.5, "margin": 1.0}` (mining set at `LossManager` init: `mining_type="semihard"` or `"hard"`).
 
@@ -164,9 +168,9 @@ These use *all* pairs in the batch — no explicit mining needed. Cheaper in cod
 
 **Config:** `{"name": "contrastive", "weight": 0.5, "margin": 1.0}`
 
-**When to use:** Simple, robust baseline for metric learning. Works at any batch size that contains both classes.
+**When to use:** A simple baseline for metric learning. Works at any batch size that contains both classes.
 
-**When NOT to use:** When SupCon or NTXent are options — they are strictly more informative (use log-sum-exp over all negatives rather than per-pair hinges).
+**When NOT to use:** When SupCon or NTXent are options — by construction they use log-sum-exp over all negatives rather than a per-pair hinge, so they use more of the batch's signal per step; whether that translates to better wake-word accuracy is not measured by this project.
 
 ---
 
@@ -202,7 +206,9 @@ These use *all* pairs in the batch — no explicit mining needed. Cheaper in cod
 
 **Intuition.** Treat the batch as a self-supervised problem: each sample's same-label partners are "positives", everyone else is a negative. A temperature-scaled cross-entropy then sharpens the contrast. Used heavily in self-supervised pretraining (SimCLR).
 
-**Theory.** `L_i = -log( exp(s_i,j / τ) / Σ_k exp(s_i,k / τ) )` for positive pair (i, j) (Chen et al., ICML 2020, "SimCLR"). Temperature `τ` controls how sharply hard negatives dominate.
+**Theory.** `L_i = -log( exp(s_i,j / τ) / Σ_k exp(s_i,k / τ) )` for positive pair (i, j) (Chen et al., *SimCLR*, ICML 2020. ArXiv <https://arxiv.org/abs/2002.05709>). Temperature `τ` controls how sharply hard negatives dominate.
+
+**Status:** `wakeforge`'s own implementation of the published loss, applied to a supervised binary-label setting rather than the paper's self-supervised one; the paper's own results are not reproduced here.
 
 **Config:** `{"name": "ntxent", "weight": 0.5, "temperature": 0.07}`
 
@@ -216,7 +222,7 @@ These use *all* pairs in the batch — no explicit mining needed. Cheaper in cod
 
 **Intuition.** SimCLR but supervised: instead of "augmented views of me are my positives", *all same-class samples in the batch* are positives. For binary KWS this means "all wake clips in the batch attract each other; all non-wake clips attract each other; the two clusters repel".
 
-**Theory.** Supervised Contrastive Loss (Khosla et al., NeurIPS 2020). Generalises NTXent to multiple positives per anchor. Empirically more stable than triplet loss and works at small batches as long as both classes are present.
+**Theory.** Supervised Contrastive Loss (Khosla et al., NeurIPS 2020. ArXiv <https://arxiv.org/abs/2004.11362>). Generalises NTXent to multiple positives per anchor. The source paper reports more stable training than triplet loss on its own benchmarks; that comparison is not reproduced by this project for wake-word data.
 
 **Config:** `{"name": "supcon", "weight": 0.5, "temperature": 0.07}`
 
@@ -246,9 +252,11 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
 
 ### ArcFaceLoss — `loss.py:562`
 
-**Intuition.** Standard softmax classifiers separate classes by a flat hyperplane. ArcFace adds an *angular margin* — the wake class doesn't just need to win, it needs to win by a few degrees of angular separation on the unit sphere. Produces dramatically more compact clusters and is the de-facto standard in face/speaker verification.
+**Intuition.** Standard softmax classifiers separate classes by a flat hyperplane. ArcFace adds an *angular margin* — the wake class doesn't just need to win, it needs to win by a few degrees of angular separation on the unit sphere, which the source paper reports produces tighter, better-separated clusters on face-verification benchmarks and made it a widely adopted choice there.
 
-**Theory.** `L = -log( exp(s · cos(θ_y + m)) / [exp(s · cos(θ_y + m)) + Σ exp(s · cos(θ_j))] )` (Deng et al., CVPR 2019, "ArcFace: Additive Angular Margin Loss for Deep Face Recognition"). `s` is a scale (logit temperature), `m` is the angular margin in radians (0.5 ≈ 28°). Class centers are learnable, one per class.
+**Theory.** `L = -log( exp(s · cos(θ_y + m)) / [exp(s · cos(θ_y + m)) + Σ exp(s · cos(θ_j))] )` (Deng et al., *ArcFace: Additive Angular Margin Loss for Deep Face Recognition*, CVPR 2019. ArXiv <https://arxiv.org/abs/1801.07698>). `s` is a scale (logit temperature), `m` is the angular margin in radians (0.5 ≈ 28°). Class centers are learnable, one per class.
+
+**Status:** `wakeforge`'s own implementation of the published loss, applied to binary KWS; the paper's face-verification results are not reproduced here.
 
 **Config:** `{"name": "arcface", "weight": 0.5, "embed_dim": 128, "margin": 0.5, "scale": 30.0}`
 
@@ -266,7 +274,7 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
 
 **Config:** `{"name": "center", "weight": 0.3, "embed_dim": 128, "num_classes": 2}`
 
-**When to use:** Combine with BCE or ArcFace to reduce intra-class scatter. Cheap, robust regulariser.
+**When to use:** Combine with BCE or ArcFace to reduce intra-class scatter. Cheap to compute; a regularising term, not a standalone objective.
 
 **When NOT to use:** Alone — no inter-class push, so embeddings will just collapse to one point. Always pair with a discriminative loss.
 
@@ -288,9 +296,11 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
 
 ### HALOLoss — `loss.py:867`
 
-**Intuition.** Standard softmax classifies by linear similarity to a weight vector. HALO replaces that with *squared Euclidean distance to a learnable centroid*, and adds an extra "abstain" sink class at the origin. The result: clips that look like nothing the model has seen get strongly pushed toward "abstain" rather than confidently misclassified. Better calibration and out-of-distribution rejection.
+**Intuition.** Standard softmax classifies by linear similarity to a weight vector. HALO ("Hyperbolic Anchor Loss Optimization") replaces that with *squared Euclidean distance to a learnable centroid*, and adds an extra "abstain" sink class at the origin. The result: clips that look like nothing the model has seen get pushed toward "abstain" rather than classified with unwarranted confidence — a design goal for better calibration and out-of-distribution rejection, not a measured result on wakeforge's own data.
 
-**Theory.** `p(y | x) ∝ exp(-||e - c_y||² / γ)` over `K+1` classes including an abstain centroid at the origin. Optional self-distillation (`distill=True`) regularises with soft targets; learnable `γ` adapts the softmax temperature.
+**Theory.** `p(y | x) ∝ exp(-||e - c_y||² / γ)` over `K+1` classes including an abstain centroid at the origin. Source: <https://github.com/4rtemi5/halo>, <https://pisoni.ai/posts/halo/> — a GitHub project and blog post, not a peer-reviewed paper. Optional self-distillation (`distill=True`) regularises with soft targets; learnable `γ` adapts the softmax temperature.
+
+**Status:** `wakeforge`'s own implementation of the linked design; that source's own claims about calibration and out-of-distribution rejection are not independently reproduced here.
 
 **Config:**
 
@@ -303,7 +313,7 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
  "label_smoothing": 0.1}
 ```
 
-**When to use:** When you need well-calibrated confidence scores and aggressive rejection of non-wake-word audio (e.g. far-field deployments hearing arbitrary noise). Strong alternative to BCE in production.
+**When to use:** When you need well-calibrated confidence scores and rejection of non-wake-word audio (e.g. far-field deployments hearing arbitrary noise). An alternative to BCE worth comparing against on your own data — not verified to be better by this project.
 
 **When NOT to use:** When `emb_dims` doesn't match the model's embedding size — fails at first forward pass. When the model has no `embed()` method.
 
@@ -391,13 +401,15 @@ These keep *learnable parameters* (class centers or proxies) updated during trai
 
 ## Recommended Combinations
 
+Starting points based on each loss's design intent above, not a benchmarked ranking — measure on your own data before trusting one combination over another.
+
 | Scenario | Loss Config | Notes |
 |----------|-------------|-------|
 | Simple baseline | BCE alone | Start here |
 | Imbalanced data | Focal (weight=1.0) | Replace BCE entirely |
 | Better generalisation | LabelSmoothing (1.0) + SupCon (0.3) | Smooth labels + embedding quality |
 | Few-shot | BCE (0.5) + ArcFace (0.5) + Center (0.2) | Maximise separation with few examples |
-| Production | Focal (0.5) + SupCon (0.3) + Center (0.2) | Robust to imbalance + good embeddings |
+| Production | Focal (0.5) + SupCon (0.3) + Center (0.2) | Targets imbalance and embedding quality together; not benchmarked as a combination by this project |
 | Noisy labels | LabelSmoothing (1.0) + MultiSimilarity (0.3) | Tolerates label noise |
 | Maximum accuracy | BCE (0.5) + ArcFace (0.3) + SupCon (0.2) | Heavy but effective |
 | Large NWW pool + infinite training | RPPL (1.0) | Best when mining loop provides hard negatives every epoch |
