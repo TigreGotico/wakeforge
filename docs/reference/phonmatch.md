@@ -1,11 +1,16 @@
 # PhonMatchNet — Phoneme-Guided Wake Word Detection
 
-PhonMatchNet (INTERSPEECH 2023, [ncsoft/PhonMatchNet](https://github.com/ncsoft/PhonMatchNet))
-conditions wake-word detection on the **phoneme sequence** of the target keyword instead of
-learning its raw acoustic fingerprint. This improves generalisation across speakers, accents,
-and recording conditions — particularly for under-represented speakers.
+PhonMatchNet (Lee et al., Interspeech 2023. ArXiv <https://arxiv.org/abs/2308.16511>;
+GitHub [ncsoft/PhonMatchNet](https://github.com/ncsoft/PhonMatchNet)) conditions
+wake-word detection on the **phoneme sequence** of the target keyword instead of learning
+its raw acoustic fingerprint, which the paper motivates as a way to generalise across
+speakers, accents, and recording conditions — the paper's own motivation for the
+architecture, not a result `wakeforge` has independently measured.
 
-ww-trainer integrates PhonMatchNet as a native modality with two usage modes.
+**Status:** `wakeforge`'s own implementation of the published architecture (Mode A below);
+the paper's own reported results are not reproduced here.
+
+`wakeforge` integrates PhonMatchNet as a native modality with two usage modes.
 
 ---
 
@@ -33,7 +38,7 @@ single-keyword setup; the relevant keyword in a multi-keyword setup).
 
 ## Phoneme vocabulary
 
-ww-trainer uses **IPA (International Phonetic Alphabet)** — 159 symbols covering all major
+wakeforge uses **IPA (International Phonetic Alphabet)** — 159 symbols covering all major
 world languages (`ww_trainer/phonmatch.py:IPA_VOCAB`). ARPAbet is English-only; IPA is the
 correct choice for any multilingual or non-English wake word.
 
@@ -47,7 +52,7 @@ ids = ipa_to_ids(["h", "eɪ", "m", "aɪ", "k", "ɹ", "ʌ", "f", "t"])
 ids = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
 ```
 
-**Obtaining IPA phonemes** (ww-trainer never does G2P internally):
+**Obtaining IPA phonemes** (wakeforge never does G2P internally):
 
 | Tool | Command | Notes |
 |------|---------|-------|
@@ -185,8 +190,10 @@ score = model.infer(wav_array)  # no text_token_ids needed after precompute
 
 ## Combining with HALO loss
 
-HALO loss (`name="halo"`) pairs especially well with PhonMatchNet because the phoneme-aligned
-embeddings form geometrically cleaner clusters than raw acoustic embeddings:
+HALO loss (`name="halo"`) is a candidate pairing with PhonMatchNet — the rationale is that
+phoneme-aligned embeddings should form cleaner clusters than raw acoustic ones for HALO's
+distance-based decision rule to work against. This is a design hypothesis, not a result
+measured by this project:
 
 ```python
 trainer = WakeWordTrainer(
@@ -213,9 +220,9 @@ trainer = WakeWordTrainer(
 | **Phoneme IDs at inference** | `text_token_ids=` kwarg | `text_token_ids=` kwarg |
 | **Zero-shot** | Yes (pass any IPA) | Yes (pass any IPA) |
 | **ONNX inputs** | `input_features` + `phoneme_ids` | Separate text encoder ONNX |
-| **Best for** | Maximum accuracy | Flexibility / head swapping |
+| **Best for** | The full published architecture, unmodified | Flexibility / head swapping |
 
-Both modes require multi-keyword training data for real zero-shot coverage.
+Both modes require multi-keyword training data for real zero-shot coverage. Neither mode's accuracy against the other is measured by this project — the table states what each mode is built for, not a benchmarked ranking.
 
 ---
 
