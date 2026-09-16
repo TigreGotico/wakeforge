@@ -54,6 +54,64 @@ ids = arpabet_to_ids(["HH", "EY1", "M", "AY1", "K", "R", "AH0", "F", "T"])
 
 **Obtaining IPA phonemes** (wakeforge never does G2P internally):
 
+Use [orthography2ipa](https://github.com/TigreGotico/orthography2ipa), our own
+grapheme-to-phoneme library. Its `transcribe` function takes the text and a
+language code, and returns one IPA string. This section was checked against
+orthography2ipa 7.93.6a3.
+
+```python
+from orthography2ipa import transcribe
+from ww_trainer.phonmatch import IPA_VOCAB, ipa_to_ids
+
+ipa = transcribe("olá jarbas", "pt-PT")  # 'oˈla ˈʒaɾbɐʃ'
+
+
+def split_ipa(ipa: str) -> list:
+    """Split an IPA string into IPA_VOCAB symbols, longest match first."""
+    longest = max(len(symbol) for symbol in IPA_VOCAB)
+    symbols, i = [], 0
+    while i < len(ipa):
+        if ipa[i].isspace():
+            i += 1
+            continue
+        for n in range(longest, 0, -1):
+            if ipa[i:i + n] in IPA_VOCAB:
+                symbols.append(ipa[i:i + n])
+                i += n
+                break
+        else:
+            symbols.append(ipa[i])
+            i += 1
+    return symbols
+
+
+ids = ipa_to_ids(split_ipa(ipa))
+```
+
+Do not give the string to `ipa_to_ids` directly. The function reads a string
+one character at a time, so it splits a diphthong such as `aɪ` into two
+symbols. A symbol that is not in `IPA_VOCAB` maps to 0, the padding index,
+with no warning.
+
+A transcription is a machine reading of the spelling. orthography2ipa
+records its accuracy per language on word lists in its
+[scoreboard](https://github.com/TigreGotico/orthography2ipa/blob/dev/docs/scoreboard.md);
+a language with the status `research` is not proven.
+
+At 7.93.6a3, every `en`, `en-US` and `pt-PT` row has the status `research`.
+Also read the Provenance column: a row scored against espeak-derived or llm-generated
+gold cannot qualify a language for `production`.
+
+We did not measure how a transcription from orthography2ipa changes the
+accuracy of a wake word model. Read the output and say it aloud before you
+train. For example, orthography2ipa 7.93.6a3 reads "hey" in `en-US` as `ˈhi`, which is wrong.
+
+Write the IPA by hand when the pronunciation of the keyword matters more than
+its spelling. Names, brand names, loanwords and abbreviations are examples.
+Also write it by hand when the transcription is wrong for your keyword.
+
+Other tools also produce IPA or ARPAbet:
+
 | Tool | Command | Notes |
 |------|---------|-------|
 | espeak-ng | `espeak-ng -q --ipa "hey mycroft"` | Best multilingual coverage |
