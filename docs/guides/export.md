@@ -1,4 +1,4 @@
-# ww-trainer — ONNX Export Guide
+# wakeforge — ONNX Export Guide
 
 How to export trained models to ONNX for deployment.
 

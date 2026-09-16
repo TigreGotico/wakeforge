@@ -291,7 +291,7 @@ Neural VAD enrichment stream using the pre-trained `snakers4/silero-vad`. Append
 ---
 
 
-`ww-trainer` includes two classical statistical models adapted for high-performance wake-word feature extraction: `MarkovTransitionExtractor` and `HMMStateExtractor`.
+`wakeforge` includes two classical statistical models adapted for high-performance wake-word feature extraction: `MarkovTransitionExtractor` and `HMMStateExtractor`.
 
 These extractors bridge the gap between "bag of features" (like MFCC) and "temporal deep learning" (like GRU/Transformers) by capturing sequential patterns without adding many trainable neural parameters.
 

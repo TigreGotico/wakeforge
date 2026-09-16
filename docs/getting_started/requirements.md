@@ -13,7 +13,7 @@ What `ww_trainer-quickstart` will actually cost you before you run it.
 | **Production** | `--n-positive 5000 --epochs 100 --tier large` | ~15–20 GB | ~7 GB | ~8 GB | not recommended | ~1–2 h |
 | **Kitchen sink** | every dataset + VC engine weights + all SSL featurizers — see [§ All-in](#all-in-budget) | ~30–35 GB | ~25 GB | ~8 GB | — | — |
 
-HF caches the raw dataset under `~/.cache/huggingface/` and ww-trainer
+HF caches the raw dataset under `~/.cache/huggingface/` and wakeforge
 re-writes each used sample as a 16 kHz mono WAV into
 `<output-dir>/dataset/`. Plan for both. CPU times assume an 8-core x86-64
 laptop; GPU times a mid-range consumer card (RTX 3060 or similar).
@@ -23,7 +23,7 @@ laptop; GPU times a mid-range consumer card (RTX 3060 or similar).
 Sources are declared in `NEGATIVE_DATASETS` —
 [`ww_trainer/datagen.py:47-73`](../../ww_trainer/datagen.py).
 "Upstream" is the full repo size on HF (what ends up in the HF cache if
-loaded non-streaming). "Local output" is what ww-trainer writes under
+loaded non-streaming). "Local output" is what wakeforge writes under
 `<output-dir>/dataset/` after sampling and resampling to 16 kHz WAV.
 
 | Dataset | Role | Default cap | Upstream | Local output |
@@ -185,7 +185,7 @@ Pre-exported feature-extractor ONNX files for SSL tiers live in the
 
 ## All-in budget
 
-Pulling **every** HF asset ww-trainer can use, with voiceclonnx VC
+Pulling **every** HF asset wakeforge can use, with voiceclonnx VC
 engine weights cached and one cached SSL featurizer per tier:
 
 | Category | Subtotal |

@@ -1,4 +1,4 @@
-# ww-trainer — FAQ
+# wakeforge — FAQ
 
 A topic-ordered Q&A. If you are brand-new, read top to bottom. Otherwise jump
 to the section that matches your task.
@@ -26,7 +26,7 @@ to the section that matches your task.
 **Q: What is a wake word and what does this framework build?**
 
 A wake word is a short phrase ("hey jarvis") that an always-on listener detects
-on-device, before any cloud STT runs. ww-trainer builds the listener: takes a
+on-device, before any cloud STT runs. wakeforge builds the listener: takes a
 phrase or a dataset and emits two ONNX files you can ship to any onnxruntime
 target — laptop, phone, Raspberry Pi, ESP32, browser.
 
@@ -87,7 +87,7 @@ unless that page says so.
 
 ## 2. Install
 
-**Q: How do I install ww-trainer?**
+**Q: How do I install wakeforge?**
 
 ```bash
 uv venv .venv
@@ -749,7 +749,7 @@ Optional voice-conversion dependency. Only needed when `vc_folder` is set on
 
 **Q: `ModuleNotFoundError: No module named 'torchcodec'` / `ImportError: TorchCodec is required for save_with_torchcodec`**
 
-torchaudio ≥ 2.9 defaults to torchcodec for `load`/`save`. ww-trainer's
+torchaudio ≥ 2.9 defaults to torchcodec for `load`/`save`. wakeforge's
 `dataset._load_audio` and `dataset._save_audio` already fall back to
 `soundfile`; this error means external code is calling `torchaudio.load`/`save`
 directly. Either route it through the helpers, or `pip install wakeforge[torchcodec]`

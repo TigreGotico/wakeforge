@@ -1,4 +1,4 @@
-# ww-trainer — Inference Guide
+# wakeforge — Inference Guide
 
 How to run wake word detection at runtime using exported ONNX models or PyTorch during development.
 

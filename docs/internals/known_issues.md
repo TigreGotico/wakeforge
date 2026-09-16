@@ -68,6 +68,6 @@ on GPU.
 
 ## Reporting new issues
 
-GitHub Issues: <https://github.com/TigreGotico/ww-trainer/issues>. Include
+GitHub Issues: <https://github.com/TigreGotico/wakeforge/issues>. Include
 your `pyproject.toml` extras, Python and torch versions, and a minimal
 repro script.
