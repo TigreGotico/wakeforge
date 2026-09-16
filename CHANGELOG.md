@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2a2](https://github.com/TigreGotico/wakeforge/tree/0.4.2a2) (2026-09-16)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a1...0.4.2a2)
+
+**Merged pull requests:**
+
+- docs: add the expectations page — what a good wake word looks like [\#45](https://github.com/TigreGotico/wakeforge/pull/45) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+- docs: settle the name as wakeforge, frame it as a research framework [\#44](https://github.com/TigreGotico/wakeforge/pull/44) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.2a1](https://github.com/TigreGotico/wakeforge/tree/0.4.2a1) (2026-09-16)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.1a3...0.4.2a1)
