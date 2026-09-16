@@ -17,6 +17,13 @@ the result is safe to ship — see
 deployable wake word actually looks like in false-accept and false-reject
 numbers, and how much data each tier needs to get there.
 
+The first measured numbers show why. The first two models that wakeforge
+trained scored between 2397 and 5120 false accepts per hour on speech, noise
+and music at threshold 0.5, against a bar of 1. They accepted 70 % of the
+near-miss phrases, against a bar of 5 %. The training negatives were the cause.
+The rows, the commands and the cause are in
+[`docs/guides/expectations.md`](docs/guides/expectations.md#the-measured-baseline-two-rejected-models).
+
 ## What is a wake word?
 
 A short phrase ("hey jarvis", "computer", "alexa") that a device listens for

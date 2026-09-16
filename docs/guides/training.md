@@ -40,6 +40,14 @@ The trainer handles class imbalance via adaptive negative sampling — you do no
 - Wake samples: 200–2000 utterances (synthetic or recorded).
 - Non-wake samples: 5×–20× more than wake.
 
+The number of negatives is not sufficient. The first two models that wakeforge
+trained used VAD-trimmed negative fragments shorter than one second and no
+near-miss phrases. `ww-benchmarks` measured 2397 to 5120 false accepts per hour
+at threshold 0.5, and 70 % of near-miss phrases accepted. Use fixed-length
+windows for every example, cut negatives from full clips for each class, and add
+synthesized near-miss phrases as hard negatives. The measured rows and the
+commands are in [`expectations.md`](expectations.md#the-measured-baseline-two-rejected-models).
+
 ### Generating synthetic wake word data
 
 Use a TTS engine to generate phonetically diverse recordings of your wake phrase. The `notebooks/ww/tts2ww.ipynb` notebook in the repository implements an 8-stage synthetic data factory. Diversity in speaker, speed, pitch, and noise conditions is more important than raw quantity.
