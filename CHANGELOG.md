@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2a1](https://github.com/TigreGotico/wakeforge/tree/0.4.2a1) (2026-09-16)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.1a3...0.4.2a1)
+
+**Merged pull requests:**
+
+- fix\(ci\): turn dev green: deterministic tests and a license check that matches its inputs [\#32](https://github.com/TigreGotico/wakeforge/pull/32) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.1a3](https://github.com/TigreGotico/wakeforge/tree/0.4.1a3) (2026-09-04)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.1a2...0.4.1a3)
@@ -33,19 +41,19 @@
 
 ## [0.4.0a3](https://github.com/TigreGotico/wakeforge/tree/0.4.0a3) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a3)
 
 **Merged pull requests:**
 
 - docs: publish-ready overhaul + repo cleanup + CI fixes [\#11](https://github.com/TigreGotico/wakeforge/pull/11) ([JarbasAl](https://github.com/JarbasAl))
 
-## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
-
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a1)
-
 ## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a2)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a2)
+
+## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a1)
 
 **Merged pull requests:**
 
