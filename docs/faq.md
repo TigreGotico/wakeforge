@@ -8,15 +8,15 @@ to the section that matches your task.
 - [3. Quickstart](#3-quickstart)
 - [4. Datasets](#4-datasets)
 - [5. Training](#5-training)
-- [6. Metrics & evaluation](#6-metrics--evaluation)
-- [7. Inference & deployment](#7-inference--deployment)
+- [6. Metrics & evaluation](#6-metrics-evaluation)
+- [7. Inference & deployment](#7-inference-deployment)
 - [8. ONNX export](#8-onnx-export)
 - [9. Feature extractors](#9-feature-extractors)
 - [10. Classifier heads](#10-classifier-heads)
-- [11. Embedded / ESP32](#11-embedded--esp32)
+- [11. Embedded / ESP32](#11-embedded-esp32)
 - [12. Hyperparameter search](#12-hyperparameter-search)
-- [13. Notebooks & cloud](#13-notebooks--cloud)
-- [14. Internals — where things live](#14-internals--where-things-live)
+- [13. Notebooks & cloud](#13-notebooks-cloud)
+- [14. Internals — where things live](#14-internals-where-things-live)
 - [15. Troubleshooting](#15-troubleshooting)
 
 ---
@@ -512,7 +512,7 @@ python scripts/train_markov_featurizer.py --wake-folder ./my_wakes --out markov.
 ww_trainer-train --featurizer markov.onnx --featurizer-type onnx --arch gru ...
 ```
 
-Examples 38, 39, 40 in [`examples/`](../examples/) show the multi-ONNX
+Examples 38, 39, 40 in [`examples/`](https://github.com/TigreGotico/wakeforge/tree/dev/examples) show the multi-ONNX
 pipeline pattern.
 
 ---

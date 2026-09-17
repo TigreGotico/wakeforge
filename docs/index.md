@@ -23,7 +23,7 @@ stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 | [faq.md](faq.md) | Topic-ordered Q&A — 15 sections, jump to the one matching your task |
 | [getting_started/quickstart.md](getting_started/quickstart.md) | One command, one ONNX pair |
 | [getting_started/requirements.md](getting_started/requirements.md) | Disk, bandwidth, RAM, and time budget per quickstart preset |
-| [../examples/README.md](../examples/README.md) | 43 runnable examples |
+| [examples/README.md](https://github.com/TigreGotico/wakeforge/blob/dev/examples/README.md) | 43 runnable examples |
 
 ---
 
@@ -74,7 +74,7 @@ stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 |---|---|
 | [internals/architecture.md](internals/architecture.md) | System design: abstractions, data flow, ONNX pipeline, sliding cache |
 | [internals/known_issues.md](internals/known_issues.md) | Currently open issues and ONNX-export constraints |
-| [../TODO.md](../TODO.md) | Open feature backlog |
+| [TODO.md](https://github.com/TigreGotico/wakeforge/blob/dev/TODO.md) | Open feature backlog |
 
 ---
 

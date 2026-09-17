@@ -1,7 +1,7 @@
 # Kaggle / Colab Quickstart
 
 > **For people who prefer reading docs before running code.**  
-> This page mirrors [`notebooks/kaggle_quickstart.ipynb`](../notebooks/kaggle_quickstart.ipynb)
+> This page mirrors [`notebooks/kaggle_quickstart.ipynb`](https://github.com/TigreGotico/wakeforge/blob/dev/notebooks/kaggle_quickstart.ipynb)
 > step by step.  Open the notebook link when you are ready to run.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/TigreGotico/wakeforge/blob/dev/notebooks/kaggle_quickstart.ipynb)
@@ -189,6 +189,6 @@ journalctl --user -u ovos-listener -f   # look for "WW activated"
 - [`docs/getting_started/quickstart.md`](getting_started/quickstart.md) — local CLI quickstart
 - [`docs/guides/inference.md`](guides/inference.md) — `OnnxWakeWordInferencer` API
 - [`docs/guides/embedded.md`](guides/embedded.md) — C export for ESP32 / MCU
-- [`notebooks/kaggle_experiments.ipynb`](../notebooks/kaggle_experiments.ipynb) — compare
+- [`notebooks/kaggle_experiments.ipynb`](https://github.com/TigreGotico/wakeforge/blob/dev/notebooks/kaggle_experiments.ipynb) — compare
   architectures and loss functions systematically
 - [`docs/faq.md`](faq.md) — common questions across 15 topics
