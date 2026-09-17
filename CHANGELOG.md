@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.2a5](https://github.com/TigreGotico/wakeforge/tree/0.4.2a5) (2026-09-17)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a4...0.4.2a5)
+
+**Merged pull requests:**
+
+- docs: add mkdocs.yml and a reader-path nav [\#49](https://github.com/TigreGotico/wakeforge/pull/49) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
+## [0.4.2a4](https://github.com/TigreGotico/wakeforge/tree/0.4.2a4) (2026-09-17)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a3...0.4.2a4)
+
+**Merged pull requests:**
+
+- docs: phonmatch.md/enrichment.md — attribute claims, fix stale line refs [\#48](https://github.com/TigreGotico/wakeforge/pull/48) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+- docs: extractors.md/losses.md — attribute comparative claims, fix a fabricated citation [\#47](https://github.com/TigreGotico/wakeforge/pull/47) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.2a3](https://github.com/TigreGotico/wakeforge/tree/0.4.2a3) (2026-09-17)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a2...0.4.2a3)
@@ -58,19 +75,19 @@
 
 ## [0.4.0a3](https://github.com/TigreGotico/wakeforge/tree/0.4.0a3) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a3)
 
 **Merged pull requests:**
 
 - docs: publish-ready overhaul + repo cleanup + CI fixes [\#11](https://github.com/TigreGotico/wakeforge/pull/11) ([JarbasAl](https://github.com/JarbasAl))
 
-## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
-
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a2)
-
 ## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a1)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a1)
+
+## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a2)
 
 **Merged pull requests:**
 
