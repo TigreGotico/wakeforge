@@ -155,7 +155,7 @@ model.export_to_onnx("head.onnx", export_featurizer=True)
 # writes: head.onnx, head_featurizer.onnx
 ```
 
-When `--export-onnx` is passed to the CLI, `WakeWordTrainer.save_intermediate_ckpt` (`trainer.py:630`–`645`) calls `model.export_to_onnx(onnx_path)` after every checkpoint save.
+When `--export-onnx` is passed to the CLI, `WakeWordTrainer.save_intermediate_ckpt` (`trainer.py:234`–`246`) calls `model.export_to_onnx(onnx_path)` after every checkpoint save.
 
 ---
 

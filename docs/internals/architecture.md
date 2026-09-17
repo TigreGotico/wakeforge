@@ -187,7 +187,7 @@ Defined in `ww_trainer/tiers.py`. Each tier is a `TierConfig` dataclass (`tiers.
 
 `HARDWARE_TIERS` dict: `tiers.py:26`. `get_tier(name)`: `tiers.py:83`. `list_tiers()` formatted table: `tiers.py:70`.
 
-When `--tier` is passed to the CLI (`trainer.py:795`–`805`), it sets `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and optionally `n_mfcc`.
+When `--tier` is passed to the CLI (`cli.py:230`–`239`), it sets `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and optionally `n_mfcc`.
 
 ---
 
