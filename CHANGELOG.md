@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2a3](https://github.com/TigreGotico/wakeforge/tree/0.4.2a3) (2026-09-17)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a2...0.4.2a3)
+
+**Merged pull requests:**
+
+- docs: classifiers.md — a paper link and measured/paper-reported tag per head [\#46](https://github.com/TigreGotico/wakeforge/pull/46) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.2a2](https://github.com/TigreGotico/wakeforge/tree/0.4.2a2) (2026-09-16)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a1...0.4.2a2)
