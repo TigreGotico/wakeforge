@@ -33,6 +33,8 @@ class QuickstartConfig:
         vad_trim: Trim leading/trailing silence with Silero VAD.
         vc_refs_dir: Optional voice-conversion reference directory.
         download_augmentation: Download bg_noise/music/RIR datasets from HF.
+        max_negative: Cap on the number of clips taken from each negative
+            dataset. ``None`` takes every clip.
         llm_url: Optional Ollama URL for LLM-based adversarial generation.
         tier: Hardware tier name (see ``ww_trainer-tiers``).
         epochs: Training epochs.
@@ -63,6 +65,7 @@ class QuickstartConfig:
     vad_trim: bool = True
     vc_refs_dir: Optional[str] = None
     download_augmentation: bool = True
+    max_negative: Optional[int] = None
     llm_url: Optional[str] = None
     # training knobs
     tier: str = "small"
@@ -149,6 +152,7 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
         vad_trim=cfg.vad_trim,
         vc_refs_dir=cfg.vc_refs_dir,
         download_augmentation=cfg.download_augmentation,
+        max_negative=cfg.max_negative,
         llm_url=cfg.llm_url,
         seed=cfg.seed,
     )
