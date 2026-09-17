@@ -6,6 +6,7 @@
 
 **Merged pull requests:**
 
+- docs: sweep — verify every code line-reference and strict build across the campaign [\#50](https://github.com/TigreGotico/wakeforge/pull/50) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
 - docs: add mkdocs.yml and a reader-path nav [\#49](https://github.com/TigreGotico/wakeforge/pull/49) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
 
 ## [0.4.2a4](https://github.com/TigreGotico/wakeforge/tree/0.4.2a4) (2026-09-17)
