@@ -28,6 +28,11 @@ jobs:
       - name: Install package with dev dependencies
         run: uv pip install --system -e ".[dev]"
 
+      - name: Compile every script
+        # A script that does not compile cannot land: compileall exits 1 on
+        # the first SyntaxError and prints the file and line.
+        run: python -m compileall -q scripts/
+
       - name: Run tests with coverage
         run: pytest test/ -v --cov=ww_trainer --cov-report=term-missing
 
