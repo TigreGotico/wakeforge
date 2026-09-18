@@ -42,6 +42,7 @@ stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 | [guides/distillation.md](guides/distillation.md) | Knowledge distillation workflow |
 | [guides/recipes.md](guides/recipes.md) | End-to-end recipes per use case |
 | [guides/notebooks.md](guides/notebooks.md) | Notebook curriculum, hardware-tier decision tree |
+| [model_card_template.md](model_card_template.md) | Card to fill for every published model: data, licences, evaluation, funding |
 
 ---
 
