@@ -28,7 +28,7 @@ python ww_trainer/trainer.py \
   --base-easy 5.0 \
   --min-easy 1.0 \
   --total-ratio 10.0 \
-  --mlflow-uri http://192.168.1.200:5000 \
+  --mlflow-uri http://localhost:5000 \
   --bg-noise-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/building_106_kitchen_3secs \
   --mic-noise-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/bk \
   --rir-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/MIT_environmental_impulse-responses \
