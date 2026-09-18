@@ -203,6 +203,39 @@ def negative_windows(wav: np.ndarray, sr: int, window_s: float, per_clip: int,
     return out
 
 
+SILENCE_CLASSES: tuple[tuple[str, Optional[float]], ...] = (
+    ("zeros", None),
+    ("noise_m60dbfs", -60.0),
+    ("noise_m40dbfs", -40.0),
+)
+
+
+def silence_windows(sr: int, window_s: float, per_class: int, seed: int,
+                    classes: tuple[tuple[str, Optional[float]], ...] = SILENCE_CLASSES,
+                    ) -> List[tuple[str, np.ndarray]]:
+    """Make *per_class* windows of digital silence and near-silence per class.
+
+    A fresh capture buffer on a muted or quiet channel is all zeros or noise
+    far under speech level. The shipped precise model scored 0.67 on its first
+    chunk of zeros because no training window looked like that. Each class is
+    ``(name, level_dbfs)``: ``None`` is all zeros, a level is white noise with
+    that RMS in dBFS. The windows are written as they are, never peak
+    normalised, or the level would be lost.
+    """
+    n = int(sr * window_s)
+    rs = np.random.RandomState(seed)
+    out: List[tuple[str, np.ndarray]] = []
+    for name, level in classes:
+        for _ in range(per_class):
+            if level is None:
+                win = np.zeros(n, dtype=np.float32)
+            else:
+                rms = 10.0 ** (level / 20.0)
+                win = np.clip(rs.randn(n) * rms, -1.0, 1.0).astype(np.float32)
+            out.append((name, win))
+    return out
+
+
 def _load_mono(src: Path, sr: int) -> np.ndarray:
     arr, orig_sr = sf.read(str(src), dtype="float32", always_2d=True)
     wav = arr.mean(axis=1)
@@ -212,9 +245,9 @@ def _load_mono(src: Path, sr: int) -> np.ndarray:
     return wav
 
 
-def _write_window(wav: np.ndarray, dst: Path, sr: int) -> None:
+def _write_window(wav: np.ndarray, dst: Path, sr: int, normalize: bool = True) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    max_abs = np.max(np.abs(wav))
+    max_abs = np.max(np.abs(wav)) if normalize else 0.0
     if max_abs > 0:
         wav = wav / max_abs
     _save_audio(str(dst), torch.tensor(wav).unsqueeze(0).float(), sr)
@@ -699,6 +732,7 @@ class DatagenConfig:
     vad_trim: bool = True
     window_s: float = 1.5
     neg_windows_per_clip: int = 3
+    silence_windows: int = 300
     adversarial_file: Optional[str] = None
     adversarial_per_text: int = 3
     test_split: float = 0.2
@@ -934,6 +968,21 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             _write_window(win, dst, config.sample_rate)
             processed_negatives.append(dst)
 
+    # Silence and near-silence negatives: zeros, -60 dBFS and -40 dBFS white
+    # noise, silence_windows of each, so that a fresh buffer on a muted or
+    # quiet channel is in-distribution. Written at their level, not normalised.
+    n_silence: dict[str, int] = {}
+    if config.window_s > 0 and config.silence_windows > 0:
+        silence_dir = negatives_dir / "silence"
+        for name, win in silence_windows(config.sample_rate, config.window_s,
+                                         config.silence_windows, config.seed):
+            i = n_silence.get(name, 0)
+            dst = silence_dir / f"{name}_{i:04d}.wav"
+            _write_window(win, dst, config.sample_rate, normalize=False)
+            processed_negatives.append(dst)
+            n_silence[name] = i + 1
+        logger.info("Silence negatives: %s", n_silence)
+
     # ── Stage 5: Train/test split + metadata CSVs ───────────────────────
     logger.info("Stage 5: Splitting into train/test sets")
 
@@ -963,6 +1012,7 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     config_dict["wake_word_normalized"] = ww_key
     config_dict["n_positive_actual"] = len(processed_positives)
     config_dict["n_negative_actual"] = len(processed_negatives)
+    config_dict["n_silence_windows"] = n_silence
     config_dict["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
     with config_path.open("w", encoding="utf-8") as f:
@@ -1035,6 +1085,8 @@ def cli_main() -> None:
                         help="Length of every training example in seconds (0 keeps clips as they are)")
     parser.add_argument("--neg-windows-per-clip", type=int, default=3,
                         help="Windows cut from each long negative clip")
+    parser.add_argument("--silence-windows", type=int, default=300,
+                        help="Windows per silence class (zeros, -60 dBFS, -40 dBFS white noise); 0 disables")
     parser.add_argument("--adversarial-file", default=None,
                         help="Text file of near-miss phrases to synthesise as hard negatives, one per line")
     parser.add_argument("--adversarial-per-text", type=int, default=3,
@@ -1090,6 +1142,7 @@ def cli_main() -> None:
         vad_trim=not args.no_vad,
         window_s=args.window_s,
         neg_windows_per_clip=args.neg_windows_per_clip,
+        silence_windows=args.silence_windows,
         adversarial_file=args.adversarial_file,
         adversarial_per_text=args.adversarial_per_text,
         test_split=args.test_split,

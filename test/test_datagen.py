@@ -363,3 +363,57 @@ class TestFixedWindows:
         one_second = np.ones(sr, dtype=np.float32)
         wins = negative_windows(one_second, sr, w, 3, rng)
         assert len(wins) == 2 and all(len(x) == int(w * sr) for x in wins)
+
+
+class TestSilenceWindows:
+    def test_three_classes_at_window_length_and_at_level(self, tmp_path: Path) -> None:
+        import numpy as np
+        import soundfile as sf
+        from ww_trainer.datagen import _write_window, silence_windows
+
+        sr, w = 16000, 1.5
+        wins = silence_windows(sr, w, 7, seed=0)
+        assert len(wins) == 21 and all(len(x) == int(w * sr) for _, x in wins)
+        by_name = {}
+        for name, x in wins:
+            by_name.setdefault(name, []).append(x)
+        assert sorted(by_name) == ["noise_m40dbfs", "noise_m60dbfs", "zeros"]
+        assert all((x == 0).all() for x in by_name["zeros"])
+        for name, level in (("noise_m60dbfs", -60.0), ("noise_m40dbfs", -40.0)):
+            for x in by_name[name]:
+                rms_db = 20 * np.log10(np.sqrt(np.mean(x ** 2)))
+                assert abs(rms_db - level) < 1.0, (name, rms_db)
+        # The level survives the write: no peak normalisation on silence windows.
+        dst = tmp_path / "noise_m60dbfs_0000.wav"
+        _write_window(by_name["noise_m60dbfs"][0], dst, sr, normalize=False)
+        back, _ = sf.read(str(dst), dtype="float32")
+        rms_db = 20 * np.log10(np.sqrt(np.mean(back ** 2)))
+        assert abs(rms_db + 60.0) < 1.0, rms_db
+        zeros = tmp_path / "zeros_0000.wav"
+        _write_window(by_name["zeros"][0], zeros, sr, normalize=False)
+        back, _ = sf.read(str(zeros), dtype="float32")
+        assert (back == 0).all()
+
+    @patch("ww_trainer.datagen.download_hf_audio_dataset")
+    def test_pipeline_writes_silence_negatives_and_counts_them(
+        self, mock_download: MagicMock, tmp_path: Path
+    ) -> None:
+        import json
+
+        def fake_download(dataset_id: str, output_dir: Path, **kwargs) -> list:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return [_make_wav(output_dir / f"{i:04d}.wav") for i in range(3)]
+
+        mock_download.side_effect = fake_download
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "dataset", n_positive=3,
+            max_negative=3, vad_trim=False, download_augmentation=False,
+            silence_windows=4, seed=1,
+        )
+        result = run_datagen_pipeline(cfg)
+        silence = sorted((result.negatives_dir / "silence").glob("*.wav"))
+        assert len(silence) == 12
+        entries = read_metadata_csv(result.train_csv) + read_metadata_csv(result.test_csv)
+        assert sum(1 for p, label in entries if "/silence/" in p and label == 0) == 12
+        cfg_json = json.loads((tmp_path / "dataset" / "datagen_config.json").read_text())
+        assert cfg_json["n_silence_windows"] == {"zeros": 4, "noise_m60dbfs": 4, "noise_m40dbfs": 4}
