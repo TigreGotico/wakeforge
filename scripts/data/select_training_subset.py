@@ -178,6 +178,7 @@ def _summary() -> None:
 
 
 def main() -> None:
+    global LOCAL_BASE
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--local-base", type=Path, default=LOCAL_BASE,
@@ -198,7 +199,6 @@ def main() -> None:
                         help="Random seed for file selection order (default: 42)")
     args = parser.parse_args()
 
-    global LOCAL_BASE
     LOCAL_BASE = args.local_base
 
     random.seed(args.seed)
