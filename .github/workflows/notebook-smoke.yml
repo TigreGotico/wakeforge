@@ -66,6 +66,9 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
+    # The datagen cell downloads negatives from Hugging Face. A stalled
+    # download must fail the job, not hold the runner for the 6 h default.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -82,9 +85,13 @@ jobs:
 
       - name: Execute genetic_search notebook (minimal settings)
         env:
-          WAKE_WORD: "hey test"
+          # A known wake word takes its positives from the Hugging Face
+          # dataset. An unknown one goes through edge-tts, and Microsoft's
+          # service refuses the runner: 0 positives, silently.
+          WAKE_WORD: "hey mycroft"
           OUTPUT_DIR: "/tmp/ww_smoke"
           N_POSITIVE: "20"
+          MAX_NEGATIVE: "20"
           ADVERSARIAL: "false"
           DOWNLOAD_AUGMENT: "false"
           POPULATION: "3"
@@ -98,7 +105,7 @@ jobs:
           jupyter nbconvert \
             --to notebook \
             --execute notebooks/genetic_search.ipynb \
-            --ExecutePreprocessor.timeout=600 \
+            --ExecutePreprocessor.timeout=1500 \
             --output /tmp/executed.ipynb
 
       - name: Verify key outputs exist

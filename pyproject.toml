@@ -95,7 +95,7 @@ vc-onnx = [
 
 # ── Dataset generation ─────────────────────────────────────────────────────
 datagen = [
-    "datasets",
+    "datasets>=4",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",    # default TTS; alternatives (piper, google-tx) auto-discovered via OPM
     "vadonnx>=0.1.0",  # pure-ONNX VAD (silence trimming)
@@ -116,7 +116,7 @@ notebooks = [
     "jupyter",
     "nbconvert",
     "ipykernel",
-    "datasets",
+    "datasets>=4",
     "ovos-plugin-manager",
     "ovos-tts-plugin-edge-tts",
     "vadonnx>=0.1.0",

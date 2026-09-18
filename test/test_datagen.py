@@ -345,3 +345,107 @@ class TestPipelineMockedEndToEnd:
         # All labels are 0 or 1
         for _, label in train + test:
             assert label in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# download_hf_audio_dataset decodes encoded bytes without torchcodec
+# ---------------------------------------------------------------------------
+
+def _fake_datasets_module(load_dataset=None):
+    """A stand-in `datasets` module: the test extra does not install it."""
+    import types
+
+    class Audio:
+        def __init__(self, decode: bool = True) -> None:
+            self.decode = decode
+
+    mod = types.ModuleType("datasets")
+    mod.Audio = Audio
+    mod.load_dataset = load_dataset
+    return mod
+
+
+class TestDownloadDecodesWithSoundfile:
+    def test_encoded_bytes_become_16k_wavs(self, tmp_path, monkeypatch) -> None:
+        import io
+        import sys
+        import numpy as np
+        import soundfile as sf
+        from ww_trainer import datagen
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
+
+        sr_in = 22050
+        tone = (0.2 * np.sin(2 * np.pi * 440 * np.arange(sr_in) / sr_in)).astype(np.float32)
+        buf = io.BytesIO()
+        sf.write(buf, tone, sr_in, format="WAV")
+        row = {"audio": {"bytes": buf.getvalue(), "path": "clip.wav"}}
+
+        class FakeDataset:
+            features = {"audio": hf_datasets.Audio()}
+
+            def cast_column(self, col, feature):
+                assert col == "audio" and feature.decode is False
+                return self
+
+            def __iter__(self):
+                return iter([row, row])
+
+        monkeypatch.setitem(sys.modules, "torchcodec", None)
+        # The folder-repo fast path probes the Hub before load_dataset runs.
+        # Stub it, or the test makes a real HfApi call against "org/fake".
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: [])
+        monkeypatch.setattr(hf_datasets, "load_dataset", lambda *a, **k: FakeDataset())
+
+        files = datagen.download_hf_audio_dataset("org/fake", tmp_path, max_samples=2, sr=16000)
+
+        assert [f.name for f in files] == ["000000.wav", "000001.wav"]
+        audio, sr = sf.read(files[0], dtype="float32")
+        assert sr == 16000
+        assert abs(len(audio) - 16000) <= 2
+
+
+class TestFolderReposBypassTheDatasetsBuilder:
+    def test_audio_files_are_fetched_one_by_one(self, tmp_path, monkeypatch) -> None:
+        import sys
+        import numpy as np
+        import soundfile as sf
+        from ww_trainer import datagen
+
+        src = tmp_path / "src"; src.mkdir()
+        for n in ("b.wav", "a.wav", "README.md"):
+            if n.endswith(".wav"):
+                sf.write(src / n, np.zeros(22050, dtype=np.float32), 22050)
+            else:
+                (src / n).write_text("card")
+        monkeypatch.setitem(sys.modules, "torchcodec", None)
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: ["a.wav", "b.wav"])
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                            lambda repo, name, repo_type=None: str(src / name))
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+
+        files = datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=1, sr=16000)
+
+        assert [f.name for f in files] == ["000000.wav"]
+        audio, sr = sf.read(files[0], dtype="float32")
+        assert sr == 16000 and abs(len(audio) - 16000) <= 2
+
+
+# ---------------------------------------------------------------------------
+# The pipeline refuses to finish with an empty class
+# ---------------------------------------------------------------------------
+
+class TestPipelineRefusesEmptyClasses:
+    def test_no_downloads_is_an_error_not_a_dataset(self, tmp_path, monkeypatch) -> None:
+        import pytest
+        from ww_trainer import datagen
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", lambda *a, **k: [])
+        monkeypatch.setattr(datagen, "find_positive_dataset", lambda ww: "org/positives")
+        cfg = datagen.DatagenConfig(wake_word="hey test", output_dir=tmp_path,
+                                    n_positive=10, download_augmentation=False, adversarial=False)
+        with pytest.raises(RuntimeError, match="0 positives and 0 negatives"):
+            datagen.run_datagen_pipeline(cfg)
+        assert not (tmp_path / "train" / "metadata.csv").exists()
