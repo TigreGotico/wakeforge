@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.2a7](https://github.com/TigreGotico/wakeforge/tree/0.4.2a7) (2026-09-18)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a6...0.4.2a7)
+
+**Merged pull requests:**
+
+- fix\(scripts\): select\_training\_subset.py compiles again, and CI compiles scripts/ [\#56](https://github.com/TigreGotico/wakeforge/pull/56) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+- docs: state the measured ww-benchmarks baseline [\#52](https://github.com/TigreGotico/wakeforge/pull/52) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+- docs: phonmatch.md points at orthography2ipa for the IPA [\#51](https://github.com/TigreGotico/wakeforge/pull/51) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+- docs: model card template for published wake-word models [\#33](https://github.com/TigreGotico/wakeforge/pull/33) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
+## [0.4.2a6](https://github.com/TigreGotico/wakeforge/tree/0.4.2a6) (2026-09-17)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a5...0.4.2a6)
+
 ## [0.4.2a5](https://github.com/TigreGotico/wakeforge/tree/0.4.2a5) (2026-09-17)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a4...0.4.2a5)
