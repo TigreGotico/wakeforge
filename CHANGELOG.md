@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.4.2a7](https://github.com/TigreGotico/wakeforge/tree/0.4.2a7) (2026-09-18)
+## [0.4.2a8](https://github.com/TigreGotico/wakeforge/tree/0.4.2a8) (2026-09-18)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a6...0.4.2a7)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a6...0.4.2a8)
 
 **Merged pull requests:**
 
