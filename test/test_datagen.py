@@ -393,6 +393,9 @@ class TestDownloadDecodesWithSoundfile:
                 return iter([row, row])
 
         monkeypatch.setitem(sys.modules, "torchcodec", None)
+        # The folder-repo fast path probes the Hub before load_dataset runs.
+        # Stub it, or the test makes a real HfApi call against "org/fake".
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: [])
         monkeypatch.setattr(hf_datasets, "load_dataset", lambda *a, **k: FakeDataset())
 
         files = datagen.download_hf_audio_dataset("org/fake", tmp_path, max_samples=2, sr=16000)
