@@ -1,8 +1,28 @@
 # Changelog
 
+## [0.4.3a3](https://github.com/TigreGotico/wakeforge/tree/0.4.3a3) (2026-09-19)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a2...0.4.3a3)
+
+**Merged pull requests:**
+
+- ci: delete python-support.yml, a duplicate Build Tests that never starts [\#58](https://github.com/TigreGotico/wakeforge/pull/58) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.3a2](https://github.com/TigreGotico/wakeforge/tree/0.4.3a2) (2026-09-18)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a6...0.4.3a2)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a1...0.4.3a2)
+
+## [0.4.3a1](https://github.com/TigreGotico/wakeforge/tree/0.4.3a1) (2026-09-18)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a8...0.4.3a1)
+
+## [0.4.2a8](https://github.com/TigreGotico/wakeforge/tree/0.4.2a8) (2026-09-18)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a7...0.4.2a8)
+
+## [0.4.2a7](https://github.com/TigreGotico/wakeforge/tree/0.4.2a7) (2026-09-18)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.2a6...0.4.2a7)
 
 **Merged pull requests:**
 
@@ -91,19 +111,19 @@
 
 ## [0.4.0a3](https://github.com/TigreGotico/wakeforge/tree/0.4.0a3) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a3)
 
 **Merged pull requests:**
 
 - docs: publish-ready overhaul + repo cleanup + CI fixes [\#11](https://github.com/TigreGotico/wakeforge/pull/11) ([JarbasAl](https://github.com/JarbasAl))
 
-## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
-
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a1)
-
 ## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a2)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a2)
+
+## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a1)
 
 **Merged pull requests:**
 
