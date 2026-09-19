@@ -22,7 +22,11 @@ jobs:
       version_file: 'ww_trainer/version.py'
       update_changelog: true
       publish_prerelease: true
-      propose_release: true
+      # Proposing a stable release opens a pull request against master, and
+      # this repository has no master branch. Turn this on together with
+      # creating one, or every merge into dev fails here and leaves an
+      # orphan release branch behind.
+      propose_release: false
       changelog_max_issues: 50
       publish_pypi: true
       notify_matrix: true
