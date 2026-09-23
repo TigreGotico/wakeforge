@@ -65,7 +65,7 @@ trainer = distill_hubert_to_cnn_lstm(
 # Output: models/student/student_extractor.onnx
 ```
 
-Internally creates `OnnxFeatureExtractor` (teacher), `CnnLstmExtractor` (student), and `FfnClassifierHead` (`distill.py:32-43`).
+Internally creates `OnnxFeatureExtractor` (teacher), `CnnLstmExtractor` (student), and `FfnClassifierHead` (`distill.py:508-519`).
 
 ---
 

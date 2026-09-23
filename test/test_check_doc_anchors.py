@@ -30,6 +30,19 @@ class Beta:
 # line 12 Beta.forward
 
 
+# A use site: the block that BUILDS the objects, far below their definitions.
+# It is what a page means by "internally creates X, Y and Z", and it is not
+# a definition line of anything.
+USE_SITE = '''
+
+def build():
+    alpha = Alpha()
+    beta = Beta()
+    return alpha, beta
+'''
+# appended to SOURCE: line 15 def build, 16 alpha = Alpha(), 17 beta = Beta()
+
+
 def _load():
     spec = importlib.util.spec_from_file_location("anchors", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
@@ -39,7 +52,7 @@ def _load():
 
 def _tree(tmp_path, page_text):
     (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "thing.py").write_text(SOURCE, encoding="utf-8")
+    (tmp_path / "pkg" / "thing.py").write_text(SOURCE + USE_SITE, encoding="utf-8")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "page.md").write_text(page_text, encoding="utf-8")
     return tmp_path
@@ -129,3 +142,21 @@ def test_symbol_table_reads_the_syntax_tree(tmp_path):
     assert flat["Alpha"] == [1]
     assert flat["forward"] == [4, 12]
     assert scoped[("Beta", "forward")] == [12]
+
+
+def test_a_use_site_range_is_not_pulled_to_a_definition(tmp_path):
+    """The shape that broke `docs/guides/distillation.md:68` (wakeforge#60).
+
+    The page line names `Alpha` and `Beta` and anchors the block that
+    BUILDS them, `thing.py:16-17`. `Alpha` is defined in the same file at
+    line 1, so the old checker resolved that one symbol, saw 16 was not a
+    definition line, and rewrote the anchor to `thing.py:1-2`: the header
+    of one of the two classes, which is not what the sentence points at.
+
+    An anchored range that already contains a reference to a named symbol
+    is a use site and is left alone.
+    """
+    t = _tree(tmp_path, "Internally creates `Alpha` and `Beta` (`thing.py:16-17`).\n")
+    r = _run(t, "--fix")
+    assert _counts(r.stdout)["REWROTE"] == "0", r.stdout
+    assert "thing.py:16-17" in (t / "docs" / "page.md").read_text()

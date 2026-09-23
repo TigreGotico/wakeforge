@@ -80,6 +80,50 @@ def candidates(words, flat):
     return lines
 
 
+def range_uses_a_named_symbol(path, start, end, words, flat):
+    """True when the anchored lines MENTION a symbol the page line names.
+
+    A definition anchor points at the line a symbol is defined on. A USE-SITE
+    anchor points at the block that calls or builds it, which is usually far
+    from the definition and is not a definition line of anything. The two are
+    told apart by reading the anchored lines: if the symbol appears there, the
+    anchor is already pointing at real uses of it.
+
+    Without this, a use site on a page line that also names a symbol defined
+    in the same file is resolved to that one definition and pulled to its
+    header. That is what happened to `docs/guides/distillation.md:68`, which
+    anchored the block building the teacher, the student and the head, and was
+    rewritten to the header of the student class alone.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return False
+    lo = max(start, 1)
+    hi = min(end if end is not None else start, len(lines))
+    if lo > hi:
+        return False
+    body = "\n".join(lines[lo - 1:hi])
+    named = [w for w in words if w in flat]
+    return any(re.search(rf"\b{re.escape(w)}\b", body) for w in named)
+
+
+def is_definition_line(path, line_no, name):
+    """True when `name` is really defined on that line of that file.
+
+    A repair is only trustworthy if the line it moves to says what the table
+    claimed. The table is built once per run, so this re-reads the file.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not 1 <= line_no <= len(lines):
+        return False
+    return re.match(rf"\s*(class|def|async\s+def)\s+{re.escape(name)}\b",
+                    lines[line_no - 1]) is not None
+
+
 def resolve(words, flat, scoped):
     """The lines an anchor on a page line could mean, most specific first."""
     classes = [w for w in words if w in flat and w[:1].isupper()]
@@ -106,8 +150,10 @@ def main():
     sources = [p for p in Path(args.src).rglob("*.py")
                if ".git" not in p.parts and "node_modules" not in p.parts]
     tables = {str(p).lstrip("./"): symbol_table(p) for p in sources}
+    paths = {str(p).lstrip("./"): p for p in sources}
 
-    counts = {"OK": 0, "FIX": 0, "NOSYM": 0, "NOSRC": 0, "REWROTE": 0}
+    counts = {"OK": 0, "USE": 0, "FIX": 0, "NOSYM": 0, "NOSRC": 0,
+              "REWROTE": 0}
 
     for page in sorted(Path(args.docs).rglob("*.md")):
         text = page.read_text(encoding="utf-8")
@@ -144,9 +190,17 @@ def main():
                     if not args.quiet_ok:
                         print(f"OK    {page}:{n}: {m.group(0)} {named}")
                     continue
+                if range_uses_a_named_symbol(paths[hits[0]], start, end,
+                                             words, flat):
+                    counts["USE"] += 1
+                    print(f"USE   {page}:{n}: {m.group(0)} "
+                          f"(the lines use {named}, not define it)")
+                    continue
                 counts["FIX"] += 1
                 detail = f"{named}={targets}"
-                if args.fix and len(targets) == 1:
+                if (args.fix and len(targets) == 1
+                        and is_definition_line(paths[hits[0]], targets[0],
+                                               named.split(".")[-1])):
                     new_start = targets[0]
                     new = f"{fname}:{new_start}"
                     if end is not None:
