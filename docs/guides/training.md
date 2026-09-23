@@ -19,7 +19,7 @@ The training metadata is a plain-text CSV with two columns and no header:
 - Column 1: absolute or relative path to an audio file (WAV, FLAC, MP3, OGG, M4A).
 - Column 2: `1` for wake word, `0` for non-wake.
 
-`AudioDataset` (`dataset.py:104`) accepts this as a list of `(path, label)` tuples. Files are validated on construction; missing files are logged with `logger.warning`. Label distribution is logged via `logger.info`.
+`AudioDataset` (`dataset.py:80`) accepts this as a list of `(path, label)` tuples. Files are validated on construction; missing files are logged with `logger.warning`. Label distribution is logged via `logger.info`.
 
 ### Directory layout
 
@@ -54,7 +54,7 @@ Use a TTS engine to generate phonetically diverse recordings of your wake phrase
 
 ### Sample rate
 
-All audio is expected at 16 000 Hz. `AudioDataset.__getitem__` (`dataset.py:284`) resamples automatically using `torchaudio.functional.resample` if the source differs, but resampling at load time is slower than pre-converting your dataset.
+All audio is expected at 16 000 Hz. `AudioDataset.__getitem__` (`dataset.py:315`) resamples automatically using `torchaudio.functional.resample` if the source differs, but resampling at load time is slower than pre-converting your dataset.
 
 ---
 
@@ -334,7 +334,7 @@ Hard-negative mining identifies non-wake samples that the model confuses with th
 
 ## 7. Augmentation Options
 
-Augmentation is applied on-the-fly in `AudioDataset.get_augmented` (`dataset.py:173`). Each type has a fixed probability independent of `--aug-prob`:
+Augmentation is applied on-the-fly in `AudioDataset.get_augmented` (`dataset.py:242`). Each type has a fixed probability independent of `--aug-prob`:
 
 | Type | Probability | Config |
 |------|-------------|--------|

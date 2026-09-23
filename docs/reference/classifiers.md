@@ -206,7 +206,7 @@ Keyword Transformer (Berg et al., *Keyword Transformer: A Self-Attention Model f
 
 ### ConformerHead — `model.py:1349`
 
-Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Speech Recognition*, Interspeech 2020). ArXiv <https://arxiv.org/abs/2005.08100>. Convolution-augmented transformer: FFN -> MHSA -> Conv -> FFN per block — `_ConformerBlock` — `model.py:1206`. Uses `AttentionPooling` — `model.py:910` — for time aggregation.
+Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Speech Recognition*, Interspeech 2020). ArXiv <https://arxiv.org/abs/2005.08100>. Convolution-augmented transformer: FFN -> MHSA -> Conv -> FFN per block — `_ConformerBlock` — `model.py:1304`. Uses `AttentionPooling` — `model.py:910` — for time aggregation.
 
 **Status:** the source paper targets full-sentence speech recognition, not keyword spotting; this head is `wakeforge`'s own adaptation of the block design to a binary wake-word classifier, not a reproduction of a KWS result from the paper.
 
@@ -320,7 +320,7 @@ EfficientNet-B0 (Tan & Le, *EfficientNet: Rethinking Model Scaling for Convoluti
 
 **Status:** the source paper targets ImageNet image classification, not audio or keyword spotting; treating a log-mel spectrogram as a 1-channel image and training from scratch is `wakeforge`'s own adaptation, not a reproduction of a result from the paper.
 
-**Architecture:** `[B,T,F]` → transpose → unsqueeze(1) → EfficientNet-B0 (1-ch input) → Dropout → Linear(1280, 1) → `[B]` logits — `EfficientNetHead.forward` — `model.py:1526`.
+**Architecture:** `[B,T,F]` → transpose → unsqueeze(1) → EfficientNet-B0 (1-ch input) → Dropout → Linear(1280, 1) → `[B]` logits — `EfficientNetHead.forward` — `model.py:1619`.
 
 **Parameters:** `dropout` (0.2), `input_size` (mel bins, e.g. 40 or 80).
 

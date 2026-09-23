@@ -188,7 +188,7 @@ Learnable Audio Frontend (Zeghidour et al., *LEAF: A Learnable Frontend for Audi
 
 ### OnnxFeatureExtractor — `feats.py:157`
 
-Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:139`).
+Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:192`).
 
 **Parameters:** `model_path` (ONNX file), `sample_rate` (16000).
 

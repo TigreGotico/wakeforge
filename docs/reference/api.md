@@ -468,7 +468,7 @@ def load_checkpoint(self, ckpt_path: str) -> None
 
 Loads a `.pt` file into the model with `strict=False`. Falls back to `state["model"]` key if a full dict is detected.
 
-#### `save_checkpoint` — `model.py:107`
+#### `save_checkpoint` — `model.py:197`
 
 ```python
 def save_checkpoint(self, ckpt_path: str) -> None
@@ -476,7 +476,7 @@ def save_checkpoint(self, ckpt_path: str) -> None
 
 Saves `self.state_dict()` via `torch.save`.
 
-#### `export_to_onnx` — `model.py:136`
+#### `export_to_onnx` — `model.py:231`
 
 ```python
 def export_to_onnx(
@@ -500,7 +500,7 @@ No PyTorch imports at module level. Requires only `numpy` and `onnxruntime`.
 
 ---
 
-### `OnnxWakeWordInferencer` — `inference.py:8`
+### `OnnxWakeWordInferencer` — `inference.py:111`
 
 ```python
 class OnnxWakeWordInferencer
@@ -508,7 +508,7 @@ class OnnxWakeWordInferencer
 
 Chains two ONNX sessions (extractor + head) for wake word detection.
 
-#### `__init__` — `inference.py:20`
+#### `__init__` — `inference.py:133`
 
 ```python
 def __init__(
@@ -529,7 +529,7 @@ def __init__(
 
 `device="auto"` checks `ort.get_all_providers()` for `CUDAExecutionProvider` (`inference.py:23`–`24`).
 
-#### `infer` — `inference.py:36`
+#### `infer` — `inference.py:212`
 
 ```python
 def infer(self, audio: np.ndarray) -> float
@@ -553,7 +553,7 @@ prob = inf.infer(audio)
 print(f"Wake probability: {prob:.4f}")
 ```
 
-#### `infer_batch` — `inference.py:57`
+#### `infer_batch` — `inference.py:246`
 
 ```python
 def infer_batch(self, audio_batch: np.ndarray) -> np.ndarray
@@ -572,7 +572,7 @@ batch = np.zeros((8, 16000), dtype=np.float32)
 probs = inf.infer_batch(batch)  # shape [8]
 ```
 
-#### `infer_streaming` — `inference.py:74`
+#### `infer_streaming` — `inference.py:276`
 
 ```python
 def infer_streaming(
@@ -626,13 +626,13 @@ EXTRACTOR_REGISTRY = {
 }
 ```
 
-Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:83`.
+Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:157`.
 
 For HuBERT and Wav2Vec2: export the SSL model to ONNX once with the standalone export scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then use `featurizer_type="onnx"` to load it as an `OnnxFeatureExtractor`. This guarantees train/inference feature parity.
 
 ---
 
-### `WakeWordTrainer` — `trainer.py:40`
+### `WakeWordTrainer` — `trainer.py:19`
 
 ```python
 class WakeWordTrainer
@@ -640,7 +640,7 @@ class WakeWordTrainer
 
 Full training orchestrator: model construction, loss setup, epoch loop, hard-negative mining, evaluation, checkpointing, and MLflow logging.
 
-#### `__init__` — `trainer.py:57`
+#### `__init__` — `trainer.py:37`
 
 ```python
 def __init__(
@@ -677,7 +677,7 @@ def __init__(
 
 When `mlflow_uri` is provided, starts an MLflow run named `<featurizer_slug>-<arch>` and logs all params (`trainer.py:99`–`116`).
 
-#### `create_model` — `trainer.py:128`
+#### `create_model` — `trainer.py:251`
 
 ```python
 @staticmethod
@@ -713,7 +713,7 @@ Builds and returns a `BaseWakeModel`. Extractor is resolved via `EXTRACTOR_REGIS
 | `"ocsvm"` | `OCSVMHead` |
 | `"conv_attention"` | `ConvAttentionHead` |
 
-#### `save_checkpoint` — `trainer.py:119`
+#### `save_checkpoint` — `trainer.py:216`
 
 ```python
 def save_checkpoint(
@@ -727,7 +727,7 @@ def save_checkpoint(
 
 Delegates to `ww_trainer.checkpoint.save_checkpoint`.
 
-#### `load_checkpoint` — `trainer.py:123`
+#### `load_checkpoint` — `trainer.py:226`
 
 ```python
 def load_checkpoint(
@@ -739,7 +739,7 @@ def load_checkpoint(
 
 Delegates to `ww_trainer.checkpoint.load_checkpoint`. Returns `(start_epoch, metrics)`.
 
-#### `train` — `trainer.py:307`
+#### `train` — `trainer.py:300`
 
 ```python
 def train(
@@ -831,7 +831,7 @@ Keys: `"micro"`, `"small"`, `"medium"`, `"large"`. See [architecture.md](../inte
 
 ---
 
-### `get_tier` — `tiers.py:83`
+### `get_tier` — `tiers.py:201`
 
 ```python
 def get_tier(name: str) -> TierConfig
@@ -841,7 +841,7 @@ Returns `HARDWARE_TIERS[name]`. Raises `ValueError` with available names if `nam
 
 ---
 
-### `list_tiers` — `tiers.py:70`
+### `list_tiers` — `tiers.py:188`
 
 ```python
 def list_tiers() -> str
@@ -857,7 +857,7 @@ Source: `ww_trainer/dataset.py`
 
 ---
 
-### `AudioDataset` — `dataset.py:99`
+### `AudioDataset` — `dataset.py:80`
 
 ```python
 class AudioDataset(Dataset)
@@ -865,7 +865,7 @@ class AudioDataset(Dataset)
 
 PyTorch `Dataset` for loading audio files with optional on-the-fly augmentation.
 
-#### `__init__` — `dataset.py:104`
+#### `__init__` — `dataset.py:123`
 
 ```python
 def __init__(
@@ -896,11 +896,11 @@ On construction: validates files (warns on missing), logs label distribution (`d
 
 When `vc_folder` and `vc_prob > 0`: loads the selected `voiceclonnx` VC engine (`dataset.py:145`–`148`), raising `ImportError` if `voiceclonnx` is not installed.
 
-#### `__len__` — `dataset.py:169`
+#### `__len__` — `dataset.py:239`
 
 Returns `len(self.samples)`.
 
-#### `__getitem__` — `dataset.py:269`
+#### `__getitem__` — `dataset.py:315`
 
 Returns `(wav: Tensor[T], label: int, path: str)`.
 
@@ -908,7 +908,7 @@ Load order: optionally voice-converts wake samples (`label=="1"`, prob `vc_prob`
 
 ---
 
-### `collate_fn` — `dataset.py:301`
+### `collate_fn` — `dataset.py:371`
 
 ```python
 def collate_fn(batch, device="auto") -> Tuple[Tensor, Tensor, Tuple[str, ...]]
@@ -924,7 +924,7 @@ Source: `ww_trainer/loss.py`
 
 ---
 
-### `CN2Plus1PairLoss` — `loss.py:13`
+### `CN2Plus1PairLoss` — `loss.py:43`
 
 (C_N,2 + 1)-pair loss from López-Espejo et al., TASLP 2021.
 
@@ -938,7 +938,7 @@ Inputs: `anchor [B, D]`, `positive [B, D]`, `negatives [N_neg, D]`. Encourages a
 
 ---
 
-### `SoftTripletLoss` — `loss.py:86`
+### `SoftTripletLoss` — `loss.py:116`
 
 Soft triplet loss: `log(1 + exp(D(a,p) - D(a,n)))`.
 
@@ -951,7 +951,7 @@ L2-normalizes inputs, computes squared L2 distances, applies softplus. Gradient 
 
 ---
 
-### `ContrastiveLoss` — `loss.py:126`
+### `ContrastiveLoss` — `loss.py:156`
 
 Classic contrastive (Siamese) loss.
 
@@ -965,7 +965,7 @@ Pulls positive pairs together (squared distance), pushes negative pairs beyond `
 
 ---
 
-### `LiftedStructureLoss` — `loss.py:170`
+### `LiftedStructureLoss` — `loss.py:200`
 
 Lifted Structured Embedding loss. Uses all positive and negative pairs via log-sum-exp.
 
@@ -977,7 +977,7 @@ def forward(self, embeds: Tensor, labels: Tensor) -> Tensor
 
 ---
 
-### `AngularLoss` — `loss.py:221`
+### `AngularLoss` — `loss.py:251`
 
 Cosine-based margin loss. Enforces `cos(A,P) > cos(A,N) + margin`.
 
@@ -991,7 +991,7 @@ Mines semi-hard triplets using Euclidean distance, then applies the angular (cos
 
 ---
 
-### `RobustProtoDiversityLoss` (RPPL) — `loss.py:281`
+### `RobustProtoDiversityLoss` (RPPL) — `loss.py:311`
 
 Composite loss: BCE + prototype contrastive + positive center loss + negative diversity + consistency.
 
@@ -1030,7 +1030,7 @@ When `aug_embeds` is provided, adds a consistency term `||z - z_aug||^2` (`loss.
 
 ---
 
-### `LossManager` — `loss.py:395`
+### `LossManager` — `loss.py:1137`
 
 ```python
 class LossManager
@@ -1053,7 +1053,7 @@ Manages multiple weighted loss functions. `loss_configs` is a list of dicts:
 
 Supported names: `"bce"`, `"triplet"`, `"soft_triplet"`, `"pair"`, `"cn2pair"`, `"lse"`, `"contrastive"`, `"angular"`, `"rppl"`.
 
-#### `compute_loss` — `loss.py:454`
+#### `compute_loss` — `loss.py:1347`
 
 ```python
 def compute_loss(
@@ -1077,7 +1077,7 @@ Source: `ww_trainer/utils.py`
 
 ---
 
-### `timed` — `utils.py:10`
+### `timed` — `utils.py:13`
 
 ```python
 def timed(func)
@@ -1093,7 +1093,7 @@ def my_function():
 
 ---
 
-### `compute_metric_statistics` — `utils.py:31`
+### `compute_metric_statistics` — `utils.py:34`
 
 ```python
 def compute_metric_statistics(
@@ -1107,7 +1107,7 @@ Returns `(mean_ap_dist, mean_an_dist, violation_fraction)` — mean anchor-posit
 
 ---
 
-### `sample_triplets` — `utils.py:77`
+### `sample_triplets` — `utils.py:80`
 
 ```python
 def sample_triplets(
@@ -1128,7 +1128,7 @@ Mining strategies:
 
 ---
 
-### `pairwise_distance` — `utils.py:179`
+### `pairwise_distance` — `utils.py:182`
 
 ```python
 def pairwise_distance(embeddings: torch.Tensor, eps: float = 1e-12) -> torch.Tensor
@@ -1138,7 +1138,7 @@ Computes the `[B, B]` pairwise Euclidean distance matrix. Uses the dot-product f
 
 ---
 
-### `pairwise_cosine_similarity` — `utils.py:187`
+### `pairwise_cosine_similarity` — `utils.py:190`
 
 ```python
 def pairwise_cosine_similarity(embeddings: torch.Tensor) -> torch.Tensor
@@ -1148,7 +1148,7 @@ Returns `[B, B]` cosine similarity matrix. Assumes embeddings are already L2-nor
 
 ---
 
-### `triplet_violation_fraction` — `utils.py:199`
+### `triplet_violation_fraction` — `utils.py:202`
 
 ```python
 def triplet_violation_fraction(
@@ -1162,7 +1162,7 @@ Returns `(n_violating, n_valid, violation_fraction)`.
 
 ---
 
-### `get_hard_pair_distances` — `utils.py:215`
+### `get_hard_pair_distances` — `utils.py:218`
 
 ```python
 def get_hard_pair_distances(
@@ -1175,7 +1175,7 @@ Returns `(dist_ap_hard, dist_an_hard)` — the hardest anchor-positive distance 
 
 ---
 
-### `sample_semihard_triplets` — `utils.py:239`
+### `sample_semihard_triplets` — `utils.py:242`
 
 ```python
 def sample_semihard_triplets(
@@ -1198,7 +1198,7 @@ All functions are standalone (not methods). They accept `mlflow` as an optional 
 
 ---
 
-### `plot_roc` — `visualization.py:27`
+### `plot_roc` — `visualization.py:38`
 
 ```python
 def plot_roc(
@@ -1210,7 +1210,7 @@ Plots ROC curve, saves to `plot_dir/roc_epoch_{epoch}.png`.
 
 ---
 
-### `plot_pr` — `visualization.py:50`
+### `plot_pr` — `visualization.py:57`
 
 ```python
 def plot_pr(
@@ -1222,7 +1222,7 @@ Plots Precision-Recall curve, saves to `plot_dir/pr_epoch_{epoch}.png`.
 
 ---
 
-### `plot_det` — `visualization.py:73`
+### `plot_det` — `visualization.py:77`
 
 ```python
 def plot_det(
@@ -1234,7 +1234,7 @@ Plots DET curve (log-log axes), saves to `plot_dir/det_epoch_{epoch}.png`.
 
 ---
 
-### `log_confidence_histogram` — `visualization.py:98`
+### `log_confidence_histogram` — `visualization.py:372`
 
 ```python
 def log_confidence_histogram(
@@ -1251,7 +1251,7 @@ Plots two overlapping histograms — wake vs non-wake confidence distributions. 
 
 ---
 
-### `log_pca` — `visualization.py:138`
+### `log_pca` — `visualization.py:570`
 
 ```python
 def log_pca(
@@ -1264,7 +1264,7 @@ Runs PCA on embeddings of up to `sample_size` samples, plots 2-D scatter by clas
 
 ---
 
-### `log_tsne` — `visualization.py:175`
+### `log_tsne` — `visualization.py:624`
 
 ```python
 def log_tsne(
@@ -1277,7 +1277,7 @@ Runs t-SNE (perplexity=30, init="pca") on embeddings, plots 2-D scatter.
 
 ---
 
-### `log_umap` — `visualization.py:218`
+### `log_umap` — `visualization.py:674`
 
 ```python
 def log_umap(
@@ -1290,7 +1290,7 @@ Runs UMAP if `umap-learn` is installed; falls back to t-SNE with a `logging.warn
 
 ---
 
-### `log_embeddings_stats` — `visualization.py:265`
+### `log_embeddings_stats` — `visualization.py:731`
 
 ```python
 def log_embeddings_stats(
@@ -1308,7 +1308,7 @@ Computes and returns a stats dict:
 | `intra_pos_var` | Mean per-dimension variance within wake samples |
 | `intra_neg_var` | Mean per-dimension variance within non-wake samples |
 
-Used by `WakeWordTrainer._compute_readiness` (`trainer.py:183`) to modulate hard-negative sampling.
+Used by `WakeWordTrainer._compute_readiness` (`trainer.py:19`) to modulate hard-negative sampling.
 
 ---
 
@@ -1318,7 +1318,7 @@ Source: `ww_trainer/mining.py`
 
 ---
 
-### `mine_hard_negatives` — `mining.py:14`
+### `mine_hard_negatives` — `mining.py:18`
 
 ```python
 def mine_hard_negatives(
@@ -1354,7 +1354,7 @@ Hardness score: `new = cache_decay * old + (1 - cache_decay) * max(0, prob - neg
 
 ---
 
-### `save_mining_cache` — `mining.py:126`
+### `save_mining_cache` — `mining.py:161`
 
 ```python
 def save_mining_cache(cache: dict, path: str) -> None
@@ -1364,7 +1364,7 @@ Saves `cache` dict via `torch.save`.
 
 ---
 
-### `load_mining_cache` — `mining.py:132`
+### `load_mining_cache` — `mining.py:167`
 
 ```python
 def load_mining_cache(path: str) -> dict
@@ -1380,7 +1380,7 @@ Source: `ww_trainer/checkpoint.py`
 
 ---
 
-### `save_checkpoint` — `checkpoint.py:10`
+### `save_checkpoint` — `checkpoint.py:13`
 
 ```python
 def save_checkpoint(
@@ -1400,7 +1400,7 @@ Creates parent directories if needed.
 
 ---
 
-### `load_checkpoint` — `checkpoint.py:42`
+### `load_checkpoint` — `checkpoint.py:121`
 
 ```python
 def load_checkpoint(
@@ -1421,7 +1421,7 @@ Source: `ww_trainer/sweep.py`
 
 ---
 
-### `run_sweep` — `sweep.py:20`
+### `run_sweep` — `sweep.py:91`
 
 ```python
 def run_sweep(
@@ -1461,7 +1461,7 @@ Saves best params to `output_dir/best_params.json`.
 
 Source: `ww_trainer/cache.py`
 
-### `FeatureCache` — `cache.py:19`
+### `FeatureCache` — `cache.py:16`
 
 ```python
 class FeatureCache(cache_dir: str, extractor_name: str, extractor_params_hash: str)
@@ -1476,7 +1476,7 @@ Disk-backed cache for extracted audio features. Stores `.npy` files keyed by MD5
 | `clear` | `() -> int` | Remove all cached entries; returns count |
 | `size` | `() -> int` | Number of cached `.npy` files |
 
-### `make_extractor_params_hash` — `cache.py:115`
+### `make_extractor_params_hash` — `cache.py:264`
 
 ```python
 def make_extractor_params_hash(extractor_name: str, feature_dim: int, sample_rate: int) -> str
@@ -1488,7 +1488,7 @@ Builds a deterministic hash string from extractor configuration. Used as the `ex
 
 ## `ww_trainer.evaluation` — `compute_fitness_score`
 
-### `compute_fitness_score` — `evaluation.py:118`
+### `compute_fitness_score` — `evaluation.py:158`
 
 ```python
 def compute_fitness_score(

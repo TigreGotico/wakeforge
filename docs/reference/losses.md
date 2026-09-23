@@ -1,6 +1,6 @@
 # Loss Functions
 
-All losses are managed by `LossManager` — `ww_trainer/loss.py:1078`. Multiple losses can be weighted and combined; the manager handles triplet mining, embedding extraction, and dispatch.
+All losses are managed by `LossManager` — `ww_trainer/loss.py:1137`. Multiple losses can be weighted and combined; the manager handles triplet mining, embedding extraction, and dispatch.
 
 Each section below follows the same shape:
 

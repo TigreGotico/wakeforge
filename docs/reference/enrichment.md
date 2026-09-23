@@ -1,6 +1,6 @@
 # Feature Enrichment Wrappers
 
-Wrappers that decorate any `BaseExtractor`, appending extra feature channels without modifying the base extractor. All defined in `ww_trainer/feats.py:1318-1700`.
+Wrappers that decorate any `BaseExtractor`, appending extra feature channels without modifying the base extractor. All defined in `ww_trainer/feats.py:70-452`.
 
 **Key constraint:** Wrappers cannot be ONNX-exported directly. Export the base extractor separately; enrichment features must be computed at runtime or replicated in a custom ONNX graph.
 
