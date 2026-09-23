@@ -83,15 +83,15 @@ stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 
 | Name | Module | Source |
 |---|---|---|
-| `train_from_wakeword` | `quickstart` | `quickstart.py:231` |
+| `train_from_wakeword` | `quickstart` | `quickstart.py:273` |
 | `QuickstartConfig`, `QuickstartResult` | `quickstart` | `quickstart.py:23,71` |
 | `WakeWordTrainer` | `trainer` | `trainer.py` |
 | `BaseWakeModel` | `model` | `model.py` |
 | `AudioDataset` | `dataset` | `dataset.py` |
 | `LossManager` | `loss` | `loss.py` |
-| `RobustProtoDiversityLoss` | `loss` | `loss.py:282` |
+| `RobustProtoDiversityLoss` | `loss` | `loss.py:311` |
 | `OnnxWakeWordInferencer` | `inference` | `inference.py` |
-| `SlidingFeatureCacheTensor` | `feats` | `feats.py:27` |
+| `SlidingFeatureCacheTensor` | `feats` | `feats.py:31` |
 | `run_sweep` / `run_grid_search` / `run_random_search` | `sweep` | `sweep.py:91,299,374` |
 | `run_genetic_search` / `run_two_stage_genetic_search` | `sweep` | `sweep.py:744,1029` |
 | `infinite_training_loop`, `StoppingGoal` | `infinite_loop` | `infinite_loop.py` |

@@ -8,10 +8,10 @@ How to measure feature extractor and model latency, and compare PyTorch vs ONNX 
 
 `ww_trainer/benchmark.py` provides:
 
-- `bench_extractor` — latency, parameter count, output shape for a single extractor (`benchmark.py:70`)
-- `bench_model` — end-to-end latency + real-time factor for extractor + head pairs (`benchmark.py:116`)
-- `bench_onnx_vs_pytorch` — latency and numerical accuracy comparison between PyTorch and ONNX Runtime (`benchmark.py:166`)
-- `run_benchmark` — runs the full suite, saves CSVs and plots (`benchmark.py:242`)
+- `bench_extractor` — latency, parameter count, output shape for a single extractor (`benchmark.py:85`)
+- `bench_model` — end-to-end latency + real-time factor for extractor + head pairs (`benchmark.py:131`)
+- `bench_onnx_vs_pytorch` — latency and numerical accuracy comparison between PyTorch and ONNX Runtime (`benchmark.py:181`)
+- `run_benchmark` — runs the full suite, saves CSVs and plots (`benchmark.py:269`)
 
 ---
 
@@ -59,7 +59,7 @@ Defined at `benchmark.py:56`.
 
 ### What it measures
 
-`bench_onnx_vs_pytorch` (`benchmark.py:166`) takes a PyTorch extractor and the path to its ONNX export. It:
+`bench_onnx_vs_pytorch` (`benchmark.py:181`) takes a PyTorch extractor and the path to its ONNX export. It:
 
 1. Runs `n_warmup` warmup passes through both backends.
 2. Times `n_runs` inference passes through PyTorch (`torch.no_grad`) and ONNX Runtime separately.
@@ -144,7 +144,7 @@ After `run_benchmark()` or `save_results()` + `plot_results()`:
 
 ## BenchmarkReport
 
-`BenchmarkReport` (`benchmark.py:67`) holds all results:
+`BenchmarkReport` (`benchmark.py:70`) holds all results:
 
 ```python
 @dataclass

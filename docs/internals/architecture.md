@@ -64,7 +64,7 @@ This modularity allows for "Best-of-Breed" component swapping (e.g., swapping a 
 CSV file: /path/audio.wav,1
      |
      v
-AudioDataset.__getitem__          dataset.py:293
+AudioDataset.__getitem__          dataset.py:315
   FeatureCache.get(path)?         cache.py (if cache hit + no augment → skip load)
   torchaudio.load(path)
   resample to 16 kHz if needed
@@ -72,7 +72,7 @@ AudioDataset.__getitem__          dataset.py:293
   FeatureCache.put(path) if no augment
      |  wav: Tensor[T]  float32
      v
-collate_fn(batch, device)         dataset.py:349
+collate_fn(batch, device)         dataset.py:371
   zero-pad all wavs to max_len
   stack into Tensor[B, T]
   move to device
@@ -89,7 +89,7 @@ BaseWakeModel.embed(wavs)         model.py:168
   (same extractor call, head.embed)
      |  embeds: Tensor[B, D]
      v
-LossManager.compute_loss(         loss.py:1287
+LossManager.compute_loss(         loss.py:1347
   model, wavs, labels, dataset_ref)
   → total scalar loss
      v
@@ -102,7 +102,7 @@ optimizer.step()
 audio: np.ndarray  shape [T]  float32
      |
      v
-OnnxWakeWordInferencer.infer(audio)    inference.py:36
+OnnxWakeWordInferencer.infer(audio)    inference.py:212
   audio[np.newaxis, :]  →  shape [1, T]
   extractor ONNX session.run()
      |  feats: np.ndarray  [1, T_frames, F]
@@ -121,7 +121,7 @@ audio_chunk: np.ndarray  shape [chunk_T]
 cache: np.ndarray | None  shape [T_cached, F]
      |
      v
-OnnxWakeWordInferencer.infer_streaming    inference.py:74
+OnnxWakeWordInferencer.infer_streaming    inference.py:276
   extractor ONNX session on [1, chunk_T]
      |  new_feats: [T_new, F]
   cache = concat(cache, new_feats)
@@ -149,13 +149,13 @@ ClassifierHead (GruClassifierHead)      head.onnx
 No PyTorch at runtime.
 ```
 
-`BaseExtractor.export_to_onnx` (`feats.py:77`): uses `torch.onnx.export` with opset 18, dynamic axes for both batch and time dimensions, `do_constant_folding=True`, `TrainingMode.EVAL`. Verifies with `onnx.checker.check_model`.
+`BaseExtractor.export_to_onnx` (`feats.py:107`): uses `torch.onnx.export` with opset 18, dynamic axes for both batch and time dimensions, `do_constant_folding=True`, `TrainingMode.EVAL`. Verifies with `onnx.checker.check_model`.
 
-`ClassifierHead.export_to_onnx` (`model.py:30`): same approach. Dynamic axis on the time dimension (`T_features`) of the feature input. Input name `input_features`; output name `logits`.
+`ClassifierHead.export_to_onnx` (`model.py:52`): same approach. Dynamic axis on the time dimension (`T_features`) of the feature input. Input name `input_features`; output name `logits`.
 
 When `quantize=True`:
-- `BaseExtractor.export_to_onnx`: writes both `_int16.onnx` and `_int8.onnx` via `quantize_dynamic` (`feats.py:96`–`102`).
-- `ClassifierHead.export_to_onnx`: writes `_int8.onnx` only (`model.py:57`–`62`).
+- `BaseExtractor.export_to_onnx`: writes both `_int16.onnx` and `_int8.onnx` via `quantize_dynamic` (`feats.py:107`–`113`).
+- `ClassifierHead.export_to_onnx`: writes `_int8.onnx` only (`model.py:52`–`57`).
 
 ---
 
@@ -163,14 +163,14 @@ When `quantize=True`:
 
 | Class | Type | `feature_dim` source | Output shape | ONNX-exportable | Requires |
 |-------|------|---------------------|--------------|-----------------|---------|
-| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:181`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
-| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:126`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
+| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:304`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
+| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:157`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
 | `HubertExtractor` | Neural (HuBERT) | `hubert.config.hidden_size` (`feats.py:264`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 | `Wav2Vec2Extractor` | Neural (Wav2Vec2) | `model.config.hidden_size` (`feats.py:296`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 
-`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:228`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
+`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:304`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
 
-`HubertExtractor` and `Wav2Vec2Extractor` mark `_REQUIRES_TRANSFORMERS = True` (`feats.py:249`, `feats.py:283`) as a documentation convention. Import is guarded with `try/except ImportError` in both `__init__` methods and in `WakeWordTrainer.create_model` (`trainer.py:140`–`150`).
+`HubertExtractor` and `Wav2Vec2Extractor` mark `_REQUIRES_TRANSFORMERS = True` (`feats.py:249`, `feats.py:283`) as a documentation convention. Import is guarded with `try/except ImportError` in both `__init__` methods and in `WakeWordTrainer.create_model` (`trainer.py:37`–`47`).
 
 ---
 
@@ -185,7 +185,7 @@ Defined in `ww_trainer/tiers.py`. Each tier is a `TierConfig` dataclass (`tiers.
 | `medium` | `onnx` | `ffn` | 128 | — | No | 1 | ~90M feat + 200K head | RPi 4, laptop |
 | `large` | `hubert` | `gru` | 256 | — | Yes | 2 | ~300M feat + 1M head | Server/workstation |
 
-`HARDWARE_TIERS` dict: `tiers.py:26`. `get_tier(name)`: `tiers.py:83`. `list_tiers()` formatted table: `tiers.py:70`.
+`HARDWARE_TIERS` dict: `tiers.py:201`. `get_tier(name)`: `tiers.py:201`. `list_tiers()` formatted table: `tiers.py:201`.
 
 When `--tier` is passed to the CLI (`cli.py:230`–`239`), it sets `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and optionally `n_mfcc`.
 
@@ -211,18 +211,18 @@ trainer_b = WakeWordTrainer(
 )
 ```
 
-`WakeWordTrainer.create_model` checks `if shared_extractor is not None` first (`trainer.py:132`) and skips constructing a new extractor if one is provided.
+`WakeWordTrainer.create_model` checks `if shared_extractor is not None` first (`trainer.py:251`) and skips constructing a new extractor if one is provided.
 
 ---
 
 ## Sliding Feature Cache
 
-`SlidingFeatureCacheTensor` — `ww_trainer/feats.py:27`
+`SlidingFeatureCacheTensor` — `ww_trainer/feats.py:31`
 
 Used in streaming inference to accumulate the most recent `window_size` feature frames without recomputing the entire history.
 
 **Internal state:**
-- `feature_cache: Tensor[window_size, feature_dim]` — registered as a buffer (`feats.py:33`).
+- `feature_cache: Tensor[window_size, feature_dim]` — registered as a buffer (`feats.py:37`).
 - `current_len: int` — number of valid frames currently in the buffer.
 
 **`forward(new_feats: Tensor[T_new, F])` — `feats.py:36`:**
@@ -232,9 +232,9 @@ Used in streaming inference to accumulate the most recent `window_size` feature 
 3. Appends `new_feats` at position `current_len`.
 4. Returns `feature_cache[:current_len]` — always a `[T_current, F]` slice.
 
-The cache is updated **in-place** (it is a `nn.Module` buffer). The ONNX inference equivalent is the numpy rolling array in `OnnxWakeWordInferencer.infer_streaming` (`inference.py:93`–`98`), which keeps the last 50 frames by simple array concatenation and slicing.
+The cache is updated **in-place** (it is a `nn.Module` buffer). The ONNX inference equivalent is the numpy rolling array in `OnnxWakeWordInferencer.infer_streaming` (`inference.py:276`–`281`), which keeps the last 50 frames by simple array concatenation and slicing.
 
-`BaseWakeModel.forward_streaming` (`model.py:110`) uses this cache:
+`BaseWakeModel.forward_streaming` (`model.py:200`) uses this cache:
 
 ```python
 feats = self.feature_extractor([audio_chunk])   # [1, T_new, F]
@@ -249,11 +249,11 @@ return torch.sigmoid(logit).item()
 
 ### ONNX-only inference
 
-PyTorch is not required at runtime. This is intentional: wake word detection runs on embedded devices (RPi Zero, MCUs) where installing PyTorch is impractical. `OnnxWakeWordInferencer` (`inference.py:8`) imports only `numpy` and `onnxruntime`.
+PyTorch is not required at runtime. This is intentional: wake word detection runs on embedded devices (RPi Zero, MCUs) where installing PyTorch is impractical. `OnnxWakeWordInferencer` (`inference.py:111`) imports only `numpy` and `onnxruntime`.
 
 ### `feature_dim` as a property, not a constructor argument
 
-If `feature_dim` were a constructor argument to the head, callers would have to know it upfront. By making it a property on every `BaseExtractor` subclass, `WakeWordTrainer.create_model` (`trainer.py:155`–`156`) can auto-detect it:
+If `feature_dim` were a constructor argument to the head, callers would have to know it upfront. By making it a property on every `BaseExtractor` subclass, `WakeWordTrainer.create_model` (`trainer.py:251`–`252`) can auto-detect it:
 
 ```python
 if feature_dim is None:
@@ -264,7 +264,7 @@ This allows the tier presets to work without specifying the dimension explicitly
 
 ### Separate `.pt` and `.ts` checkpoint files
 
-`save_checkpoint` (`checkpoint.py:10`) writes two files:
+`save_checkpoint` (`checkpoint.py:13`) writes two files:
 - `name.pt` — model weights only (via `model.save_checkpoint`).
 - `name.ts` — trainer state: epoch, metrics dict, optimizer state.
 
