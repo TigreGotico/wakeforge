@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3a4](https://github.com/TigreGotico/wakeforge/tree/0.4.3a4) (2026-09-23)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a3...0.4.3a4)
+
+**Merged pull requests:**
+
+- ci: stop proposing a stable release, this repository has no master branch [\#59](https://github.com/TigreGotico/wakeforge/pull/59) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.3a3](https://github.com/TigreGotico/wakeforge/tree/0.4.3a3) (2026-09-19)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a2...0.4.3a3)
