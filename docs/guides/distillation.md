@@ -35,7 +35,7 @@ Trains student to mimic teacher features while classifying wake words.
 
 - `alpha=0.7` (default): 70% distillation, 30% task loss.
 - Teacher is frozen (`distill.py:305-307`).
-- If teacher and student have different `feature_dim`, a linear projection aligns them (`distill.py:203-206`).
+- If teacher and student have different `feature_dim`, a linear projection aligns them (`distill.py:108-111`).
 - Time-length mismatch handled by interpolation (`distill.py:230-240`).
 
 **Training loop** (`distill.py:247`):

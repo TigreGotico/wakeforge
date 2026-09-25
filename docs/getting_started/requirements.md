@@ -99,7 +99,7 @@ When the phrase is novel, datagen falls back to TTS. Per-sample size:
 ```
 
 For the default `n_positive=1000`
-([`QuickstartConfig` — `ww_trainer/quickstart.py:50`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/quickstart.py)):
+([`QuickstartConfig` — `ww_trainer/quickstart.py:23`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/quickstart.py)):
 
 | n_positive | Pre-VAD | Post-VAD trim |
 |---|---|---|
@@ -107,7 +107,7 @@ For the default `n_positive=1000`
 | 1 000 (default) | ~48 MB | ~35 MB |
 | 5 000 (production) | ~240 MB | ~175 MB |
 
-VAD trim is [`trim_silence_vad` — `ww_trainer/datagen.py:111`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py),
+VAD trim is [`trim_silence_vad` — `ww_trainer/datagen.py:124`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py),
 typically 10–30 % smaller after silence removal.
 
 ## Voice conversion — essential for no-real-data runs
@@ -154,7 +154,7 @@ Other donors: any directory of short (3–10 s) clean speech WAVs at any
 sample rate (the engine resamples internally). LibriSpeech, phone
 memos, or a single friend's voice all work.
 
-See [`voice_convert_batch` — `ww_trainer/datagen.py:349`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
+See [`voice_convert_batch` — `ww_trainer/datagen.py:361`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
 
 ## Trained-model footprint
 

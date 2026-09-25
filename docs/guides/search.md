@@ -8,19 +8,19 @@ Four search strategies in `ww_trainer/sweep.py`: Optuna (Bayesian), Grid, Random
 
 | Strategy | Function | Line | Trials | Best For |
 |----------|----------|------|--------|----------|
-| Optuna (Bayesian) | `run_sweep()` | `sweep.py:41` | User-specified | General purpose, adaptive |
-| Grid | `run_grid_search()` | `sweep.py:249` | All combos | Small spaces (<100 combos) |
-| Random | `run_random_search()` | `sweep.py:324` | User-specified | High-dimensional spaces |
-| Genetic | `run_genetic_search()` | `sweep.py:543` | pop_size × generations × n_demes | Complex spaces, island model |
-| Two-Stage Genetic | `run_two_stage_genetic_search()` | `sweep.py:662` | (stage1 + stage2) × n_demes | Best quality, broad then focused |
+| Optuna (Bayesian) | `run_sweep()` | `sweep.py:91` | User-specified | General purpose, adaptive |
+| Grid | `run_grid_search()` | `sweep.py:299` | All combos | Small spaces (<100 combos) |
+| Random | `run_random_search()` | `sweep.py:374` | User-specified | High-dimensional spaces |
+| Genetic | `run_genetic_search()` | `sweep.py:744` | pop_size × generations × n_demes | Complex spaces, island model |
+| Two-Stage Genetic | `run_two_stage_genetic_search()` | `sweep.py:1029` | (stage1 + stage2) × n_demes | Best quality, broad then focused |
 
-All strategies share `_evaluate_config()` — `sweep.py:180` and `_build_search_space()` — `sweep.py:134`.
+All strategies share `_evaluate_config()` — `sweep.py:230` and `_build_search_space()` — `sweep.py:230`.
 
 ---
 
 ## Default Search Space
 
-Defined in `_build_search_space()` -- `sweep.py:139`:
+Defined in `_build_search_space()` -- `sweep.py:184`:
 
 | Parameter | Values |
 |-----------|--------|
@@ -38,7 +38,7 @@ All strategies use BCE loss with weight 1.0. Data is loaded once and split 80/20
 
 ## 1. Optuna (Bayesian Optimization)
 
-`run_sweep()` -- `sweep.py:20`
+`run_sweep()` -- `sweep.py:91`
 
 Uses Optuna's TPE (Tree-structured Parzen Estimator) sampler. Learns which regions of the search space are promising and allocates more trials there.
 
@@ -80,7 +80,7 @@ python -m ww_trainer.sweep \
 
 ## 2. Grid Search
 
-`run_grid_search()` -- `sweep.py:202`
+`run_grid_search()` -- `sweep.py:299`
 
 Exhaustive evaluation of every combination in the search space.
 
@@ -112,7 +112,7 @@ results = run_grid_search(
 
 ## 3. Random Search
 
-`run_random_search()` -- `sweep.py:276`
+`run_random_search()` -- `sweep.py:374`
 
 Samples configurations uniformly from the search space. Bergstra & Bengio (2012) showed random search finds good configs faster than grid search when not all hyperparameters matter equally.
 
@@ -138,11 +138,11 @@ results = run_random_search(
 
 ## 4. Genetic Search
 
-`run_genetic_search()` — `sweep.py:543`
+`run_genetic_search()` — `sweep.py:744`
 
 Evolves a population through selection, crossover, and mutation. Supports island-model parallelism, early stopping, and configurable selection pressure.
 
-Algorithm per generation (`sweep.py:484-533` in `_run_deme`):
+Algorithm per generation (`sweep.py:444-493` in `_run_deme`):
 1. Evaluate all individuals; raw F1 is stored; `fitness_fn` transform applied for selection only.
 2. Select elite (top `elite_frac` fraction by transformed fitness).
 3. Breed new population via uniform crossover (`_crossover` — `sweep.py:459`).
@@ -208,7 +208,7 @@ Total evaluations: `population_size * generations` (200 with defaults).
 
 ## 5. Two-Stage Genetic Search
 
-`run_two_stage_genetic_search()` — `sweep.py:662`
+`run_two_stage_genetic_search()` — `sweep.py:1029`
 
 Stage 1 runs a broad GA to find promising regions. Stage 2 seeds a tighter GA with the top-K configs from stage 1 using lower mutation rate and higher elite fraction.
 
@@ -248,7 +248,7 @@ Each `history` entry carries a `stage` key (1 or 2) — `sweep.py:774-778`.
 
 ## 6. Fitness Transforms (`_apply_fitness_fn`)
 
-`_apply_fitness_fn(f1, fitness_fn)` — `sweep.py:23`
+`_apply_fitness_fn(f1, fitness_fn)` — `sweep.py:73`
 
 Internal helper; applied only for GA selection comparisons. **Reported `best_score` is always raw F1.**
 
@@ -310,14 +310,14 @@ When to use each of the four hyperparameter search strategies in `ww_trainer/swe
 
 ```
 Do you need exhaustive coverage of a small space?
-  YES → Grid Search (run_grid_search, sweep.py:202)
+  YES → Grid Search (run_grid_search, sweep.py:299)
 
 Is Optuna installed and your budget is 20-100 trials?
-  YES → Optuna / Bayesian (run_sweep, sweep.py:20)
+  YES → Optuna / Bayesian (run_sweep, sweep.py:91)
 
 Is your search space large or multi-modal?
-  YES, budget >100 → Genetic Search (run_genetic_search, sweep.py:345)
-  YES, budget <100 → Random Search (run_random_search, sweep.py:276)
+  YES, budget >100 → Genetic Search (run_genetic_search, sweep.py:744)
+  YES, budget <100 → Random Search (run_random_search, sweep.py:374)
 
 No strong preference?
   → Optuna (default recommendation)
@@ -342,7 +342,7 @@ No strong preference?
 
 ## Default Search Space
 
-`_build_search_space(full=False)` -- `sweep.py:113`:
+`_build_search_space(full=False)` -- `sweep.py:184`:
 
 | Parameter | Values | Count |
 |-----------|--------|-------|
@@ -358,7 +358,7 @@ Total: 540 combinations. Too large for grid; use Optuna or Random.
 
 ## Full Architecture Search (`full=True`)
 
-`_build_search_space(full=True)` -- `sweep.py:131`:
+`_build_search_space(full=True)` -- `sweep.py:184`:
 
 Adds to the default space:
 
@@ -384,7 +384,7 @@ results = run_genetic_search(
 )
 ```
 
-The evaluation function `_evaluate_config()` (`sweep.py:159`) maps each config to the correct `WakeWordTrainer` kwargs via `_FEAT_KWARGS` (`sweep.py:151-156`).
+The evaluation function `_evaluate_config()` (`sweep.py:230`) maps each config to the correct `WakeWordTrainer` kwargs via `_FEAT_KWARGS` (`sweep.py:230-235`).
 
 ---
 

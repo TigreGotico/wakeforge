@@ -19,7 +19,7 @@ Defined in `HARDWARE_TIERS` -- `ww_trainer/tiers.py:26`.
 | `delta_micro` | Delta+MFCC (13x3) | FFN | 128 | ~55K | MCU, RPi Zero |
 | `gammatone_small` | Gammatone | GRU | 128 | ~200K | RPi, small SBC |
 
-Use `get_tier("micro")` (`tiers.py:120`) or `--tier micro` on CLI.
+Use `get_tier("micro")` (`tiers.py:201`) or `--tier micro` on CLI.
 
 ---
 
@@ -136,12 +136,12 @@ Convenience function: `distill_hubert_to_cnn_lstm()` -- `distill.py:463`.
 
 ## ONNX Inference
 
-`OnnxWakeWordInferencer` -- `ww_trainer/inference.py:8`: Two-session ONNX inference (extractor + head). No PyTorch dependency at runtime.
+`OnnxWakeWordInferencer` -- `ww_trainer/inference.py:111`: Two-session ONNX inference (extractor + head). No PyTorch dependency at runtime.
 
 Supports:
-- Single inference: `infer(audio_1d)` -- `inference.py:36`
-- Batch inference: `infer_batch(audio_2d)` -- `inference.py:57`
-- Streaming inference: `infer_streaming(chunk, cache)` -- `inference.py:74` with rolling 50-frame cache
+- Single inference: `infer(audio_1d)` -- `inference.py:212`
+- Batch inference: `infer_batch(audio_2d)` -- `inference.py:246`
+- Streaming inference: `infer_streaming(chunk, cache)` -- `inference.py:276` with rolling 50-frame cache
 
 ---
 
@@ -172,7 +172,7 @@ All ESP32 tiers use MFCC + FFN (no recurrence, no attention).
 | `esp32_sweet` | 64 | 13 | 10,240 | 10.0 KB | Best accuracy/size tradeoff |
 | `esp32_max` | 128 | 13 | 51,200 | 50.0 KB | Maximum ESP32 budget |
 
-Source: `TierConfig` — `ww_trainer/tiers.py:105-140`
+Source: `TierConfig` — `ww_trainer/tiers.py:12-47`
 
 ### Param Count Formula
 

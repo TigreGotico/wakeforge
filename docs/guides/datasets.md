@@ -10,7 +10,7 @@ and line number it was read from.
 
 ### 1.1 The `samples` argument
 
-`AudioDataset.__init__` (`ww_trainer/dataset.py:104`) takes a positional argument `samples`
+`AudioDataset.__init__` (`ww_trainer/dataset.py:123`) takes a positional argument `samples`
 which must be an **iterable of 2-tuples**:
 
 ```
@@ -86,7 +86,7 @@ Source: `ww_trainer/dataset.py:104-121`.
 
 ### 1.4 Audio format support
 
-`AudioDataset.__getitem__` loads files with `torchaudio.load(path)` (`dataset.py:281`).
+`AudioDataset.__getitem__` loads files with `torchaudio.load(path)` (`dataset.py:315`).
 torchaudio supports: **WAV, FLAC, MP3, M4A (AAC), OGG/Vorbis**.
 
 For augmentation folders `_collect_audio_files` (`dataset.py:78-92`) accepts:
@@ -286,7 +286,7 @@ augmentation type is silently skipped (`dataset.py:136-140`).
 | `--rir-folder` | `rir_folder` | Room impulse responses | 30 % per sample |
 | `--vc-folder` | `vc_folder` | Reference voice WAVs for voiceclonnx VC | `vc_prob` (default 30 %) on positives only |
 
-Source: `dataset.py:186-235` (augmentation probabilities hardcoded in `get_augmented`).
+Source: `dataset.py:242-291` (augmentation probabilities hardcoded in `get_augmented`).
 
 ### 4.1 Expected format
 

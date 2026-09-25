@@ -103,7 +103,7 @@ ww_trainer-train \
 
 **Key:** Aggressive augmentation (`--aug-prob 0.9`) with low SNR range and RIR convolution. The PNCC extractor handles the rest.
 
-**Alternative extractors for noise:** Gammatone (`feats.py:599`) or MFCC + VoiceActivityExtractor + SNRAwareExtractor stack.
+**Alternative extractors for noise:** Gammatone (`feats.py:1397`) or MFCC + VoiceActivityExtractor + SNRAwareExtractor stack.
 
 ---
 

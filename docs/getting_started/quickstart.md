@@ -10,7 +10,7 @@
 
 Goal: go from typing a phrase like `"hey jarvis"` to a deployable ONNX model in **one command**, on a laptop, in under 10 minutes for a small smoke test.
 
-How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:231`:
+How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:273`:
 
 1. **Synthesise positives** — TTS produces 1000 utterances of the phrase in varied voices/speeds/pitches.
 2. **Mine negatives** — short common-speech clips that do *not* contain the phrase, optionally adversarial graphemes ("hay janice", "hey jarvi…").
@@ -111,7 +111,7 @@ Production inference always requires **two** ONNX files:
 | `best_f1_featurizer.onnx` | Feature extractor — input: `[B, T]` float32 waveform; output: `[B, T_frames, F]` |
 | `best_f1.onnx` | Classifier head — input: `[B, T_frames, F]`; output: `[B]` logit |
 
-The CLI exports both automatically when `--export-onnx` is on (default). Pass both paths to `OnnxWakeWordInferencer` — `ww_trainer/inference.py:8`:
+The CLI exports both automatically when `--export-onnx` is on (default). Pass both paths to `OnnxWakeWordInferencer` — `ww_trainer/inference.py:111`:
 
 ```python
 from ww_trainer.inference import OnnxWakeWordInferencer
@@ -183,8 +183,8 @@ The dataset directory must follow the layout above.
 
 ## Source References
 
-- `train_from_wakeword` — `ww_trainer/quickstart.py:231`
+- `train_from_wakeword` — `ww_trainer/quickstart.py:273`
 - `QuickstartConfig` — `ww_trainer/quickstart.py:23`
-- `QuickstartResult` — `ww_trainer/quickstart.py:71`
-- `_run_or_load_datagen` — `ww_trainer/quickstart.py:97`
-- `_train_from_datagen_result` — `ww_trainer/quickstart.py:144`
+- `QuickstartResult` — `ww_trainer/quickstart.py:85`
+- `_run_or_load_datagen` — `ww_trainer/quickstart.py:111`
+- `_train_from_datagen_result` — `ww_trainer/quickstart.py:176`

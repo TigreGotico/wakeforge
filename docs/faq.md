@@ -152,14 +152,14 @@ result = train_from_wakeword("hey jarvis", "./hey_jarvis",
 print(result.best_onnx_path, result.metrics)
 ```
 
-`train_from_wakeword` — `ww_trainer/quickstart.py:231`. Accepts any
+`train_from_wakeword` — `ww_trainer/quickstart.py:273`. Accepts any
 `QuickstartConfig` field as a keyword.
 
 **Q: I already have a dataset — how do I skip TTS synthesis?**
 
 Pass `--reuse-dataset` (CLI) or `reuse_dataset=True` (Python). The dataset
 directory must contain `train/metadata.csv` and `test/metadata.csv`.
-`_run_or_load_datagen` — `ww_trainer/quickstart.py:97`.
+`_run_or_load_datagen` — `ww_trainer/quickstart.py:111`.
 
 **Q: Which tier should I pick?**
 
@@ -422,7 +422,7 @@ trainer.model.feature_extractor.export_to_onnx("best_f1_featurizer.onnx")
 trainer.model.classifier.export_to_onnx("best_f1.onnx")
 ```
 
-`ClassifierHead.export_to_onnx` — `ww_trainer/model.py:62`. All extractor and
+`ClassifierHead.export_to_onnx` — `ww_trainer/model.py:52`. All extractor and
 head exports accept an optional `metadata: dict` of key/value strings.
 
 **Q: What metadata is embedded?**
@@ -566,7 +566,7 @@ bakes in zero buffers and produces constant-zero scores.
 A small head (Conv1d × N → MultiheadAttention + residual → mean-pool → Linear)
 ported from
 [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) under
-Apache-2.0. `ConvAttentionHead` — `ww_trainer/model.py:1357`. Variable-`T` and
+Apache-2.0. `ConvAttentionHead` — `ww_trainer/model.py:1637`. Variable-`T` and
 ONNX-exportable.
 
 ---
@@ -631,14 +631,14 @@ in [`sweep.md`](guides/search.md) and [`search_strategies.md`](guides/search.md)
 
 A coarse global search (stage 1) seeds a focused fine-tune round (stage 2)
 with the top-K configs. Each history entry carries a `stage` field.
-`run_two_stage_genetic_search` — `ww_trainer/sweep.py:662`.
+`run_two_stage_genetic_search` — `ww_trainer/sweep.py:1029`.
 
 **Q: When should I use `n_demes > 1`?**
 
 On multi-core CPUs or multi-GPU. Each deme is an independent GA population
 run in parallel, preventing premature convergence. Use 2–4 demes (one per core).
 Each writes to `output_dir/deme_{id}/` for isolation.
-`run_genetic_search` — `ww_trainer/sweep.py:543`.
+`run_genetic_search` — `ww_trainer/sweep.py:744`.
 
 **Q: What fitness function should I pick?**
 
@@ -725,7 +725,7 @@ Cell 4 is fully resume-safe across all three dataset modes:
 | Feature cache | `FeatureCache` — `ww_trainer/cache.py` |
 | Silero VAD wrapper | `SileroVadWrapper` — `ww_trainer/feats.py` (lazy `torch.hub.load()` on first `forward`) |
 | Hardware tier presets | `ww_trainer/tiers.py` |
-| Quickstart pipeline | `_run_or_load_datagen`, `_train_from_datagen_result` — `ww_trainer/quickstart.py:97,144` |
+| Quickstart pipeline | `_run_or_load_datagen`, `_train_from_datagen_result` — `ww_trainer/quickstart.py:111,144` |
 
 **Q: How is augmentation wired from datagen to training?**
 
