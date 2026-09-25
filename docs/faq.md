@@ -126,7 +126,13 @@ Install several at once: `uv pip install -e ".[dev,sweep,mlflow]"`.
 It needs FFmpeg shared libraries at runtime. Minimal CI containers, embedded
 targets, and many cloud runners do not provide them. `dataset._load_audio`
 and `dataset._save_audio` already fall back to `soundfile` when torchcodec
-is missing.
+is missing, so the training path does not need it.
+
+The `datagen` and `notebooks` extras are the exception: they install
+`datasets>=4`, which reads an `Audio` column through torchcodec and raises
+`ImportError: To support encoding audio data, please install 'torchcodec'.`
+without it. Both extras therefore declare `torchcodec` themselves. FFmpeg
+must be present to generate a dataset from a Hugging Face source.
 
 ---
 

@@ -74,11 +74,36 @@ jobs:
         with:
           python-version: "3.11"
 
+      # torchcodec loads libtorchcodec against the FFmpeg shared libraries on
+      # the box. ubuntu-24.04 has none, so every major from 4 to 9 fails to
+      # load and datasets cannot read an Audio column. The apt package gives
+      # FFmpeg 6 (libavutil.so.58), which torchcodec supports.
+      - name: Install FFmpeg (torchcodec runtime)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+
       - name: Install uv
         run: pip install uv
 
       - name: Install package + notebook deps
         run: uv pip install --system -e ".[notebooks]"
+
+      # An import alone does not load libtorchcodec: the core libraries load on
+      # the first decode. This step decodes a generated tone, so a missing
+      # FFmpeg fails here with a clear message instead of inside the notebook.
+      - name: Check the audio decoder loads
+        run: |
+          python - <<'PY'
+          import numpy as np, soundfile as sf
+          from torchcodec.decoders import AudioDecoder
+          sr = 16000
+          t = np.arange(sr // 10, dtype=np.float32) / sr
+          sf.write("/tmp/tone.wav", (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), sr)
+          s = AudioDecoder("/tmp/tone.wav").get_all_samples()
+          print("decoded", s.data.shape, "at", int(s.sample_rate), "Hz")
+          PY
 
       - name: Execute genetic_search notebook (minimal settings)
         env:
@@ -98,8 +123,28 @@ jobs:
           jupyter nbconvert \
             --to notebook \
             --execute notebooks/genetic_search.ipynb \
-            --ExecutePreprocessor.timeout=600 \
+            --ExecutePreprocessor.timeout=1800 \
             --output /tmp/executed.ipynb
+
+      # The notebook's own dataset counts are printed inside a cell, and
+      # nbconvert reports only the failing cell, so a dataset-shaped failure
+      # arrives as an opaque torch error with no counts anywhere. Read the
+      # CSVs the run left behind instead.
+      - name: Dataset label counts (on failure)
+        if: failure()
+        run: |
+          for csv in /tmp/ww_smoke/dataset_split/*.csv /tmp/ww_smoke/*.csv; do
+            [ -f "$csv" ] || continue
+            echo "== $csv"
+            python3 - "$csv" <<'PY'
+          import collections, csv as c, sys
+          rows = list(c.reader(open(sys.argv[1])))
+          print(f"   {len(rows)} rows")
+          print("  ", collections.Counter(r[-1] for r in rows if r).most_common())
+          PY
+          done
+          echo "== wav counts"
+          find /tmp/ww_smoke -name '*.wav' -printf '%h\n' 2>/dev/null | sort | uniq -c | head -20
 
       - name: Verify key outputs exist
         run: |
