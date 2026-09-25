@@ -108,6 +108,26 @@ jobs:
             --ExecutePreprocessor.timeout=1500 \
             --output /tmp/executed.ipynb
 
+      # The notebook's own dataset counts are printed inside a cell, and
+      # nbconvert reports only the failing cell, so a dataset-shaped failure
+      # arrives as an opaque torch error with no counts anywhere. Read the
+      # CSVs the run left behind instead.
+      - name: Dataset label counts (on failure)
+        if: failure()
+        run: |
+          for csv in /tmp/ww_smoke/dataset_split/*.csv /tmp/ww_smoke/*.csv; do
+            [ -f "$csv" ] || continue
+            echo "== $csv"
+            python3 - "$csv" <<'PY'
+          import collections, csv as c, sys
+          rows = list(c.reader(open(sys.argv[1])))
+          print(f"   {len(rows)} rows")
+          print("  ", collections.Counter(r[-1] for r in rows if r).most_common())
+          PY
+          done
+          echo "== wav counts"
+          find /tmp/ww_smoke -name '*.wav' -printf '%h\n' 2>/dev/null | sort | uniq -c | head -20
+
       - name: Verify key outputs exist
         run: |
           test -f /tmp/ww_smoke/evolution.png
