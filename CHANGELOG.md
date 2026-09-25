@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3a5](https://github.com/TigreGotico/wakeforge/tree/0.4.3a5) (2026-09-25)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a4...0.4.3a5)
+
+**Merged pull requests:**
+
+- docs: repoint 166 stale source anchors, and ship the checker [\#60](https://github.com/TigreGotico/wakeforge/pull/60) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.4.3a4](https://github.com/TigreGotico/wakeforge/tree/0.4.3a4) (2026-09-23)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a3...0.4.3a4)
