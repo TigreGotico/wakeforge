@@ -3,12 +3,18 @@ WW="hey_mycroft"
 
 ARCH="gru" # ffn / cnn
 
+# Where the dataset, the featurizer and the augmentation folders live.
+# Override from the environment; the defaults are relative to the repo root.
+DATA_ROOT="${WW_DATA_ROOT:-data/ww}"
+FEATURIZER="${WW_FEATURIZER:-scripts/distillhubert_int8.onnx}"
+AUG_ROOT="${WW_AUG_ROOT:-data/augmentation}"
+
 
 python ww_trainer/trainer.py \
   --wake-word $WW \
-  --metadata /run/media/miro/endeavouros/ww/$WW/train/metadata.csv \
-  --test-metadata /run/media/miro/endeavouros/ww/$WW/test/metadata.csv \
-  --featurizer /home/miro/PycharmProjects/ww-trainer/scripts/distillhubert_int8.onnx \
+  --metadata $DATA_ROOT/$WW/train/metadata.csv \
+  --test-metadata $DATA_ROOT/$WW/test/metadata.csv \
+  --featurizer $FEATURIZER \
   --export-onnx \
   --feature-dim 768 \
   --epochs 50 \
@@ -28,8 +34,8 @@ python ww_trainer/trainer.py \
   --base-easy 5.0 \
   --min-easy 1.0 \
   --total-ratio 10.0 \
-  --mlflow-uri http://192.168.1.200:5000 \
-  --bg-noise-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/building_106_kitchen_3secs \
-  --mic-noise-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/bk \
-  --rir-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/MIT_environmental_impulse-responses \
-  --music-folder /run/media/miro/701e86b2-c4d8-47d2-969a-c64510db39e9/FMA_3secs
+  --mlflow-uri http://localhost:5000 \
+  --bg-noise-folder $AUG_ROOT/building_106_kitchen_3secs \
+  --mic-noise-folder $AUG_ROOT/bk \
+  --rir-folder $AUG_ROOT/MIT_environmental_impulse-responses \
+  --music-folder $AUG_ROOT/FMA_3secs
