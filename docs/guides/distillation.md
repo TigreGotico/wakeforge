@@ -8,7 +8,7 @@ Source: `ww_trainer/distill.py`
 
 ## Architecture
 
-### `CnnLstmExtractor` -- `distill.py:32`
+### `CnnLstmExtractor` -- `distill.py:72`
 
 4-layer strided Conv1D front-end + 2-layer bidirectional LSTM + linear projection.
 
@@ -27,7 +27,7 @@ Total stride: 10 x 2 x 4 x 2 = 160 (10 ms frames at 16 kHz). Each Conv1d layer u
 
 ---
 
-## `KnowledgeDistillationTrainer` -- `distill.py:143`
+## `KnowledgeDistillationTrainer` -- `distill.py:183`
 
 Trains student to mimic teacher features while classifying wake words.
 
@@ -35,8 +35,25 @@ Trains student to mimic teacher features while classifying wake words.
 
 - `alpha=0.7` (default): 70% distillation, 30% task loss.
 - Teacher is frozen (`distill.py:305-307`).
-- If teacher and student have different `feature_dim`, a linear projection aligns them (`distill.py:108-111`).
+- If teacher and student have different `feature_dim`, a linear projection aligns them (`distill.py:255-258`).
 - Time-length mismatch handled by interpolation (`distill.py:230-240`).
+
+**Feature loss** (`feature_loss=`):
+
+| Value | Distillation term | Projection |
+|---|---|---|
+| `"mse"` (default) | MSE between the feature sequences | Linear layer when dims differ |
+| `"relation"` | Causal temporal relation loss: frame-to-frame cosine matrices, lower triangle only | None |
+| `"relation_bi"` | `"relation"` plus the full-matrix term | None |
+
+`temporal_relation_loss` pools both sequences to `relation_steps` frames
+(default 24, the paper's value for a 1 s window) and compares their
+similarity matrices, so the student matches the teacher's temporal structure
+rather than its absolute feature values. The mask keeps the entries between a
+frame and its past, which a causal student can reproduce. The method is from
+Zhang et al., "Mitigating Causality Mismatch with Causal Temporal Relation
+Distillation for Streaming Keyword Spotting", Interspeech 2026
+(<https://www.isca-archive.org/interspeech_2026/zhang26ia_interspeech.html>).
 
 **Training loop** (`distill.py:247`):
 - AdamW optimizer with cosine annealing LR schedule.
@@ -48,7 +65,7 @@ Trains student to mimic teacher features while classifying wake words.
 
 ## Convenience Function
 
-`distill_hubert_to_cnn_lstm()` -- `distill.py:463`
+`distill_hubert_to_cnn_lstm()` -- `distill.py:524`
 
 ```python
 from ww_trainer.distill import distill_hubert_to_cnn_lstm
@@ -65,7 +82,7 @@ trainer = distill_hubert_to_cnn_lstm(
 # Output: models/student/student_extractor.onnx
 ```
 
-Internally creates `OnnxFeatureExtractor` (teacher), `CnnLstmExtractor` (student), and `FfnClassifierHead` (`distill.py:508-519`).
+Internally creates `OnnxFeatureExtractor` (teacher), `CnnLstmExtractor` (student), and `FfnClassifierHead` (`distill.py:572-583`).
 
 ---
 
