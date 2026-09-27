@@ -1033,7 +1033,7 @@ When `aug_embeds` is provided, adds a consistency term `||z - z_aug||^2` (`loss.
 
 ---
 
-### `LossManager` — `loss.py:1166`
+### `LossManager` — `loss.py:1243`
 
 ```python
 class LossManager
@@ -1056,7 +1056,7 @@ Manages multiple weighted loss functions. `loss_configs` is a list of dicts:
 
 Supported names: `"bce"`, `"triplet"`, `"soft_triplet"`, `"pair"`, `"cn2pair"`, `"lse"`, `"contrastive"`, `"angular"`, `"rppl"`.
 
-#### `compute_loss` — `loss.py:1394`
+#### `compute_loss` — `loss.py:1477`
 
 ```python
 def compute_loss(
