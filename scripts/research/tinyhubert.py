@@ -46,7 +46,7 @@ from torch.utils.data import DataLoader, Dataset
 
 SR = 16000
 HOP = 320
-AUDIO_EXT = {".wav", ".flac", ".ogg"}
+AUDIO_EXT = {".wav", ".flac", ".ogg", ".mp3"}
 
 
 # ------------------------------------------------------------------ student
@@ -116,6 +116,79 @@ class WakeHuBERTStudent(nn.Module):
 
     def heads(self, feats):
         return [p(feats) for p in self.proj]
+
+
+class CausalLogMel(nn.Module):
+    """Log-mel frames at 100 per second; frame i uses only samples before 160 (i + 1).
+
+    The DFT is a fixed convolution (Hann window, 400 samples) padded on the left, so the graph
+    exports as plain Conv/MatMul/Log and the front end can be kept in float when the rest of the
+    extractor is quantised. A device computes the same frames with an FFT.
+    """
+
+    def __init__(self, n_mels=64, n_fft=400, hop=160):
+        super().__init__()
+        import torchaudio
+        k, f = torch.arange(n_fft), torch.arange(n_fft // 2 + 1)
+        ang = 2 * math.pi * f[:, None] * k[None, :] / n_fft
+        win = torch.hann_window(n_fft, periodic=True)
+        self.register_buffer("basis", (torch.cat([torch.cos(ang), -torch.sin(ang)]) * win).unsqueeze(1))
+        self.register_buffer("mel", torchaudio.functional.melscale_fbanks(n_fft // 2 + 1, 0.0, SR / 2, n_mels, SR).T)
+        self.pad, self.hop, self.n_freq = n_fft - hop, hop, n_fft // 2 + 1
+
+    def forward(self, wav):
+        spec = F.conv1d(F.pad(wav.unsqueeze(1), (self.pad, 0)), self.basis, stride=self.hop)
+        power = spec[:, :self.n_freq].pow(2) + spec[:, self.n_freq:].pow(2)
+        return torch.log(torch.matmul(self.mel, power) + 1e-6)  # [B, n_mels, N // 160]
+
+
+class DSBlock(nn.Module):
+    """Causal depthwise-separable residual block: depthwise conv (dilated) → BN → ReLU → 1x1 → BN, + skip."""
+
+    def __init__(self, ch, kernel, dilation):
+        super().__init__()
+        self.pad = (kernel - 1) * dilation
+        self.dw = nn.Conv1d(ch, ch, kernel, dilation=dilation, groups=ch, bias=False)
+        self.bn1 = nn.BatchNorm1d(ch)
+        self.pw = nn.Conv1d(ch, ch, 1, bias=False)
+        self.bn2 = nn.BatchNorm1d(ch)
+
+    def forward(self, x):
+        y = F.relu(self.bn1(self.dw(F.pad(x, (self.pad, 0)))))
+        return F.relu(self.bn2(self.pw(y)) + x)
+
+
+class MelTCNStudent(nn.Module):
+    """Fixed causal log-mel, a strided stem to 50 frames per second, dilated causal depthwise-separable
+    blocks, and a 1x1 projection to the exported features: convolution, batch norm and ReLU only, the
+    pattern static int8 quantises well, and no recurrent state, so it streams with one buffer per layer.
+
+    Frame t depends only on samples before 320 (t + 1), the same timing as ``WakeHuBERTStudent``.
+    """
+
+    def __init__(self, channels=256, blocks=8, feature_dim=128, n_mels=64, kernel=5, n_targets=3, target_dim=768):
+        super().__init__()
+        self.mel = CausalLogMel(n_mels)
+        self.norm = nn.BatchNorm1d(n_mels)
+        self.stem = CausalConv1d(n_mels, channels, 4, 2)
+        self.stem_bn = nn.BatchNorm1d(channels)
+        self.blocks = nn.Sequential(*(DSBlock(channels, kernel, 2 ** (i % 4)) for i in range(blocks)))
+        self.out = nn.Conv1d(channels, feature_dim, 1)
+        self.proj = nn.ModuleList(nn.Linear(feature_dim, target_dim) for _ in range(n_targets))
+        self.feature_dim = feature_dim
+
+    def forward(self, wav):
+        x = F.relu(self.stem_bn(self.stem(self.norm(self.mel(wav)))))
+        return self.out(self.blocks(x)).transpose(1, 2)
+
+    def heads(self, feats):
+        return [p(feats) for p in self.proj]
+
+
+def build_student(a, n_targets, target_dim):
+    if a.student == "mel-tcn":
+        return MelTCNStudent(a.channels, a.blocks, a.feature_dim, a.n_mels, n_targets=n_targets, target_dim=target_dim)
+    return WakeHuBERTStudent(a.cnn_dim, a.gru_hidden, a.gru_layers, n_targets, target_dim)
 
 
 class Extractor(nn.Module):
@@ -233,11 +306,20 @@ def cross_clip_nce(preds, targets, temperature=0.1, max_frames=1024):
 
 
 # ------------------------------------------------------------------ data
-def list_audio(root):
-    files = sorted(str(p) for p in Path(root).rglob("*") if p.suffix.lower() in AUDIO_EXT)
+def list_audio(roots):
+    """Audio files under one directory or several separated by commas, searched recursively."""
+    files = sorted(str(p) for r in str(roots).split(",") for p in Path(r).rglob("*") if p.suffix.lower() in AUDIO_EXT)
     if not files:
-        raise SystemExit(f"no audio ({', '.join(sorted(AUDIO_EXT))}) under {root}")
+        raise SystemExit(f"no audio ({', '.join(sorted(AUDIO_EXT))}) under {roots}")
     return files
+
+
+def reverberate(x, rir):
+    """``x`` convolved with a room impulse response aligned on its direct path, at ``x``'s level."""
+    import torchaudio
+    rir = rir[int(rir.abs().argmax()):][: SR // 2]
+    y = torchaudio.functional.fftconvolve(x, rir / (rir.norm() + 1e-8))[: len(x)]
+    return y * (x.pow(2).mean().sqrt() / (y.pow(2).mean().sqrt() + 1e-8))
 
 
 def load_mono(path, sr=SR):
@@ -247,6 +329,18 @@ def load_mono(path, sr=SR):
         import torchaudio
         wav = torchaudio.functional.resample(wav, file_sr, sr)
     return wav
+
+
+def _int16(path):
+    return (load_mono(path).clamp(-1, 32767 / 32768).numpy() * 32768).astype(np.int16)
+
+
+def preload_all(paths):
+    # libsndfile decodes outside the GIL, so threads use every core without pickling anything
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(os.cpu_count()) as pool:
+        return list(pool.map(_int16, paths, chunksize=64))
 
 
 def crop(wav, n, rng):
@@ -267,25 +361,45 @@ def mix_at_snr(clean, noise, snr_db):
 class Clips(Dataset):
     """Random crops for training, or fixed crops (seeded per file) for validation.
 
-    Returns ``(clean, student_input)``; the student input is the clean crop mixed with a noise
-    crop at an SNR drawn from ``snr_range`` with probability ``p_noise``, else the clean crop.
+    Returns ``(clean, student_input)``, the teacher's input and the student's. With probability
+    ``p_nonspeech`` the item is a non-speech clip (music, kitchens, traffic, ambience) that both
+    hear unchanged, so the student learns what the teacher makes of sound that is not speech.
+    Otherwise it is a speech crop; the student's copy is convolved with a room impulse response
+    with probability ``p_rir`` and then mixed with a noise crop at an SNR drawn from ``snr_range``
+    with probability ``p_noise``, while the teacher hears it dry and clean.
     """
 
-    def __init__(self, files, seconds, noise_files=(), p_noise=0.0, snr_range=(0.0, 20.0), fixed=False, seed=0):
+    def __init__(self, files, seconds, noise_files=(), p_noise=0.0, snr_range=(0.0, 20.0), fixed=False, seed=0,
+                 preload=False, nonspeech=(), p_nonspeech=0.0, rirs=(), p_rir=0.0):
         self.files, self.n = files, int(seconds * SR)
         self.noise, self.p_noise, self.snr = list(noise_files), p_noise, snr_range
+        self.nonspeech, self.p_nonspeech = list(nonspeech), p_nonspeech
+        self.rirs, self.p_rir = list(rirs), p_rir
         self.fixed, self.seed = fixed, seed
+        # decoded once into int16, for boxes whose few cores cannot decode at the GPU's rate
+        every = sorted(set(files + self.noise + self.nonspeech + self.rirs))
+        self.cache = dict(zip(every, preload_all(every))) if preload else None
+
+    def load(self, path):
+        if self.cache is None:
+            return load_mono(path)
+        return torch.from_numpy(self.cache[path].astype(np.float32) / 32768.0)
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, i):
         rng = random.Random(self.seed * 1_000_003 + i) if self.fixed else random
-        clean = crop(load_mono(self.files[i]), self.n, rng)
+        if self.nonspeech and rng.random() < self.p_nonspeech:
+            clip = crop(self.load(rng.choice(self.nonspeech)), self.n, rng)
+            return clip, clip
+        clean = crop(self.load(self.files[i]), self.n, rng)
         noisy = clean
+        if self.rirs and rng.random() < self.p_rir:
+            noisy = reverberate(clean, self.load(rng.choice(self.rirs)))
         if self.noise and rng.random() < self.p_noise:
-            noise = crop(load_mono(rng.choice(self.noise)), self.n, rng)
-            noisy = mix_at_snr(clean, noise, rng.uniform(*self.snr))
+            noise = crop(self.load(rng.choice(self.noise)), self.n, rng)
+            noisy = mix_at_snr(noisy, noise, rng.uniform(*self.snr))
         peak = noisy.abs().max()
         if peak > 1.0:
             noisy = noisy / peak
@@ -344,6 +458,44 @@ def export(student, out_dir, meta, device):
     return path
 
 
+def quantize_int8(out_dir, calib, probe):
+    """Static int8 (QDQ, per-channel weights) of the exported extractor, calibrated on ``calib``.
+
+    The log-mel front end and its input batch norm stay in float: a fixed spectrogram gains nothing
+    from int8 and its log compresses a dynamic range int8 cannot hold. Returns the mean and worst
+    per-frame cosine between float and int8 features on ``probe`` (clips never used to calibrate).
+    """
+    import onnx
+    import onnxruntime as ort
+    from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static
+    from onnxruntime.quantization.shape_inference import quant_pre_process
+
+    fp32, pre, int8 = out_dir / "tinyhubert.onnx", out_dir / "tinyhubert.pre.onnx", out_dir / "tinyhubert_int8.onnx"
+    quant_pre_process(str(fp32), str(pre))
+    keep_float = [n.name for n in onnx.load(str(pre)).graph.node if "/mel/" in n.name or "/norm/" in n.name]
+
+    class Reader(CalibrationDataReader):
+        def __init__(self):
+            self.it = iter([{"waveform": c[None].numpy()} for c in calib])
+
+        def get_next(self):
+            return next(self.it, None)
+
+    quantize_static(str(pre), str(int8), Reader(), quant_format=QuantFormat.QDQ, per_channel=True,
+                    weight_type=QuantType.QInt8, activation_type=QuantType.QUInt8, nodes_to_exclude=keep_float)
+    pre.unlink()
+    f = ort.InferenceSession(str(fp32), providers=["CPUExecutionProvider"])
+    q = ort.InferenceSession(str(int8), providers=["CPUExecutionProvider"])
+    cos = []
+    for c in probe:
+        a = f.run(None, {"waveform": c[None].numpy()})[0][0]
+        b = q.run(None, {"waveform": c[None].numpy()})[0][0]
+        cos.append(np.sum(a * b, -1) / (np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1) + 1e-12))
+    cos = np.concatenate(cos)
+    return {"int8_feature_cosine_mean": float(cos.mean()), "int8_feature_cosine_p01": float(np.quantile(cos, 0.01)),
+            "int8_bytes": int8.stat().st_size, "fp32_bytes": fp32.stat().st_size, "int8_float_nodes": len(keep_float)}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--audio-dir", required=True, help="training audio, searched recursively")
@@ -353,9 +505,15 @@ def main(argv=None):
     ap.add_argument("--teacher", default="facebook/hubert-base-ls960")
     ap.add_argument("--layers", default="4,8,12", help="teacher hidden layers to distil (DistilHuBERT's)")
     ap.add_argument("--lag-frames", type=int, default=4, help="extra 20 ms frames of audio the student hears before predicting a teacher frame")
-    ap.add_argument("--cnn-dim", type=int, default=64)
-    ap.add_argument("--gru-hidden", type=int, default=256)
-    ap.add_argument("--gru-layers", type=int, default=1)
+    ap.add_argument("--student", choices=("wave-gru", "mel-tcn"), default="wave-gru",
+                    help="wave-gru: convolutions on the waveform and a GRU; mel-tcn: log-mel and dilated causal convolutions")
+    ap.add_argument("--cnn-dim", type=int, default=64, help="wave-gru")
+    ap.add_argument("--gru-hidden", type=int, default=256, help="wave-gru; also its feature dimension")
+    ap.add_argument("--gru-layers", type=int, default=1, help="wave-gru")
+    ap.add_argument("--channels", type=int, default=256, help="mel-tcn")
+    ap.add_argument("--blocks", type=int, default=8, help="mel-tcn")
+    ap.add_argument("--feature-dim", type=int, default=128, help="mel-tcn")
+    ap.add_argument("--n-mels", type=int, default=64, help="mel-tcn")
     ap.add_argument("--crop-seconds", type=float, default=2.0)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--steps", type=int, default=60000)
@@ -363,6 +521,11 @@ def main(argv=None):
     ap.add_argument("--warmup", type=int, default=2000)
     ap.add_argument("--nce-weight", type=float, default=0.0, help="cross-clip InfoNCE on the last distilled layer")
     ap.add_argument("--p-noise", type=float, default=0.5)
+    ap.add_argument("--nonspeech-dir", help="non-speech audio (music, ambience, kitchens, traffic), comma-separated dirs; "
+                                            "a fraction of items are these clips, heard unchanged by teacher and student")
+    ap.add_argument("--p-nonspeech", type=float, default=0.25)
+    ap.add_argument("--rir-dir", help="room impulse responses convolved into the student's speech")
+    ap.add_argument("--p-rir", type=float, default=0.25)
     ap.add_argument("--snr-min", type=float, default=0.0)
     ap.add_argument("--snr-max", type=float, default=20.0)
     ap.add_argument("--norm-batches", type=int, default=50, help="teacher batches used to fit the target statistics")
@@ -375,6 +538,8 @@ def main(argv=None):
     ap.add_argument("--amp", action="store_true", help="bfloat16 autocast for the student's forward pass")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--resume", help="checkpoint to continue from (last.pt)")
+    ap.add_argument("--int8", action="store_true", help="also write tinyhubert_int8.onnx and its agreement with float")
+    ap.add_argument("--preload", action="store_true", help="decode the training and noise audio into memory (int16) once")
     a = ap.parse_args(argv)
 
     torch.manual_seed(a.seed); random.seed(a.seed); np.random.seed(a.seed)
@@ -384,18 +549,27 @@ def main(argv=None):
 
     a.teacher_dtype = a.teacher_dtype or ("float16" if device.type == "cuda" else "float32")
     teacher = Teacher(a.teacher, layers, device, getattr(torch, a.teacher_dtype))
-    student = WakeHuBERTStudent(a.cnn_dim, a.gru_hidden, a.gru_layers, len(layers), teacher.dim).to(device)
+    student = build_student(a, len(layers), teacher.dim).to(device)
     norm = TargetNorm(len(layers), teacher.dim).to(device)
 
     noise = list_audio(a.noise_dir) if a.noise_dir else []
-    train_ds = Clips(list_audio(a.audio_dir), a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max))
+    rirs = list_audio(a.rir_dir) if a.rir_dir else []
+    nonspeech = list_audio(a.nonspeech_dir) if a.nonspeech_dir else []
+    # every tenth non-speech clip is held out, so it is heard neither as a target nor as noise
+    val_nonspeech, nonspeech = nonspeech[::10], [f for i, f in enumerate(nonspeech) if i % 10]
+    noise = [f for f in noise if f not in set(val_nonspeech)]
+    train_ds = Clips(list_audio(a.audio_dir), a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max), preload=a.preload,
+                     nonspeech=nonspeech, p_nonspeech=a.p_nonspeech, rirs=rirs, p_rir=a.p_rir)
     val_files = list_audio(a.val_dir)
     val_files = random.Random(a.seed).sample(val_files, min(a.val_clips, len(val_files)))
-    # validation hears noise too (fixed per clip), so it measures the objective the student trains on
-    val_ds = Clips(val_files, a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max), fixed=True, seed=a.seed)
+    # validation hears noise and reverberation too (fixed per clip), the objective the student trains on
+    val_ds = Clips(val_files, a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max), fixed=True, seed=a.seed,
+                   rirs=rirs, p_rir=a.p_rir)
     train = forever(DataLoader(train_ds, a.batch_size, shuffle=True, num_workers=a.workers, drop_last=True,
                                persistent_workers=a.workers > 0))
     val = DataLoader(val_ds, a.batch_size, num_workers=a.workers)
+    val_ns = DataLoader(Clips(val_nonspeech, a.crop_seconds, fixed=True, seed=a.seed), a.batch_size,
+                        num_workers=a.workers) if val_nonspeech else None
 
     opt = torch.optim.AdamW(student.parameters(), lr=a.lr, weight_decay=1e-2)
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -410,8 +584,8 @@ def main(argv=None):
         norm.fit(teacher(next(train)[0].to(device)) for _ in range(a.norm_batches))
 
     meta = {"teacher": a.teacher, "layers": layers, "lag_frames": a.lag_frames, "sample_rate": SR, "hop": HOP,
-            "frame_rate_hz": SR / HOP, "latency_ms": (1 + a.lag_frames) * HOP / SR * 1000, "feature_dim": a.gru_hidden,
-            "cnn_dim": a.cnn_dim, "gru_layers": a.gru_layers, "noise": bool(noise), "args": vars(a)}
+            "frame_rate_hz": SR / HOP, "latency_ms": (1 + a.lag_frames) * HOP / SR * 1000, "feature_dim": student.feature_dim,
+            "student": a.student, "nonspeech_clips": len(nonspeech), "rirs": len(rirs), "noise": bool(noise), "args": vars(a)}
     log = open(out / "metrics.jsonl", "a")
     params = sum(p.numel() for n, p in student.named_parameters() if not n.startswith("proj."))
     print(f"student backbone {params:,} params; {len(train_ds.files)} training files, {len(val_files)} validation, "
@@ -441,6 +615,12 @@ def main(argv=None):
         if step % a.eval_every == 0 or step == a.steps:
             v, vl1, vcos = evaluate(student, teacher, norm, val, a.lag_frames, device)
             rec = {"step": step, "val_loss": v, "val_l1": vl1, "val_cos": vcos}
+            if val_ns is not None:
+                vn, _, vncos = evaluate(student, teacher, norm, val_ns, a.lag_frames, device)
+                rec.update(val_nonspeech_loss=vn, val_nonspeech_cos=vncos)
+                # checkpoints are chosen on the mixture the student trains on
+                v = (1 - a.p_nonspeech) * v + a.p_nonspeech * vn
+                rec["val_selection_loss"] = v
             log.write(json.dumps(rec) + "\n"); log.flush(); print(json.dumps(rec), flush=True)
             ck = {"student": student.state_dict(), "norm": norm.state_dict(), "opt": opt.state_dict(),
                   "sched": sched.state_dict(), "step": step, "best": min(best, v), "meta": meta}
@@ -451,6 +631,12 @@ def main(argv=None):
     student.load_state_dict(torch.load(out / "best.pt", map_location=device)["student"])
     path = export(student, out, {**meta, "best_val_loss": best}, device)
     print(f"exported {path}", flush=True)
+    if a.int8:
+        clips = [val_ds[i][1] for i in range(len(val_ds))]  # what the student hears
+        q = quantize_int8(out, clips[: len(clips) // 2], clips[len(clips) // 2:])
+        info = json.loads((out / "tinyhubert.json").read_text())
+        (out / "tinyhubert.json").write_text(json.dumps({**info, **q}, indent=1) + "\n")
+        print(json.dumps(q), flush=True)
 
 
 if __name__ == "__main__":
