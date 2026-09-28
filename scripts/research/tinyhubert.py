@@ -185,6 +185,39 @@ class MelTCNStudent(nn.Module):
         return [p(feats) for p in self.proj]
 
 
+class EnhanceHead(nn.Module):
+    """Training-only decoder from the student's features to the clean log-mel of the student frame's own
+    two 10 ms frames, so the features must carry the speech and not the noise (the multi-task
+    enhancement of Guimarães et al. 2022, predicting log-mel rather than the waveform). Thrown away
+    at export."""
+
+    def __init__(self, feature_dim, n_mels=64):
+        super().__init__()
+        self.mel = CausalLogMel(n_mels)
+        self.net = nn.Sequential(nn.Linear(feature_dim, 256), nn.ReLU(), nn.Linear(256, 2 * n_mels))
+        self.register_buffer("mean", torch.zeros(2 * n_mels))
+        self.register_buffer("std", torch.ones(2 * n_mels))
+        self.register_buffer("fitted", torch.tensor(False))
+
+    def target(self, clean):
+        m = self.mel(clean)  # [B, n_mels, N // 160]
+        B, M, T2 = m.shape
+        return m[..., : T2 // 2 * 2].reshape(B, M, T2 // 2, 2).permute(0, 2, 3, 1).reshape(B, T2 // 2, 2 * M)
+
+    @torch.no_grad()
+    def fit(self, cleans):
+        t = torch.cat([self.target(c).flatten(0, 1) for c in cleans])
+        self.mean.copy_(t.mean(0)); self.std.copy_(t.std(0).clamp_min(1e-3)); self.fitted.fill_(True)
+
+    def forward(self, feats, clean):
+        y = (self.target(clean) - self.mean) / self.std
+        T = min(y.shape[1], feats.shape[1])
+        return (self.net(feats[:, :T]) - y[:, :T]).abs().mean()
+
+
+FAMILY = {"hubert": "WakeHuBERT", "wavlm": "WakeWav", "xeus": "WakeXeus"}
+
+
 def build_student(a, n_targets, target_dim):
     if a.student == "mel-tcn":
         return MelTCNStudent(a.channels, a.blocks, a.feature_dim, a.n_mels, n_targets=n_targets, target_dim=target_dim)
@@ -204,19 +237,23 @@ class Extractor(nn.Module):
 
 # ------------------------------------------------------------------ teacher
 class Teacher:
-    """Frozen HuBERT returning the chosen hidden layers as ``[L, B, T, D]`` in float32.
+    """A frozen self-supervised speech model (HuBERT, mHuBERT, WavLM, ...) returning the chosen hidden
+    layers as ``[L, B, T, D]`` in float32. The model must emit HuBERT's 50 frames per second.
 
     ``dtype`` float16 runs the forward pass under autocast; on hubert-base-ls960 its hidden states
     match float32 to a cosine of 0.999999 at a quarter of the time, so the targets are the same.
     """
 
     def __init__(self, name, layers, device, dtype=torch.float32):
-        from transformers import AutoConfig, HubertModel
+        from transformers import AutoConfig, AutoModel
 
         cfg = AutoConfig.from_pretrained(name)
         if max(layers) > cfg.num_hidden_layers:
             raise ValueError(f"{name} has {cfg.num_hidden_layers} layers; asked for {layers}")
-        self.model = HubertModel.from_pretrained(name).to(device).eval().requires_grad_(False)
+        if math.prod(cfg.conv_stride) != HOP:
+            raise ValueError(f"{name} has a total stride of {math.prod(cfg.conv_stride)}, not {HOP}")
+        self.model = AutoModel.from_pretrained(name).to(device).eval().requires_grad_(False)
+        self.model_type = cfg.model_type
         self.layers = layers
         self.dim = cfg.hidden_size
         self.dtype = dtype
@@ -233,6 +270,50 @@ class Teacher:
         with torch.autocast(self.device_type, dtype=self.dtype, enabled=self.dtype != torch.float32):
             hs = self.model(wav, output_hidden_states=True).hidden_states
         return torch.stack([hs[i] for i in self.layers]).float()
+
+
+class XeusTeacher:
+    """XEUS (``espnet/xeus``, 577M parameters, E-Branchformer, 4000+ languages) as the teacher, loaded
+    with ESPnet's SSL task from the released package. Layer k is the output of encoder block k, as
+    ``hidden_states[k]`` is for a transformers model. The front end, pre-encoder and encoder are run
+    directly because ESPnet's ``encode()`` applies the model's training mask when one is configured.
+    Its frames match HuBERT's (99 for 2 s); float16 matches float32 to a cosine of 1.0000.
+    """
+
+    def __init__(self, name, layers, device, dtype=torch.float32):
+        from espnet2.tasks.ssl import SSLTask
+        from huggingface_hub import hf_hub_download
+
+        cfg = hf_hub_download(name, "model/config.yaml")
+        ckpt = hf_hub_download(name, "model/xeus_checkpoint_new.pth")
+        self.model, _ = SSLTask.build_model_from_file(cfg, ckpt, str(device))
+        self.model.eval().requires_grad_(False)
+        n = len(self.model.encoder.encoders)
+        if max(layers) > n or min(layers) < 1:
+            raise ValueError(f"{name} has {n} blocks; asked for {layers}")
+        self.layers, self.dim, self.dtype = layers, self.model.encoder.output_size(), dtype
+        self.device_type, self.model_type = torch.device(device).type, "xeus"
+
+    @torch.no_grad()
+    def __call__(self, wav):
+        from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
+
+        m = self.model
+        lens = torch.full((wav.shape[0],), wav.shape[1], dtype=torch.long, device=wav.device)
+        with torch.autocast(self.device_type, dtype=self.dtype, enabled=self.dtype != torch.float32):
+            f, fl = m._extract_feats(wav, lens)
+            if m.normalize is not None:
+                f, fl = m.normalize(f, fl)
+            if m.preencoder is not None:
+                f, fl = m.preencoder(f, fl)
+            hs = m.encoder(f, fl, masks=make_pad_mask(fl).to(wav.device), return_all_hs=True)[0][1]
+        return torch.stack([hs[k - 1] for k in self.layers]).float()
+
+
+def make_teacher(name, layers, device, dtype=torch.float32):
+    """XEUS through ESPnet, anything else through transformers."""
+    cls = XeusTeacher if "xeus" in name.lower() else Teacher
+    return cls(name, layers, device, dtype)
 
 
 def pair_frames(student_T, teacher_T, lag):
@@ -307,11 +388,64 @@ def cross_clip_nce(preds, targets, temperature=0.1, max_frames=1024):
 
 # ------------------------------------------------------------------ data
 def list_audio(roots):
-    """Audio files under one directory or several separated by commas, searched recursively."""
-    files = sorted(str(p) for r in str(roots).split(",") for p in Path(r).rglob("*") if p.suffix.lower() in AUDIO_EXT)
+    """Audio files under one directory or several separated by commas, searched recursively; a ``.txt``
+    entry is a list of audio paths, one per line (how a corpus's held-out splits are kept out)."""
+    files = []
+    for r in str(roots).split(","):
+        if r.endswith(".txt"):
+            files += [l.strip() for l in open(r) if l.strip()]
+        else:
+            files += [str(p) for p in Path(r).rglob("*") if p.suffix.lower() in AUDIO_EXT]
+    files = sorted(files)
     if not files:
         raise SystemExit(f"no audio ({', '.join(sorted(AUDIO_EXT))}) under {roots}")
     return files
+
+
+def build_shards(files, out_dir, seconds, per_shard=50000, seed=0):
+    """Decode, resample and crop every file once into int16 shards ``crops-NNNN.npy`` of shape
+    ``[k, n]``: training then reads memory instead of decoding. Unreadable files are skipped."""
+    import random as _random
+    out, n, rng = Path(out_dir), int(seconds * SR), _random.Random(seed)
+    out.mkdir(parents=True, exist_ok=True)
+    buf, shard, kept = [], 0, 0
+    for f in files:
+        try:
+            w = read_crop(f, n, rng)
+        except Exception:
+            continue
+        buf.append((w.clamp(-1, 32767 / 32768).numpy() * 32768).astype(np.int16)); kept += 1
+        if len(buf) == per_shard:
+            np.save(out / f"crops-{shard:04d}.npy", np.stack(buf)); buf, shard = [], shard + 1
+    if buf:
+        np.save(out / f"crops-{shard:04d}.npy", np.stack(buf))
+    return kept
+
+
+class ShardClips:
+    """Training items from crop shards (memory-mapped), with the same augmentation as ``Clips``: the
+    clean crop is fixed, what the student hears is drawn anew every time."""
+
+    def __init__(self, shard_dir, base):
+        self.parts = [np.load(p, mmap_mode="r") for p in sorted(Path(shard_dir).glob("crops-*.npy"))]
+        self.index = [(i, j) for i, a in enumerate(self.parts) for j in range(len(a))]
+        self.base, self.progress = base, base.progress
+        self.files = self.base.files  # babble draws other talkers from the original files
+
+    def snr_now(self):
+        return self.base.snr_now()
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, k):
+        b = self.base
+        if b.nonspeech and random.random() < b.p_nonspeech:
+            clip = b.window(random.choice(b.nonspeech), random)
+            return clip, clip
+        i, j = self.index[k]
+        clean = torch.from_numpy(self.parts[i][j].astype(np.float32) / 32768.0)
+        return b.augment(clean, random)
 
 
 def reverberate(x, rir):
@@ -343,6 +477,29 @@ def preload_all(paths):
         return list(pool.map(_int16, paths, chunksize=64))
 
 
+def read_crop(path, n, rng):
+    """A random ``n``-sample window of ``path`` at 16 kHz, decoding only that window (plus the
+    resampling margin): long files and large corpora cost the same per item as short ones."""
+    info = sf.info(path)
+    if info.samplerate == SR:
+        # the same draw as crop() on the decoded file, so a preloaded and a streamed item are identical
+        if info.frames < n:
+            return crop(load_mono(path), n, rng)
+        start = rng.randint(0, info.frames - n)
+        w, _ = sf.read(path, start=start, frames=n, dtype="float32", always_2d=True)
+        return torch.from_numpy(w.mean(1))
+    need = int(math.ceil(n * info.samplerate / SR)) + 1
+    if info.frames <= need:
+        return crop(load_mono(path), n, rng)
+    start = rng.randint(0, info.frames - need)
+    w, sr = sf.read(path, start=start, frames=need, dtype="float32", always_2d=True)
+    w = torch.from_numpy(w.mean(1))
+    if sr != SR:
+        import torchaudio
+        w = torchaudio.functional.resample(w, sr, SR)
+    return crop(w, n, rng)
+
+
 def crop(wav, n, rng):
     if len(wav) >= n:
         s = rng.randint(0, len(wav) - n)
@@ -370,8 +527,13 @@ class Clips(Dataset):
     """
 
     def __init__(self, files, seconds, noise_files=(), p_noise=0.0, snr_range=(0.0, 20.0), fixed=False, seed=0,
-                 preload=False, nonspeech=(), p_nonspeech=0.0, rirs=(), p_rir=0.0):
+                 preload=False, nonspeech=(), p_nonspeech=0.0, rirs=(), p_rir=0.0, actions=False, p_babble=0.0,
+                 curriculum=False, babble_snr_min=5.0):
         self.files, self.n = files, int(seconds * SR)
+        self.actions, self.p_babble, self.babble_snr_min = actions, p_babble, babble_snr_min
+        # training progress in [0, 1], written by the training loop and read by the loader's workers
+        import multiprocessing as mp
+        self.progress = mp.Value("d", 1.0 if not curriculum else 0.0)
         self.noise, self.p_noise, self.snr = list(noise_files), p_noise, snr_range
         self.nonspeech, self.p_nonspeech = list(nonspeech), p_nonspeech
         self.rirs, self.p_rir = list(rirs), p_rir
@@ -380,10 +542,30 @@ class Clips(Dataset):
         every = sorted(set(files + self.noise + self.nonspeech + self.rirs))
         self.cache = dict(zip(every, preload_all(every))) if preload else None
 
+    def snr_now(self):
+        """The SNR range at this point of training: the floor falls linearly from the top of the range
+        to its bottom over the first half of training, then stays there (Guimarães et al. 2022)."""
+        lo, hi = self.snr
+        return max(lo, hi - (hi - lo) * min(1.0, 2 * self.progress.value)), hi
+
     def load(self, path):
         if self.cache is None:
             return load_mono(path)
         return torch.from_numpy(self.cache[path].astype(np.float32) / 32768.0)
+
+    def window(self, path, rng):
+        """An ``n``-sample crop: from memory when preloaded, else read straight from the file. In training a
+        file that will not decode (a truncated download in a large corpus) is replaced by another one."""
+        if self.cache is not None:
+            return crop(self.load(path), self.n, rng)
+        for _ in range(5):
+            try:
+                return read_crop(path, self.n, rng)
+            except Exception:
+                if self.fixed:
+                    raise
+                path = rng.choice(self.files)
+        return torch.zeros(self.n)
 
     def __len__(self):
         return len(self.files)
@@ -391,15 +573,33 @@ class Clips(Dataset):
     def __getitem__(self, i):
         rng = random.Random(self.seed * 1_000_003 + i) if self.fixed else random
         if self.nonspeech and rng.random() < self.p_nonspeech:
-            clip = crop(self.load(rng.choice(self.nonspeech)), self.n, rng)
+            clip = self.window(rng.choice(self.nonspeech), rng)
             return clip, clip
-        clean = crop(self.load(self.files[i]), self.n, rng)
+        return self.augment(self.window(self.files[i], rng), rng)
+
+    def augment(self, clean, rng):
+        """(clean, what the student hears) for one clean speech crop."""
         noisy = clean
-        if self.rirs and rng.random() < self.p_rir:
+        if self.actions:
+            # one of four equiprobable actions: clean, noise, reverberation, both (Guimarães et al. 2022)
+            act = rng.randrange(4)
+            reverb, noise_on = act in (2, 3) and bool(self.rirs), act in (1, 3)
+        else:
+            reverb, noise_on = bool(self.rirs) and rng.random() < self.p_rir, rng.random() < self.p_noise
+        if reverb:
             noisy = reverberate(clean, self.load(rng.choice(self.rirs)))
-        if self.noise and rng.random() < self.p_noise:
-            noise = crop(self.load(rng.choice(self.noise)), self.n, rng)
-            noisy = mix_at_snr(noisy, noise, rng.uniform(*self.snr))
+        if noise_on and (self.noise or self.p_babble > 0):
+            lo, hi = self.snr_now()
+            if rng.random() < self.p_babble:
+                # one to three other talkers from the training speech: television, a room of people. Never
+                # louder than the voice being labelled: a student rewarded for ignoring the loudest speech it
+                # hears learns to discount speech, and stops transferring to real close-talking voices
+                noise = sum(self.window(rng.choice(self.files), rng) for _ in range(rng.randint(1, 3)))
+                lo = max(lo, self.babble_snr_min)
+                hi = max(hi, lo)
+            else:
+                noise = self.window(rng.choice(self.noise), rng)
+            noisy = mix_at_snr(noisy, noise, rng.uniform(lo, hi))
         peak = noisy.abs().max()
         if peak > 1.0:
             noisy = noisy / peak
@@ -412,7 +612,7 @@ def forever(loader):
 
 
 # ------------------------------------------------------------------ training
-def step_pairs(student, teacher, norm, clean, noisy, lag, amp=False):
+def step_pairs(student, teacher, norm, clean, noisy, lag, amp=False, with_feats=False):
     targets = norm(teacher(clean))  # [L, B, Tt, D]
     with torch.autocast(clean.device.type, dtype=torch.bfloat16, enabled=amp):
         feats = student(noisy)  # [B, Ts, H]
@@ -420,6 +620,8 @@ def step_pairs(student, teacher, norm, clean, noisy, lag, amp=False):
         if n == 0:
             raise ValueError(f"no frame pairs: crop too short for lag {lag}")
         preds = torch.stack(student.heads(feats[:, 1 + lag:1 + lag + n]))
+    if with_feats:
+        return preds.float(), targets[:, :, :n], feats.float()
     return preds.float(), targets[:, :, :n]
 
 
@@ -496,6 +698,160 @@ def quantize_int8(out_dir, calib, probe):
             "int8_bytes": int8.stat().st_size, "fp32_bytes": fp32.stat().st_size, "int8_float_nodes": len(keep_float)}
 
 
+STUDENT_KEYS = ("student", "cnn_dim", "gru_hidden", "gru_layers", "channels", "blocks", "feature_dim", "n_mels",
+                "lag_frames", "lr", "warmup", "teacher")
+
+
+def parse_student_spec(spec, a):
+    """``name:key=value,...`` -> (name, overrides) for the student architecture and timing options."""
+    name, _, kv = spec.partition(":")
+    if not name or "/" in name:
+        raise SystemExit(f"--student-spec {spec!r}: needs a plain name before ':'")
+    over = {}
+    for item in filter(None, kv.split(",")):
+        k, _, v = item.partition("=")
+        k = k.strip().replace("-", "_")
+        if k not in STUDENT_KEYS:
+            raise SystemExit(f"--student-spec {spec!r}: {k!r} is not one of {', '.join(STUDENT_KEYS)}")
+        over[k] = type(getattr(a, k))(v)
+    return name, over
+
+
+def parse_teacher_spec(spec):
+    """``model:layer,layer,...`` -> (model, [layers]); the model name may itself contain ':' only before the last one."""
+    name, _, layers = spec.rpartition(":")
+    if not name or not layers:
+        raise SystemExit(f"--teacher-spec {spec!r}: expected model:layers, e.g. espnet/xeus:6,12,19")
+    return name, [int(x) for x in layers.split(",")]
+
+
+def pick_teacher(key, names):
+    """The one teacher whose model name contains ``key``."""
+    hits = [n for n in names if key in n]
+    if len(hits) != 1:
+        raise SystemExit(f"student teacher={key!r} matches {hits or 'none'} of {names}")
+    return hits[0]
+
+
+@torch.no_grad()
+def evaluate_many(runs, teachers, loader, device):
+    """Validation of every student on the same batches, each teacher run once per batch."""
+    for r in runs:
+        r.student.eval()
+    acc = [[0.0, 0, 0] for _ in runs]
+    k = 0
+    for clean, noisy in loader:
+        clean, noisy = clean.to(device), noisy.to(device)
+        by_teacher = {name: nm(t(clean)) for name, (t, nm) in teachers.items()}
+        for r, s in zip(runs, acc):
+            targets = by_teacher[r.teacher]
+            feats = r.student(noisy)
+            n = pair_frames(feats.shape[1], targets.shape[2], r.a.lag_frames)
+            loss, l1, cos = distil_loss(torch.stack(r.student.heads(feats[:, 1 + r.a.lag_frames:1 + r.a.lag_frames + n])),
+                                        targets[:, :, :n])
+            s[0] += loss.item(); s[1] = s[1] + l1; s[2] = s[2] + cos
+        k += 1
+    for r in runs:
+        r.student.train()
+    return [(t / k, (l1 / k).tolist(), (c / k).tolist()) for t, l1, c in acc]
+
+
+def train_many(a, specs, teachers, train, train_ds, val, val_ns, val_ds, device, meta):
+    """Train several students on the same stream: each batch is read, augmented and put through each
+    teacher once, and every student takes its own optimiser step on its teacher's targets.
+    ``teachers`` maps a model name to (teacher, fitted TargetNorm). Each student writes the same
+    outputs as a single run into ``--out-dir/<name>``. The shared stream means the students differ
+    only in teacher, architecture and timing, never in the data they saw."""
+    from types import SimpleNamespace
+
+    runs = []
+    for name, over in specs:
+        tname = pick_teacher(over.get("teacher", next(iter(teachers))), list(teachers))
+        teacher, norm = teachers[tname]
+        sa = argparse.Namespace(**{**vars(a), **over, "teacher": tname, "layers": ",".join(map(str, teacher.layers)),
+                                   "out_dir": str(Path(a.out_dir) / name), "student_spec": None, "teacher_spec": None})
+        out = Path(sa.out_dir); out.mkdir(parents=True, exist_ok=True)
+        st = build_student(sa, len(teacher.layers), teacher.dim).to(device)
+        opt = torch.optim.AdamW(st.parameters(), lr=sa.lr, weight_decay=1e-2)
+        sched = torch.optim.lr_scheduler.LambdaLR(
+            opt, lambda s, w=sa.warmup: min(1.0, (s + 1) / w) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / a.steps))))
+        m = {**meta, "teacher": tname, "layers": teacher.layers,
+             "family": a.family or FAMILY.get(teacher.model_type, teacher.model_type), "lag_frames": sa.lag_frames, "latency_ms": (1 + sa.lag_frames) * HOP / SR * 1000,
+             "feature_dim": st.feature_dim, "student": sa.student, "args": vars(sa)}
+        r = SimpleNamespace(name=name, a=sa, teacher=tname, norm=norm, student=st, opt=opt, sched=sched, out=out, meta=m,
+                            best=float("inf"),
+                            log=open(out / "metrics.jsonl", "a"), run=[], step=0)
+        if a.resume and (out / "last.pt").exists():
+            ck = torch.load(out / "last.pt", map_location=device)
+            st.load_state_dict(ck["student"]); opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"])
+            r.step, r.best = ck["step"], ck["best"]
+        params = sum(p.numel() for n, p in st.named_parameters() if not n.startswith("proj."))
+        print(f"{name}: backbone {params:,} params, teacher {tname} layers {teacher.layers}, lag {sa.lag_frames} frames, {over}",
+              flush=True)
+        runs.append(r)
+    step = min(r.step for r in runs)
+    t0 = time.time()
+    while step < a.steps:
+        clean, noisy = next(train)
+        clean, noisy = clean.to(device), noisy.to(device)
+        step += 1
+        by_teacher = {name: nm(t(clean)) for name, (t, nm) in teachers.items()}
+        for r in runs:
+            if r.step >= step:  # resumed ahead of the others
+                continue
+            targets = by_teacher[r.teacher]
+            with torch.autocast(device.type, dtype=torch.bfloat16, enabled=a.amp):
+                feats = r.student(noisy)
+                n = pair_frames(feats.shape[1], targets.shape[2], r.a.lag_frames)
+                if n == 0:
+                    raise SystemExit(f"{r.name}: no frame pairs, crop too short for lag {r.a.lag_frames}")
+                preds = torch.stack(r.student.heads(feats[:, 1 + r.a.lag_frames:1 + r.a.lag_frames + n]))
+            loss, _, cos = distil_loss(preds.float(), targets[:, :, :n])
+            r.opt.zero_grad(set_to_none=True)
+            loss.backward()
+            gnorm = torch.nn.utils.clip_grad_norm_(r.student.parameters(), 5.0)
+            r.opt.step(); r.sched.step(); r.step = step
+            if not torch.isfinite(loss):
+                raise SystemExit(f"{r.name}: non-finite loss at step {step}")
+            r.run.append((loss.item(), gnorm.item())); r.cos = cos
+        if step % 100 == 0:
+            rate = 100 / (time.time() - t0); t0 = time.time()
+            for r in runs:
+                if not r.run:
+                    continue
+                mm = np.mean(r.run, axis=0); r.run = []
+                rec = {"step": step, "train_loss": mm[0], "grad_norm": mm[1], "lr": r.sched.get_last_lr()[0],
+                       "train_cos": r.cos.tolist(), "steps_per_s": rate, "students": len(runs)}
+                r.log.write(json.dumps(rec) + "\n"); r.log.flush()
+                print(r.name, json.dumps(rec), flush=True)
+        if step % a.eval_every == 0 or step == a.steps:
+            res = evaluate_many(runs, teachers, val, device)
+            res_ns = evaluate_many(runs, teachers, val_ns, device) if val_ns is not None else [None] * len(runs)
+            for r, (v, vl1, vcos), ns in zip(runs, res, res_ns):
+                rec = {"step": step, "val_loss": v, "val_l1": vl1, "val_cos": vcos}
+                if ns is not None:
+                    rec.update(val_nonspeech_loss=ns[0], val_nonspeech_cos=ns[2])
+                    v = (1 - a.p_nonspeech) * v + a.p_nonspeech * ns[0]
+                    rec["val_selection_loss"] = v
+                r.log.write(json.dumps(rec) + "\n"); r.log.flush(); print(r.name, json.dumps(rec), flush=True)
+                ck = {"student": r.student.state_dict(), "norm": r.norm.state_dict(), "opt": r.opt.state_dict(),
+                      "sched": r.sched.state_dict(), "step": step, "best": min(r.best, v), "meta": r.meta}
+                torch.save(ck, r.out / "last.pt")
+                if v < r.best:
+                    r.best = v
+                    torch.save(ck, r.out / "best.pt")
+    clips = [val_ds[i][1] for i in range(len(val_ds))] if a.int8 else None
+    for r in runs:
+        r.student.load_state_dict(torch.load(r.out / "best.pt", map_location=device)["student"])
+        path = export(r.student, r.out, {**r.meta, "best_val_loss": r.best}, device)
+        print(f"{r.name}: exported {path}", flush=True)
+        if a.int8 and hasattr(r.student, "mel"):
+            q = quantize_int8(r.out, clips[: len(clips) // 2], clips[len(clips) // 2:])
+            info = json.loads((r.out / "tinyhubert.json").read_text())
+            (r.out / "tinyhubert.json").write_text(json.dumps({**info, **q}, indent=1) + "\n")
+            print(r.name, json.dumps(q), flush=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--audio-dir", required=True, help="training audio, searched recursively")
@@ -526,6 +882,15 @@ def main(argv=None):
     ap.add_argument("--p-nonspeech", type=float, default=0.25)
     ap.add_argument("--rir-dir", help="room impulse responses convolved into the student's speech")
     ap.add_argument("--p-rir", type=float, default=0.25)
+    ap.add_argument("--aug", choices=("independent", "actions"), default="independent",
+                    help="independent: noise and reverberation each by their own probability; actions: one of clean, "
+                         "noise, reverberation, both, equiprobable")
+    ap.add_argument("--p-babble", type=float, default=0.0, help="share of noise draws that are 1-3 other talkers")
+    ap.add_argument("--babble-snr-min", type=float, default=5.0,
+                    help="babble is never mixed below this SNR (the foreground voice always the louder), whatever --snr-min is")
+    ap.add_argument("--curriculum", action="store_true", help="SNR floor falls from --snr-max to --snr-min over the first half")
+    ap.add_argument("--enh-weight", type=float, default=0.0, help="weight of the training-only clean log-mel reconstruction")
+    ap.add_argument("--family", help="model family written into tinyhubert.json (default from the teacher: WakeHuBERT, WakeWav)")
     ap.add_argument("--snr-min", type=float, default=0.0)
     ap.add_argument("--snr-max", type=float, default=20.0)
     ap.add_argument("--norm-batches", type=int, default=50, help="teacher batches used to fit the target statistics")
@@ -540,15 +905,36 @@ def main(argv=None):
     ap.add_argument("--resume", help="checkpoint to continue from (last.pt)")
     ap.add_argument("--int8", action="store_true", help="also write tinyhubert_int8.onnx and its agreement with float")
     ap.add_argument("--preload", action="store_true", help="decode the training and noise audio into memory (int16) once")
+    ap.add_argument("--shards", help="directory of crop shards (from --build-shards) to train on instead of decoding --audio-dir")
+    ap.add_argument("--student-spec", action="append", default=[],
+                    help="name:key=value,... ; repeat to train several students on one data stream and one teacher pass "
+                         f"(keys: {', '.join(STUDENT_KEYS)}); each writes into --out-dir/<name>, --resume continues each from its last.pt")
+    ap.add_argument("--teacher-spec", action="append", default=[],
+                    help="model:layers (e.g. espnet/xeus:6,12,19); repeat to distil several teachers from one data stream, "
+                         "each run once per batch; a --student-spec picks its teacher with teacher=<part of the model name> "
+                         "(default the first). Replaces --teacher/--layers when given")
+    ap.add_argument("--build-shards", help="decode one crop per --audio-dir file into this directory, then exit")
     a = ap.parse_args(argv)
 
     torch.manual_seed(a.seed); random.seed(a.seed); np.random.seed(a.seed)
+    if a.build_shards:
+        print("kept", build_shards(list_audio(a.audio_dir), a.build_shards, a.crop_seconds), "crops", flush=True)
+        return
     out = Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
     device = torch.device(a.device)
     layers = [int(x) for x in a.layers.split(",")]
 
+    specs = [parse_student_spec(x, a) for x in a.student_spec]
+    if len({n for n, _ in specs}) != len(specs):
+        raise SystemExit("--student-spec names must differ")
+    tspecs = [parse_teacher_spec(x) for x in a.teacher_spec] or [(a.teacher, layers)]
+    if a.teacher_spec and not specs:
+        raise SystemExit("--teacher-spec needs --student-spec")
+    for _, o in specs:
+        pick_teacher(o.get("teacher", tspecs[0][0]), [x for x, _ in tspecs])
+    a.teacher, layers = tspecs[0]
     a.teacher_dtype = a.teacher_dtype or ("float16" if device.type == "cuda" else "float32")
-    teacher = Teacher(a.teacher, layers, device, getattr(torch, a.teacher_dtype))
+    teacher = make_teacher(a.teacher, layers, device, getattr(torch, a.teacher_dtype))
     student = build_student(a, len(layers), teacher.dim).to(device)
     norm = TargetNorm(len(layers), teacher.dim).to(device)
 
@@ -559,33 +945,66 @@ def main(argv=None):
     val_nonspeech, nonspeech = nonspeech[::10], [f for i, f in enumerate(nonspeech) if i % 10]
     noise = [f for f in noise if f not in set(val_nonspeech)]
     train_ds = Clips(list_audio(a.audio_dir), a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max), preload=a.preload,
-                     nonspeech=nonspeech, p_nonspeech=a.p_nonspeech, rirs=rirs, p_rir=a.p_rir)
+                     nonspeech=nonspeech, p_nonspeech=a.p_nonspeech, rirs=rirs, p_rir=a.p_rir,
+                     actions=a.aug == "actions", p_babble=a.p_babble, curriculum=a.curriculum, babble_snr_min=a.babble_snr_min)
     val_files = list_audio(a.val_dir)
     val_files = random.Random(a.seed).sample(val_files, min(a.val_clips, len(val_files)))
     # validation hears noise and reverberation too (fixed per clip), the objective the student trains on
     val_ds = Clips(val_files, a.crop_seconds, noise, a.p_noise, (a.snr_min, a.snr_max), fixed=True, seed=a.seed,
                    rirs=rirs, p_rir=a.p_rir)
+    if a.shards:
+        train_ds = ShardClips(a.shards, train_ds)
     train = forever(DataLoader(train_ds, a.batch_size, shuffle=True, num_workers=a.workers, drop_last=True,
                                persistent_workers=a.workers > 0))
     val = DataLoader(val_ds, a.batch_size, num_workers=a.workers)
     val_ns = DataLoader(Clips(val_nonspeech, a.crop_seconds, fixed=True, seed=a.seed), a.batch_size,
                         num_workers=a.workers) if val_nonspeech else None
 
-    opt = torch.optim.AdamW(student.parameters(), lr=a.lr, weight_decay=1e-2)
+    if specs:
+        if a.enh_weight > 0 or a.nce_weight > 0:
+            raise SystemExit("--student-spec trains the distillation loss alone (no --enh-weight or --nce-weight)")
+        teachers = {}
+        for tname, tlayers in tspecs:
+            t = teacher if (tname, tlayers) == (a.teacher, layers) else make_teacher(tname, tlayers, device,
+                                                                                   getattr(torch, a.teacher_dtype))
+            nm = TargetNorm(len(tlayers), t.dim).to(device)
+            ck = next((Path(a.out_dir) / n / "last.pt" for n, o in specs
+                       if pick_teacher(o.get("teacher", tspecs[0][0]), [x for x, _ in tspecs]) == tname
+                       and (Path(a.out_dir) / n / "last.pt").exists()), None)
+            if a.resume and ck is not None:
+                nm.load_state_dict(torch.load(ck, map_location=device)["norm"])
+            teachers[tname] = (t, nm)
+        for t, nm in teachers.values():
+            if not bool(nm.fitted):
+                nm.fit(t(next(train)[0].to(device)) for _ in range(a.norm_batches))
+        meta = {"sample_rate": SR, "hop": HOP, "frame_rate_hz": SR / HOP,
+                "nonspeech_clips": len(nonspeech), "rirs": len(rirs), "noise": bool(noise)}
+        print(f"{len(specs)} students, {len(teachers)} teachers on one stream; {len(train_ds)} training items, "
+              f"{len(val_files)} validation", flush=True)
+        return train_many(a, specs, teachers, train, train_ds, val, val_ns, val_ds, device, meta)
+
+    enh = EnhanceHead(student.feature_dim).to(device) if a.enh_weight > 0 else None
+    trained = list(student.parameters()) + (list(enh.net.parameters()) if enh is not None else [])
+    opt = torch.optim.AdamW(trained, lr=a.lr, weight_decay=1e-2)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / a.warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / a.steps))))
     step, best = 0, float("inf")
     if a.resume:
         ck = torch.load(a.resume, map_location=device)
         student.load_state_dict(ck["student"]); norm.load_state_dict(ck["norm"])
+        if enh is not None:
+            enh.load_state_dict(ck["enh"])
         opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"])
         step, best = ck["step"], ck["best"]
     if not bool(norm.fitted):
         norm.fit(teacher(next(train)[0].to(device)) for _ in range(a.norm_batches))
+    if enh is not None and not bool(enh.fitted):
+        enh.fit(next(train)[0].to(device) for _ in range(a.norm_batches))
 
     meta = {"teacher": a.teacher, "layers": layers, "lag_frames": a.lag_frames, "sample_rate": SR, "hop": HOP,
             "frame_rate_hz": SR / HOP, "latency_ms": (1 + a.lag_frames) * HOP / SR * 1000, "feature_dim": student.feature_dim,
-            "student": a.student, "nonspeech_clips": len(nonspeech), "rirs": len(rirs), "noise": bool(noise), "args": vars(a)}
+            "family": a.family or FAMILY.get(teacher.model_type, teacher.model_type), "student": a.student,
+            "nonspeech_clips": len(nonspeech), "rirs": len(rirs), "noise": bool(noise), "args": vars(a)}
     log = open(out / "metrics.jsonl", "a")
     params = sum(p.numel() for n, p in student.named_parameters() if not n.startswith("proj."))
     print(f"student backbone {params:,} params; {len(train_ds.files)} training files, {len(val_files)} validation, "
@@ -594,21 +1013,26 @@ def main(argv=None):
     t0, run = time.time(), []
     student.train()
     while step < a.steps:
+        if a.curriculum:
+            train_ds.progress.value = step / a.steps
         clean, noisy = next(train)
-        preds, targets = step_pairs(student, teacher, norm, clean.to(device), noisy.to(device), a.lag_frames, a.amp)
+        clean = clean.to(device)
+        preds, targets, feats = step_pairs(student, teacher, norm, clean, noisy.to(device), a.lag_frames, a.amp, True)
         loss, l1, cos = distil_loss(preds, targets)
         nce = cross_clip_nce(preds[-1], targets[-1]) if a.nce_weight > 0 else preds.new_zeros(())
-        total = loss + a.nce_weight * nce
+        enh_loss = enh(feats, clean) if enh is not None else preds.new_zeros(())
+        total = loss + a.nce_weight * nce + a.enh_weight * enh_loss
         opt.zero_grad(set_to_none=True)
         total.backward()
-        gnorm = torch.nn.utils.clip_grad_norm_(student.parameters(), 5.0)
+        gnorm = torch.nn.utils.clip_grad_norm_(trained, 5.0)
         opt.step(); sched.step(); step += 1
         if not torch.isfinite(total):
             raise SystemExit(f"non-finite loss at step {step}")
-        run.append((total.item(), nce.item(), gnorm.item()))
+        run.append((total.item(), nce.item(), gnorm.item(), enh_loss.item()))
         if step % 100 == 0:
             m = np.mean(run, axis=0); run = []
-            rec = {"step": step, "train_loss": m[0], "train_nce": m[1], "grad_norm": m[2], "lr": sched.get_last_lr()[0],
+            rec = {"step": step, "train_loss": m[0], "train_nce": m[1], "grad_norm": m[2], "train_enh": m[3],
+                   "snr_floor": train_ds.snr_now()[0], "lr": sched.get_last_lr()[0],
                    "train_cos": cos.tolist(), "steps_per_s": 100 / (time.time() - t0)}
             log.write(json.dumps(rec) + "\n"); log.flush(); t0 = time.time()
             print(json.dumps(rec), flush=True)
@@ -623,7 +1047,8 @@ def main(argv=None):
                 rec["val_selection_loss"] = v
             log.write(json.dumps(rec) + "\n"); log.flush(); print(json.dumps(rec), flush=True)
             ck = {"student": student.state_dict(), "norm": norm.state_dict(), "opt": opt.state_dict(),
-                  "sched": sched.state_dict(), "step": step, "best": min(best, v), "meta": meta}
+                  "sched": sched.state_dict(), "step": step, "best": min(best, v), "meta": meta,
+                  **({"enh": enh.state_dict()} if enh is not None else {})}
             torch.save(ck, out / "last.pt")
             if v < best:
                 best = v
