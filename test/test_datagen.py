@@ -1,6 +1,8 @@
 """Tests for ww_trainer.datagen — synthetic data pipeline."""
 
 import csv
+import random
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,6 +12,7 @@ import pytest
 import torch
 import torchaudio
 
+from ww_trainer import datagen
 from ww_trainer.datagen import (
     DatagenConfig,
     DatagenResult,
@@ -413,7 +416,8 @@ class TestFolderReposBypassTheDatasetsBuilder:
         import soundfile as sf
         from ww_trainer import datagen
 
-        src = tmp_path / "src"; src.mkdir()
+        src = tmp_path / "src"
+        src.mkdir()
         for n in ("b.wav", "a.wav", "README.md"):
             if n.endswith(".wav"):
                 sf.write(src / n, np.zeros(22050, dtype=np.float32), 22050)
@@ -449,3 +453,103 @@ class TestPipelineRefusesEmptyClasses:
         with pytest.raises(RuntimeError, match="0 positives and 0 negatives"):
             datagen.run_datagen_pipeline(cfg)
         assert not (tmp_path / "train" / "metadata.csv").exists()
+
+
+# ---------------------------------------------------------------------------
+# The fix round the SHIP-WITH-FIXES review on #54 asked for.
+# ---------------------------------------------------------------------------
+
+class TestCappedDownloadSamplesTheRepo:
+    """A cap must draw from the repo, not from its first directory."""
+
+    def test_cap_covers_more_than_one_class(self, monkeypatch, tmp_path) -> None:
+        # A repo that groups clips per class, as TigreGotico/NAR does: the
+        # sorted file list starts with every clip of the first class.
+        classes = [f"class{c:02d}" for c in range(42)]
+        listing = sorted(f"{c}/{c}_{i}.wav" for c in classes for i in range(20))
+        captured: list = []
+
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: captured.extend(files) or [],
+        )
+
+        random.seed(42)
+        datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=20)
+
+        assert len(captured) == 20
+        drawn = {f.split("/")[0] for f in captured}
+        # The old slice gave exactly one class. Any spread beats that; require
+        # a real one so a future regression to slicing fails here.
+        assert len(drawn) > 1, f"cap took {len(drawn)} class(es): {sorted(drawn)}"
+        assert listing[:20] != sorted(captured)
+
+    def test_the_draw_is_reproducible_under_the_seed(self, monkeypatch, tmp_path) -> None:
+        listing = sorted(f"c{c:02d}/f{i}.wav" for c in range(10) for i in range(10))
+        seen: list = []
+
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: seen.append(list(files)) or [],
+        )
+        for _ in range(2):
+            random.seed(7)
+            datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=5)
+        assert seen[0] == seen[1]
+
+    def test_a_cap_at_or_above_the_repo_size_takes_everything(self, monkeypatch, tmp_path) -> None:
+        listing = ["a/1.wav", "a/2.wav", "b/1.wav"]
+        captured: list = []
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: captured.extend(files) or [],
+        )
+        datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=99)
+        assert captured == listing
+
+
+class TestSplitKeepsBothLabelsInBothFiles:
+    """The split must not hand back a single-class test set."""
+
+    @staticmethod
+    def _labels(csv_path: Path) -> set:
+        with open(csv_path) as f:
+            return {row[1] for row in csv.reader(f) if row}
+
+    @staticmethod
+    def _fake_download(dataset_id, output_dir, **kwargs):
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        n = kwargs.get("max_samples") or 5
+        return [_make_wav(output_dir / f"{i:04d}.wav") for i in range(n)]
+
+    @pytest.mark.parametrize("size", [2, 3, 5, 10])
+    def test_both_splits_hold_both_labels(self, size, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", self._fake_download)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds",
+            n_positive=size, max_negative=size, vad_trim=False,
+            download_augmentation=False, seed=42,
+        )
+        result = datagen.run_datagen_pipeline(cfg)
+        assert self._labels(result.train_csv) == {"0", "1"}
+        assert self._labels(result.test_csv) == {"0", "1"}
+
+    def test_a_dataset_too_small_to_split_is_refused(self, tmp_path, monkeypatch) -> None:
+        # One clip of each label cannot give both labels to both files. The old
+        # code wrote a single-class test set and the completeness guard called
+        # it fine; now it raises.
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", self._fake_download)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds",
+            n_positive=1, max_negative=1, vad_trim=False,
+            download_augmentation=False, seed=42,
+        )
+        with pytest.raises(RuntimeError, match="single-class test set"):
+            datagen.run_datagen_pipeline(cfg)
