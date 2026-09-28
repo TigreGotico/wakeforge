@@ -89,7 +89,7 @@ BaseWakeModel.embed(wavs)         model.py:168
   (same extractor call, head.embed)
      |  embeds: Tensor[B, D]
      v
-LossManager.compute_loss(         loss.py:1347
+LossManager.compute_loss(         loss.py:1391
   model, wavs, labels, dataset_ref)
   → total scalar loss
      v

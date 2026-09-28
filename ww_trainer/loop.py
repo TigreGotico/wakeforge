@@ -311,8 +311,18 @@ def training_loop(
         if hardness_cache:
             logger.info("[Mining] Loaded %d cached hardness scores", len(hardness_cache))
 
-    params = filter(lambda p: p.requires_grad, trainer.model.parameters())
-    optimizer = torch.optim.Adam(params, lr=lr)
+    loss_manager = LossManager(
+        loss_configs=trainer.losses_cfg, mining_type=mining_type, device=trainer.device,
+        neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
+    )
+
+    def _param_groups():
+        groups = [{"params": [p for p in trainer.model.parameters() if p.requires_grad]}]
+        if loss_manager.parameters():
+            groups.append({"params": loss_manager.parameters()})
+        return groups
+
+    optimizer = torch.optim.Adam(_param_groups(), lr=lr)
     initial_lr = lr
     # Warmup + cosine annealing: linear warmup for first 2 epochs, then cosine decay
     warmup_epochs = min(2, max(0, epochs - 1))
@@ -348,10 +358,6 @@ def training_loop(
                 start_epoch + 1, epochs, resumed_metrics.get("f1", 0.0),
             )
 
-    loss_manager = LossManager(
-        loss_configs=trainer.losses_cfg, mining_type=mining_type, device=trainer.device,
-        neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
-    )
     if spec_augment:
         from ww_trainer.augment import SpectrogramAugment
         loss_manager.set_spec_augment(SpectrogramAugment(**(spec_augment_kwargs or {})))
@@ -411,10 +417,7 @@ def training_loop(
         # Progressive unfreezing
         if trainer.unfreeze_at_epoch is not None and ep == trainer.unfreeze_at_epoch:
             trainer._unfreeze()
-            optimizer = torch.optim.Adam(
-                filter(lambda p: p.requires_grad, trainer.model.parameters()),
-                lr=optimizer.param_groups[0]["lr"],
-            )
+            optimizer = torch.optim.Adam(_param_groups(), lr=optimizer.param_groups[0]["lr"])
 
         current_lr = optimizer.param_groups[0]["lr"]
         lr_factor = current_lr / initial_lr

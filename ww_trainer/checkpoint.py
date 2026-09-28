@@ -154,8 +154,19 @@ def load_checkpoint(
         metrics = state.get("metrics", {})
         # Guard against an empty optimizer_state (saved when optimizer was None):
         # load_state_dict({}) would raise on the missing ``param_groups`` key.
-        if optimizer is not None and state.get("optimizer_state"):
-            optimizer.load_state_dict(state["optimizer_state"])
+        saved = state.get("optimizer_state")
+        if optimizer is not None and saved:
+            groups_match = len(saved["param_groups"]) == len(optimizer.param_groups) and all(
+                len(sg["params"]) == len(og["params"])
+                for sg, og in zip(saved["param_groups"], optimizer.param_groups)
+            )
+            if groups_match:
+                optimizer.load_state_dict(saved)
+            else:
+                # a checkpoint from a different loss configuration: group count or a
+                # group's own parameter count (e.g. a different --loss-type) mismatches
+                logger.warning("[Resume] optimizer state has %d parameter groups, the optimizer %d; "
+                               "the optimizer restarts", len(saved["param_groups"]), len(optimizer.param_groups))
         logger.info("[Resume] Loaded checkpoint from epoch %d", start_epoch)
     else:
         logger.info("[Resume] Loaded model weights only (trainer state missing)")

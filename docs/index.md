@@ -89,7 +89,7 @@ stay `ww_trainer`; the package, repo, and docs are `wakeforge`)
 | `BaseWakeModel` | `model` | `model.py` |
 | `AudioDataset` | `dataset` | `dataset.py` |
 | `LossManager` | `loss` | `loss.py` |
-| `RobustProtoDiversityLoss` | `loss` | `loss.py:311` |
+| `RobustProtoDiversityLoss` | `loss` | `loss.py:297` |
 | `OnnxWakeWordInferencer` | `inference` | `inference.py` |
 | `SlidingFeatureCacheTensor` | `feats` | `feats.py:31` |
 | `run_sweep` / `run_grid_search` / `run_random_search` | `sweep` | `sweep.py:91,299,374` |
