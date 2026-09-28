@@ -1,285 +1,185 @@
-# TinyHuBERT: Cross-Architecture Distillation for Streaming Wake Word Detection
+# TinyHuBERT: Distilling HuBERT into a Streaming Wake-Word Feature Extractor
 
-**Version:** 1.0
-**Status:** Engineering experiment specification, not a results paper. The recipe below is well-defined and implemented (`scripts/research/tinyhubert.py`); the downstream impact on wake-word F1 has **not** been measured yet. Treat any quantitative claim as a hypothesis until it appears in the results table in §7.
-**Requires:** CUDA GPU for the teacher forward pass; `datasets==3.6.0`
-
----
-
-## 1. Motivation and intuitions
-
-Large self-supervised speech models such as HuBERT (Hsu et al., 2021) learn rich phonetic
-representations from unlabelled audio, but their size (~95M parameters, non-causal Transformer
-attention) makes them impractical for on-device wake-word detection: too big, too slow, and
-fundamentally incompatible with streaming because attention needs full sequence context.
-
-TinyHuBERT is a *cross-architecture distillation recipe* that tries to keep the useful part —
-HuBERT's contextual frame embeddings — while paying for none of the architectural cost. The
-intuitions driving the design:
-
-1. **Phonetic embeddings beat hand-crafted features for KWS.** MFCC throws away most of the
-   phonetic structure that distinguishes "hey mycroft" from "hey marcy". A small model with
-   HuBERT-flavoured embeddings should outperform the same model fed raw MFCC, even if the
-   embedding model is itself tiny.
-2. **The student's *architecture* can differ wildly from the teacher.** HuBERT is a
-   Transformer; the student is a CNN + GRU. Distillation only needs the teacher's output
-   embedding, not its internals — so we can swap a non-causal Transformer for a causal,
-   stream-friendly RNN, as long as the embeddings line up frame-by-frame.
-3. **Causality is non-negotiable for on-device wake detection.** A unidirectional GRU and a
-   causal CNN stack give us a model that produces one new embedding per incoming audio chunk,
-   with no look-ahead.
-4. **MSE alone causes representation collapse.** If the student is only asked to match the
-   teacher's vectors, it can satisfy the loss by producing a low-variance blob near the
-   teacher's mean. A contrastive (InfoNCE) auxiliary term forces the student to keep
-   *different* teacher frames *separable*, not just close on average.
-5. **Match the teacher's frame rate, not its parameter count.** The CNN stack is sized so its
-   total downsampling matches HuBERT's (×160 at 16 kHz). Frame-aligned outputs make the
-   distillation loss meaningful at every timestep.
-
-The resulting student can be used as a drop-in `OnnxFeatureExtractor` for wake-word training
-inside wakeforge.
-
-This document describes the recipe. Whether it actually beats the alternatives (MFCC, SincNet,
-DistilHuBERT off-the-shelf) for downstream wake-word F1 is an open question — see §7.
+**Status:** Engineering experiment specification. The recipe is implemented in
+`scripts/research/tinyhubert.py`. Whether its features improve wake-word detection over MFCC
+is measured by the experiment in §7; until a row of that table is filled, every claim about
+downstream benefit is a hypothesis.
+**Requires:** a GPU for the teacher forward pass, `transformers`, local audio on disk.
 
 ---
+
+## 1. Motivation
+
+Self-supervised speech models such as HuBERT (Hsu et al., 2021) learn phonetic frame
+representations from unlabelled audio. A wake-word head trained on HuBERT features separates
+"hey mycroft" from "hey marcy" far more easily than one trained on MFCC, but HuBERT Base has
+about 95M parameters and bidirectional attention: too large for an always-on device and unable
+to stream.
+
+TinyHuBERT keeps the representation and drops the architecture. A small causal network is
+trained to predict HuBERT's hidden states frame by frame; the trained network is then used as a
+frozen `OnnxFeatureExtractor` under an ordinary wake-word head.
+
+The design decisions, each of which the implementation encodes:
+
+1. **Match HuBERT's frame rate.** HuBERT emits one frame every 20 ms: its convolutional front
+   end has a total stride of 320 samples and a 400-sample receptive field. The student's five
+   causal convolutions have strides 5, 4, 4, 2, 2, a total of 320, so every student frame has a
+   teacher frame to learn from and no target is an interpolation of two.
+2. **Causal, with a fixed lag.** HuBERT frame t depends on the whole clip, past and future; a
+   streaming student cannot see the future, so part of that target is unpredictable to it. The
+   student instead predicts teacher frame t at its own frame t + 1 + lag: by then it has heard
+   the teacher frame's full 400-sample window and `lag` further 20 ms frames of audio. The
+   default lag of 4 gives 100 ms of latency, which a wake-word decision tolerates.
+3. **Distil middle layers, not only the last.** The last layer of a pretrained (not fine-tuned)
+   HuBERT is shaped by its masked-prediction objective; phonetic content, and keyword-spotting
+   accuracy, peak in the middle layers. Following DistilHuBERT (Chang et al., 2022), a shared
+   backbone feeds one linear head per distilled layer (default 4, 8 and 12).
+4. **Standardise the targets.** A few HuBERT dimensions carry magnitudes far above the rest, and
+   an unnormalised distance spends its gradient on them. Targets are standardised per layer and
+   per dimension with statistics measured on the teacher before training.
+5. **DistilHuBERT's loss.** Per layer: L1 distance plus `-log sigmoid(cosine similarity)`. The L1
+   term fixes the values, the cosine term the direction.
+6. **Contrastive negatives from other clips only (optional).** An InfoNCE term that treats every
+   other frame of the batch as a negative asks the student to separate neighbouring frames of one
+   clip, which the teacher itself barely separates. `cross_clip_nce` excludes same-clip frames
+   from the negatives. It is off by default (`--nce-weight 0`) and is one of the ablations in §7.
+7. **Noise on the student's side only.** Wake words are spoken over television, music and
+   kitchens. With `--noise-dir` the student hears each clip mixed with noise at a random SNR
+   (0–20 dB by default) while the teacher hears it clean, so the student learns to report the
+   speech rather than the mixture.
 
 ## 2. Architecture
 
-### Teacher — frozen HuBERT Base
+**Teacher:** `facebook/hubert-base-ls960`, frozen, with `output_hidden_states=True`. For
+16 kHz input of N samples it emits `(N - 400) // 320 + 1` frames of 768 dimensions per layer.
 
-`facebook/hubert-base-ls960` loaded via HuggingFace `transformers`. All parameters frozen.
-Outputs `[B, T', 768]` contextual embeddings at ~50 frames/second for 16 kHz audio.
-
-### Student — `WakeHuBERTStudent`
+**Student (`WakeHuBERTStudent`):**
 
 ```
-Input: [B, 1, T]  (raw waveform, single channel)
-
-CNN encoder (4 residual CnnBlocks):
-  CnnBlock(1  → base_dim,    k=10, s=10)   # ×10 downsampling
-  CnnBlock(base_dim → 2×base_dim, k=4,  s=4)    # ×4
-  CnnBlock(2× → 4×base_dim, k=3,  s=2, p=1)   # ×2
-  CnnBlock(4× → 4×base_dim, k=3,  s=2, p=1)   # ×2
-  Total downsampling: ×160 → matches HuBERT's frame rate at 16 kHz
-
-Unidirectional GRU  (gru_layers=1, gru_hidden=256 by default)
-LayerNorm
-Linear projection → out_dim  (default 768, matching teacher)
-
-Output: [B, T', out_dim]
+waveform [B, N]
+  5 residual causal blocks: Conv1d(k, s) → BN → GELU → causal Conv1d(3) → BN, + strided skip
+     channels 64, 128, 256, 256, 256; kernels 10, 8, 8, 4, 4; strides 5, 4, 4, 2, 2
+  unidirectional GRU (256 hidden, 1 layer)
+  LayerNorm                                  → features [B, N // 320, 256]   (exported)
+  one Linear(256 → 768) head per teacher layer                             (training only)
 ```
 
-`CnnBlock` is a residual block: Conv1d → BN → GELU → Conv1d → BN, with a skip connection.
-The GRU is **unidirectional** — no future context is used, making inference strictly causal.
+Every convolution is padded on the left only, so frame t is computed from samples before
+320 (t + 1) and nothing later; `test/test_tinyhubert.py` checks this by perturbing the future.
 
-If `out_dim != teacher.hidden_size` (768), a linear adapter layer is added automatically.
-
-**Default parameter count** (base_dim=64, gru_hidden=256, gru_layers=1, out_dim=768):
-approximately 3–4M parameters — roughly 25× smaller than HuBERT Base.
-
----
+**Size:** the exported backbone has 2.33M parameters at the defaults (`cnn_dim=64`,
+`gru_hidden=256`); `tinyhubert.json` records the exact count. The training heads add
+0.6M and are not exported.
 
 ## 3. Training
 
-### Dataset
+**Data:** any directory of `.wav`, `.flac` or `.ogg` files, searched recursively, cropped at
+random to `--crop-seconds` (default 2 s). Validation uses fixed, seeded crops of a held-out
+directory, so validation losses are comparable across steps. LibriSpeech `train-clean-100`
+with `dev-clean` for validation is a sufficient start; the noise directory can be any
+non-speech audio (AudioSet, MUSAN).
 
-Streams `MLCommons/ml_spoken_words` via HuggingFace `datasets` in streaming mode — no full
-download required. Audio is cropped or zero-padded to a fixed length (default 1 second).
-An epoch is defined as 5 000 training steps; validation runs for 500 steps.
+**Objective:** the mean over distilled layers of `L1 - log sigmoid(cos)` on standardised
+targets, plus `--nce-weight` times the cross-clip InfoNCE on the last distilled layer.
 
-Requires `datasets==3.6.0` due to a known streaming compatibility issue
-([huggingface/datasets#7693](https://github.com/huggingface/datasets/issues/7693)).
+**Optimiser:** AdamW (lr 1e-3, weight decay 0.01), linear warm-up over 2,000 steps then cosine
+decay to zero over `--steps`; gradients clipped at 5.
 
-### Loss
+**Outputs:** `metrics.jsonl` (training loss, gradient norm, learning rate and throughput every
+100 steps; validation loss, L1 and cosine per layer every `--eval-every` steps), `last.pt` and
+`best.pt` (resumable with `--resume`), `tinyhubert.onnx` from the best checkpoint, and
+`tinyhubert.json` with the teacher, layers, lag, latency, frame rate, feature dimension and
+parameter count.
 
-```
-L = L_MSE + 0.1 × L_InfoNCE
-```
+## 4. Export
 
-**Intuition.** MSE provides coarse "go to this location in 768-D space" supervision — easy to
-optimise, but on its own collapses to a low-variance blob. InfoNCE acts as a contrastive
-counterweight: different teacher frames must remain distinguishable in the student's space.
-MSE pulls; InfoNCE prevents collapse.
+`tinyhubert.onnx` takes `waveform` `[batch, samples]` and returns `features`
+`[batch, frames, 256]`, the input layout `OnnxFeatureExtractor` feeds. The export is checked
+against the PyTorch model on a clip whose length differs from the export's dummy input and
+refused if they disagree.
 
-**MSE** (`F.mse_loss`): aligns the student's embedding vector with the teacher's at each frame.
-Provides coarse positional supervision in the 768-d space.
+The exported graph processes a whole window. The GRU's state is not an input or output of the
+graph, so a device re-runs the extractor over a sliding window rather than feeding it 20 ms at a
+time; a stateful export is future work and changes no result of the experiment below.
 
-**InfoNCE** (contrastive, temperature=0.07): flattens all `[B × T']` frame embeddings into a
-matrix, sub-samples up to 2 048 frames, then computes cross-entropy over the cosine-similarity
-matrix. The diagonal is the positive (student frame *i* ↔ teacher frame *i*); all off-diagonal
-entries are negatives.
-
-The 0.1 weight is an educated guess: MSE dominates early training while InfoNCE prevents
-representation collapse. The exact ratio has *not* been ablated — see §7 for the experiment that
-would justify it.
-
-### Time alignment
-
-HuBERT's CNN feature extractor and the student's CNN stack may produce slightly different
-sequence lengths for the same input. Teacher features are linearly interpolated
-(`F.interpolate(..., mode="linear")`) to match the student's `T'` before computing the loss.
-
-### Optimiser and schedule
-
-Adam (lr=1e-3), StepLR (step=5, γ=0.5). Gradient clipping at 5.0.
-Best checkpoint saved to MLflow by validation loss; final model exported to ONNX.
-
----
-
-## 4. Visualisation
-
-Every `--plot-interval` epochs the script logs to MLflow:
-
-- **PCA 2D / 3D**: joint PCA of student and teacher frame embeddings (blue = student, red = teacher).
-  When distillation is working, the two point clouds overlap.
-- **t-SNE 2D**: non-linear projection of up to 2 000 combined frames.
-
----
-
-## 5. ONNX Export
-
-The student is exported at the end of training with dynamic axes on the time dimension:
-
-```python
-torch.onnx.export(
-    student, dummy,           # dummy: [1, 1, 16000]
-    input_names=["waveform"], output_names=["embedding"],
-    dynamic_axes={"waveform": {2: "n_samples"}, "embedding": {1: "time"}},
-    opset_version=18,
-)
-```
-
-The exported `tinyhubert.onnx` can then be loaded as an `OnnxFeatureExtractor` in wakeforge
-for downstream wake-word classification training.
-
----
-
-## 6. Usage
+## 5. Usage
 
 ```bash
-# Requires GPU for the teacher pass
-.venv/bin/python scripts/research/tinyhubert.py \
-    --lang en \
-    --epochs 50 \
-    --batch-size 32 \
-    --cnn-dim 64 \
-    --gru-hidden 256 \
-    --mlflow-uri http://localhost:5000
+python scripts/research/tinyhubert.py \
+    --audio-dir data/LibriSpeech/train-clean-100 \
+    --val-dir data/LibriSpeech/dev-clean \
+    --noise-dir data/noise \
+    --out-dir runs/tinyhubert \
+    --steps 60000
 
-# Resume from checkpoint
-.venv/bin/python scripts/research/tinyhubert.py \
-    --lang en \
-    --resume last_checkpoint.pt
+# continue an interrupted run
+python scripts/research/tinyhubert.py ... --resume runs/tinyhubert/last.pt
 ```
 
-After training, load the exported embedding model in wakeforge:
+Train a wake-word model on the extractor:
 
-```python
-from ww_trainer.feats import OnnxFeatureExtractor
-extractor = OnnxFeatureExtractor("tinyhubert.onnx")
-
-from ww_trainer.trainer import WakeWordTrainer
-trainer = WakeWordTrainer(
-    arch="gru",
-    featurizer="tinyhubert.onnx",
-    featurizer_type="onnx",
-    feature_dim=768,
-)
+```bash
+ww-trainer train --wake-word hey_mycroft \
+    --metadata train/metadata.csv --test-metadata test/metadata.csv \
+    --featurizer runs/tinyhubert/tinyhubert.onnx --featurizer-type onnx --feature-dim 256 \
+    --arch gru --save-best
 ```
 
----
+## 6. What is and is not new
 
-## 6.5. Honest framing — what is and is not new
-
-Every individual ingredient comes from prior work. The contribution of this document is a
-*recipe and an experiment spec*, not a new technique.
+Every ingredient comes from prior work; the contribution is the combination and the experiment.
 
 | Ingredient | Source |
 |---|---|
 | HuBERT teacher | Hsu et al. 2021 |
-| Self-supervised distillation of HuBERT into a smaller model | DistilHuBERT (Chang et al. 2022) |
-| MSE + InfoNCE on frame embeddings | standard distillation loss family; InfoNCE from van den Oord et al. 2018 |
-| Causal CNN feature extractor + RNN head | streaming-ASR student architecture, well-established |
-| Cross-architecture (Transformer → CNN/RNN) distillation | standard in speech, e.g. streaming RNN-T students of bidirectional teachers |
+| Layer-wise distillation, L1 + log-sigmoid-cosine loss | DistilHuBERT, Chang et al. 2022 |
+| InfoNCE | van den Oord et al. 2018 |
+| Streaming student of a bidirectional teacher, with look-ahead budget | standard in streaming ASR distillation |
+| Clean teacher, distorted student input | Cross-Distortion Mapping, Huang et al. 2022 |
 
-**Engineering choices specific to this implementation** (none are paper-worthy on their own):
+DistilHuBERT's student is a 24M-parameter Transformer with the teacher's full context; this
+student is about ten times smaller, causal, and pays a fixed 100 ms of latency instead.
 
-1. **Frame-rate matching via fixed-stride CNN.** Sizing the CNN stack so that total
-   downsampling equals HuBERT's ×160 at 16 kHz, then using linear interpolation only for
-   residual length mismatch. Makes the frame-by-frame distillation loss meaningful.
-2. **Single-layer distillation target.** DistilHuBERT distils from *multiple* teacher layers
-   (layer-wise prediction heads); this recipe uses only the final hidden state. Simpler,
-   cheaper, may give up some structure — to be measured.
-3. **Tiny student.** ~3–4 M parameters vs DistilHuBERT's ~24 M. Whether the resulting
-   embeddings remain useful for downstream KWS is the open question.
+## 7. Experiment
 
-**Not yet demonstrated.** Whether this student's embeddings improve wake-word F1 over MFCC,
-SincNet, or off-the-shelf DistilHuBERT is unknown. Until those numbers exist, this is a
-plausible engineering recipe rather than a validated technique.
+Identical wake-word training (same data, splits, head, epochs and seed), varying only the
+feature extractor. The wake word is "hey mycroft"; metrics are F1 on the held-out split and
+false activations per hour on held-out negative audio at a fixed recall.
 
----
+| Run | Feature extractor | Extractor params | F1 | FA/h at recall 0.9 |
+|---|---|---|---|---|
+| F1 | MFCC (40) | 0 | — | — |
+| F2 | HuBERT Base, layer 8, frozen (upper bound) | 95M | — | — |
+| F2b | DistilHuBERT, frozen ([`TigreGotico/distillhubert-onnx`](https://huggingface.co/TigreGotico/distillhubert-onnx)) | 24M | — | — |
+| F3 | TinyHuBERT, defaults | ~2.3M | — | — |
+| F4 | TinyHuBERT, lag 0 | ~2.3M | — | — |
+| F5 | TinyHuBERT, no noise | ~2.3M | — | — |
+| F6 | TinyHuBERT, last layer only | ~2.3M | — | — |
+| F7 | TinyHuBERT, `cnn_dim=32` | ~0.8M | — | — |
 
-## 7. Known limitations and open questions
+**Decision rules, fixed before the runs:**
 
-**Limitations (true regardless of results):**
+- If F3 does not beat F1 on both F1 score and FA/h, the recipe does not earn its training cost.
+- If F3 matches F2b, the student is a drop-in replacement for DistilHuBERT at a tenth of its size.
+- If F3 reaches most of the F2 − F1 gap, the size saving (about forty times) justifies it.
+- F4, F5 and F6 each test one design decision from §1; a decision whose ablation matches F3 is
+  removed.
+- If F7 matches F3, the smaller student is the default.
 
-- **GPU required during distillation.** The HuBERT teacher forward pass is too slow on CPU
-  for practical training. Student-only inference is CPU-compatible after ONNX export.
-- **`datasets==3.6.0` pin.** Streaming from `MLCommons/ml_spoken_words` breaks on newer
-  versions of `datasets`. See [issue #7693](https://github.com/huggingface/datasets/issues/7693).
-- **Linear interpolation for frame alignment.** When student and teacher disagree by a few
-  frames, `F.interpolate(mode="linear")` smears the teacher targets. Acceptable for small
-  offsets; may obscure fine phonetic detail.
-- **Not portable to this project's CPU-only dev machine.** Train on a GPU box, copy
-  `tinyhubert.onnx` back.
-- **Distils a single teacher layer.** No layer-wise supervision (cf. DistilHuBERT). May
-  underuse the teacher's structure.
-
-**Experiment spec — what would justify this recipe.** Identical wake-word training pipeline,
-varying only the feature extractor. Same seed, same splits, same epochs.
-
-| Run | Feature extractor | Params (extractor) | F1 | EER | FAR @ FRR=1% | Notes |
-|---|---|---|---|---|---|---|
-| F1 | MFCC (40 coeffs) | 0 | — | — | — | hand-crafted baseline |
-| F2 | SincNet | ~few K | — | — | — | learnable filterbank baseline |
-| F3 | DistilHuBERT (off-the-shelf, frozen) | ~24 M | — | — | — | strong upper baseline |
-| F4 | TinyHuBERT (this work) | ~3–4 M | — | — | — | the proposal |
-| F5 | TinyHuBERT, MSE only | ~3–4 M | — | — | — | InfoNCE ablation |
-| F6 | TinyHuBERT, InfoNCE only | ~3–4 M | — | — | — | MSE ablation |
-| F7 | TinyHuBERT, base_dim=32 (half size) | ~1 M | — | — | — | size sensitivity |
-
-**Decision rules** (set in advance to avoid post-hoc rationalisation):
-
-- If F4 does not beat F1 (MFCC) on F1 *and* FAR@FRR=1%, the recipe is not justified — the
-  distillation cost is wasted.
-- If F4 matches F3 (DistilHuBERT) within 1 % absolute F1, the size win (3–4 M vs 24 M) is
-  worth shipping.
-- If F5 or F6 match F4, drop the redundant loss term.
-- If F7 matches F4, ship the smaller model.
-
-**Open questions to resolve with results (revise this document once answered):**
-
-- Does a 25× smaller student retain enough of HuBERT's phonetic signal for binary KWS, or does
-  capacity become the bottleneck?
-- Is the 0.1 InfoNCE weight roughly right, or does the optimum sit at 0.01 or 1.0?
-- Does layer-wise distillation (DistilHuBERT-style) actually help downstream F1, or is the
-  final layer sufficient?
-- Does linear interpolation of teacher frames materially harm distillation quality vs. exact
-  alignment?
-
-This document is intended to be updated, not replaced, once results land — sections 1–6 are
-stable; §7 will gain numbers and shrink as questions are answered.
-
----
+The distillation's own validation cosine per layer is recorded beside each row; it says how
+well the student imitates the teacher, not whether that helps detection, and is never used in
+place of the downstream columns.
 
 ## 8. References
 
-- Hsu et al. (2021) — *HuBERT: Self-Supervised Speech Representation Learning by Masked Prediction
+- Hsu et al. (2021). *HuBERT: Self-Supervised Speech Representation Learning by Masked Prediction
   of Hidden Units.* [arXiv:2106.07447](https://arxiv.org/abs/2106.07447)
-- van den Oord et al. (2018) — *Representation Learning with Contrastive Predictive Coding.*
+- Chang, Yang, Lee (2022). *DistilHuBERT: Speech Representation Learning by Layer-wise
+  Distillation of Hidden-unit BERT.* [arXiv:2110.01900](https://arxiv.org/abs/2110.01900)
+- Huang et al. (2022). *Improving Generalizability of Distilled Self-supervised Speech Processing
+  Models under Distorted Settings.* [arXiv:2210.07978](https://arxiv.org/abs/2210.07978)
+- van den Oord et al. (2018). *Representation Learning with Contrastive Predictive Coding.*
   [arXiv:1807.03748](https://arxiv.org/abs/1807.03748)
-- Chang et al. (2022) — *DistilHuBERT: Speech Representation Learning by Layer-wise Distillation
-  of Hidden-unit BERT.* [arXiv:2110.01900](https://arxiv.org/abs/2110.01900)
 
 See [references.md](references.md) for the full project bibliography.
