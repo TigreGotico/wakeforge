@@ -112,7 +112,11 @@ jobs:
         run: |
           test -f /tmp/ww_smoke/evolution.png
           test -f /tmp/ww_smoke/tier_comparison.png
-          ls /tmp/ww_smoke/model_micro/
+          # Name the checkpoint itself. `ls` on a directory that exists and is
+          # empty exits 0, so it passed a run that trained no model. The step
+          # sets EXPORT_ONNX=false, so best_f1.onnx is never written here and
+          # best_f1.pt is the artifact to assert.
+          test -f /tmp/ww_smoke/model_micro/model/best_f1.pt
 
       - name: Upload executed notebook on failure
         if: failure()
