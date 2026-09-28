@@ -16,25 +16,45 @@ th = importlib.util.module_from_spec(_S)
 _S.loader.exec_module(th)
 
 
-def _student(**kw):
+def _student(kind="wave-gru"):
     torch.manual_seed(0)
-    return th.WakeHuBERTStudent(**{"cnn_dim": 8, "gru_hidden": 16, "n_targets": 2, "target_dim": 12, **kw}).eval()
+    if kind == "mel-tcn":
+        s = th.MelTCNStudent(channels=16, blocks=4, feature_dim=16, n_mels=20, n_targets=2, target_dim=12)
+    else:
+        s = th.WakeHuBERTStudent(cnn_dim=8, gru_hidden=16, n_targets=2, target_dim=12)
+    return s.eval()
 
 
+KINDS = ["wave-gru", "mel-tcn"]
+
+
+@pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("n", [16000, 32000, 21920, 320, 639, 641])
-def test_the_student_emits_one_frame_per_320_samples(n):
-    assert _student()(torch.randn(2, n)).shape == (2, n // 320, 16)
+def test_the_student_emits_one_frame_per_320_samples(kind, n):
+    assert _student(kind)(torch.randn(2, n)).shape == (2, n // 320, 16)
 
 
-def test_hubert_and_student_frame_rates_agree():
+@pytest.mark.parametrize("kind", KINDS)
+def test_hubert_and_student_frame_rates_agree(kind):
     # HuBERT base: seven convolutions with total stride 320 and a 400-sample receptive field
     hubert_frames = (32000 - 400) // 320 + 1
-    student_frames = _student()(torch.randn(1, 32000)).shape[1]
+    student_frames = _student(kind)(torch.randn(1, 32000)).shape[1]
     assert abs(student_frames - hubert_frames) <= 1
 
 
-def test_a_frame_does_not_depend_on_any_later_sample():
-    s = _student()
+def test_the_log_mel_front_end_matches_torchaudio():
+    import torchaudio
+    x = torch.randn(1, 16000)
+    ours = th.CausalLogMel(n_mels=40)(x)
+    ref = torchaudio.transforms.MelSpectrogram(16000, n_fft=400, hop_length=160, n_mels=40, center=False, power=2.0)(
+        torch.nn.functional.pad(x, (240, 0)))
+    assert ours.shape == ref.shape
+    assert torch.allclose(ours, torch.log(ref + 1e-6), atol=1e-3)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_frame_does_not_depend_on_any_later_sample(kind):
+    s = _student(kind)
     x = torch.randn(1, 16000)
     base = s(x)
     for t in (0, 7, 30):
@@ -89,6 +109,51 @@ def test_cross_clip_nce_ignores_frames_of_the_same_clip():
     assert th.cross_clip_nce(clips[:1], clips[:1]).item() == 0.0
 
 
+def test_preloaded_clips_equal_decoded_ones(tmp_path):
+    for i in range(3):
+        sf.write(str(tmp_path / f"{i}.wav"), np.random.RandomState(i).uniform(-0.5, 0.5, 20000).astype(np.float32), 16000)
+    files = sorted(str(p) for p in tmp_path.glob("*.wav"))
+    a = th.Clips(files, 1.0, fixed=True, seed=1)
+    b = th.Clips(files, 1.0, fixed=True, seed=1, preload=True)
+    for i in range(3):
+        assert torch.allclose(a[i][0], b[i][0], atol=1 / 32768)
+
+
+def test_a_non_speech_item_is_heard_unchanged_by_teacher_and_student(tmp_path):
+    for name in ("speech", "music"):
+        (tmp_path / name).mkdir()
+        sf.write(str(tmp_path / name / "a.wav"), np.random.RandomState(len(name)).randn(20000).astype(np.float32) * 0.1, 16000)
+    speech, music = th.list_audio(tmp_path / "speech"), th.list_audio(tmp_path / "music")
+    ds = th.Clips(speech, 1.0, noise_files=speech, p_noise=1.0, nonspeech=music, p_nonspeech=1.0, fixed=True)
+    clean, student = ds[0]
+    assert torch.equal(clean, student)
+    ref = th.load_mono(music[0])
+    assert any(torch.equal(clean, ref[o:o + 16000]) for o in range(0, 4001))
+
+
+def test_reverberation_keeps_level_and_a_unit_impulse_is_the_identity():
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(16000, generator=g)
+    impulse = torch.zeros(4000); impulse[300] = 1.0
+    assert torch.allclose(th.reverberate(x, impulse), x, atol=1e-4)
+    room = torch.randn(8000, generator=g) * torch.exp(-torch.arange(8000) / 800.0)
+    y = th.reverberate(x, room)
+    assert y.shape == x.shape and abs(y.pow(2).mean().sqrt() / x.pow(2).mean().sqrt() - 1) < 1e-3
+
+
+def test_reverberation_survives_the_noise_mixed_after_it(tmp_path):
+    for name in ("speech", "noise", "rir"):
+        (tmp_path / name).mkdir()
+    sf.write(str(tmp_path / "speech" / "a.wav"), np.random.RandomState(0).randn(20000).astype(np.float32) * 0.1, 16000)
+    sf.write(str(tmp_path / "noise" / "n.wav"), np.zeros(20000, np.float32) + 1e-6, 16000)
+    room = np.random.RandomState(1).randn(4000).astype(np.float32) * np.exp(-np.arange(4000) / 400.0).astype(np.float32)
+    sf.write(str(tmp_path / "rir" / "r.wav"), room, 16000)
+    ds = th.Clips(th.list_audio(tmp_path / "speech"), 1.0, noise_files=th.list_audio(tmp_path / "noise"), p_noise=1.0,
+                  snr_range=(60.0, 60.0), rirs=th.list_audio(tmp_path / "rir"), p_rir=1.0, fixed=True)
+    clean, student = ds[0]
+    assert not torch.allclose(student, clean, atol=1e-3), "the reverberation was dropped when noise was added"
+
+
 def test_mix_at_snr_hits_the_requested_snr():
     g = torch.Generator().manual_seed(0)
     clean, noise = torch.randn(16000, generator=g), torch.randn(16000, generator=g) * 3
@@ -97,10 +162,11 @@ def test_mix_at_snr_hits_the_requested_snr():
     assert abs(snr.item() - 10.0) < 1e-3
 
 
-def test_the_export_loads_as_an_onnx_feature_extractor(tmp_path):
+@pytest.mark.parametrize("kind", KINDS)
+def test_the_export_loads_as_an_onnx_feature_extractor(tmp_path, kind):
     from ww_trainer.feats import OnnxFeatureExtractor
 
-    s = _student()
+    s = _student(kind)
     th.export(s, tmp_path, {"layers": [4, 8]}, "cpu")
     ext = OnnxFeatureExtractor(str(tmp_path / "tinyhubert.onnx"), device="cpu")
     assert ext.feature_dim == 16
@@ -129,6 +195,22 @@ def test_an_export_that_disagrees_with_torch_is_refused(tmp_path, monkeypatch):
     assert not (tmp_path / "tinyhubert.json").exists()
 
 
+def test_int8_export_keeps_the_front_end_float_and_agrees_with_float(tmp_path):
+    import onnx
+
+    s = _student("mel-tcn")
+    th.export(s, tmp_path, {}, "cpu")
+    g = torch.Generator().manual_seed(3)
+    clips = [torch.randn(16000, generator=g) * 0.1 for _ in range(16)]
+    q = th.quantize_int8(tmp_path, clips[:8], clips[8:])
+    assert q["int8_float_nodes"] > 0 and q["int8_feature_cosine_mean"] > 0.9
+    graph = onnx.load(str(tmp_path / "tinyhubert_int8.onnx")).graph
+    quantised = {i for n in graph.node if n.op_type == "DequantizeLinear" for i in n.output}
+    convs = [n for n in graph.node if n.op_type == "Conv"]
+    assert not any(i in quantised for i in convs[0].input), "the DFT convolution was quantised"
+    assert any(i in quantised for n in convs[1:] for i in n.input), "nothing after the front end was quantised"
+
+
 class _FakeTeacher:
     """Stands in for HuBERT: deterministic features of the clean audio, HuBERT's frame count."""
 
@@ -143,7 +225,7 @@ class _FakeTeacher:
 
 
 def test_a_short_run_trains_evaluates_resumes_and_exports(tmp_path, monkeypatch):
-    for name, n in (("train", 6), ("val", 3), ("noise", 2)):
+    for name, n in (("train", 6), ("val", 3), ("noise", 2), ("music", 12), ("rir", 2)):
         d = tmp_path / name
         d.mkdir()
         for i in range(n):
@@ -156,6 +238,16 @@ def test_a_short_run_trains_evaluates_resumes_and_exports(tmp_path, monkeypatch)
               "--device", "cpu", "--nce-weight", "0.1"]
     th.main(common + ["--steps", "2"])
     th.main(common + ["--steps", "4", "--resume", str(out / "last.pt")])
+    mel = tmp_path / "mel"
+    th.main([x if x != str(out) else str(mel) for x in common]
+            + ["--steps", "2", "--student", "mel-tcn", "--channels", "8", "--blocks", "2", "--feature-dim", "8",
+               "--n-mels", "16", "--int8", "--preload", "--nonspeech-dir", str(tmp_path / "music"),
+               "--rir-dir", str(tmp_path / "rir")])
+    meta_mel = json.loads((mel / "tinyhubert.json").read_text())
+    assert meta_mel["student"] == "mel-tcn" and meta_mel["feature_dim"] == 8 and "int8_feature_cosine_mean" in meta_mel
+    assert meta_mel["nonspeech_clips"] == 10 and meta_mel["rirs"] == 2
+    mel_vals = [json.loads(l) for l in (mel / "metrics.jsonl").read_text().splitlines() if "val_loss" in l]
+    assert mel_vals and all(len(v["val_nonspeech_cos"]) == 2 and "val_selection_loss" in v for v in mel_vals)
     vals = [json.loads(l) for l in (out / "metrics.jsonl").read_text().splitlines() if "val_loss" in l]
     assert [v["step"] for v in vals] == [2, 4] and all(len(v["val_cos"]) == 2 for v in vals)
     assert torch.load(out / "last.pt")["step"] == 4
