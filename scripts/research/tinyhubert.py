@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""TinyHuBERT: distil HuBERT into a small causal CNN+GRU feature extractor for wake-word models.
+"""TinyHuBERT: distil HuBERT into a small causal feature extractor for wake-word models.
 
 The student reads raw 16 kHz audio and emits one frame every 20 ms (a total stride of 320
 samples, HuBERT's own frame rate), strictly causally: frame t depends only on samples before
 the end of its own 20 ms block. A shared backbone (causal CNN, unidirectional GRU, LayerNorm)
 feeds one linear head per distilled teacher layer, as in DistilHuBERT; the heads exist only for
 training, and the exported extractor is the backbone.
+
+``--student`` picks the backbone: ``wave-gru`` (convolutions on the waveform, then a GRU), ``mel-tcn``
+(causal log-mel, dilated depthwise-separable convolutions, optionally with ``--mixconv`` kernels),
+``mel-gru`` and ``mel-attn`` (mel-tcn's blocks followed by a causal GRU or by attention over the last
+``--attn-window`` frames), and ``mel-bigru`` (a bidirectional GRU, which does not stream). With
+``--target-blocks`` each teacher layer is predicted from a chosen student block rather than from the
+output, and ``--mask-prob`` masks spans of the student's log-mel input during training.
 
 HuBERT's frames are contextual in both directions, which a causal student cannot reproduce
 exactly. The student therefore predicts each teacher frame ``--lag-frames`` frames late: the
@@ -142,13 +149,33 @@ class CausalLogMel(nn.Module):
         return torch.log(torch.matmul(self.mel, power) + 1e-6)  # [B, n_mels, N // 160]
 
 
+MIX_KERNELS = (3, 5, 7, 9)
+
+
+class MixDWConv(nn.Module):
+    """Causal mixed depthwise convolution: the channels split into groups, each with its own kernel size and the
+    same dilation (MixConv, as in microWakeWord), so one layer mixes short and long receptive fields."""
+
+    def __init__(self, ch, dilation, kernels=MIX_KERNELS):
+        super().__init__()
+        if ch < len(kernels):
+            raise ValueError(f"{ch} channels cannot be split into {len(kernels)} kernel groups")
+        self.sizes = [ch // len(kernels) + (i < ch % len(kernels)) for i in range(len(kernels))]
+        self.pads = [(k - 1) * dilation for k in kernels]
+        self.convs = nn.ModuleList(nn.Conv1d(c, c, k, dilation=dilation, groups=c, bias=False)
+                                   for c, k in zip(self.sizes, kernels))
+
+    def forward(self, x):
+        return torch.cat([conv(F.pad(g, (pad, 0))) for conv, pad, g in zip(self.convs, self.pads, x.split(self.sizes, 1))], 1)
+
+
 class DSBlock(nn.Module):
     """Causal depthwise-separable residual block: depthwise conv (dilated) → BN → ReLU → 1x1 → BN, + skip."""
 
-    def __init__(self, ch, kernel, dilation):
+    def __init__(self, ch, kernel, dilation, mixconv=False):
         super().__init__()
-        self.pad = (kernel - 1) * dilation
-        self.dw = nn.Conv1d(ch, ch, kernel, dilation=dilation, groups=ch, bias=False)
+        self.pad = 0 if mixconv else (kernel - 1) * dilation
+        self.dw = MixDWConv(ch, dilation) if mixconv else nn.Conv1d(ch, ch, kernel, dilation=dilation, groups=ch, bias=False)
         self.bn1 = nn.BatchNorm1d(ch)
         self.pw = nn.Conv1d(ch, ch, 1, bias=False)
         self.bn2 = nn.BatchNorm1d(ch)
@@ -158,31 +185,151 @@ class DSBlock(nn.Module):
         return F.relu(self.bn2(self.pw(y)) + x)
 
 
+class GRULayer(nn.Module):
+    """One GRU layer on ``[B, T, C]`` returning ``[B, T, C]``; bidirectional splits the width between directions."""
+
+    def __init__(self, ch, bidirectional=False):
+        super().__init__()
+        if bidirectional and ch % 2:
+            raise ValueError(f"a bidirectional GRU needs an even width, not {ch}")
+        self.gru = nn.GRU(ch, ch // 2 if bidirectional else ch, batch_first=True, bidirectional=bidirectional)
+
+    def forward(self, x):
+        return self.gru(x)[0]
+
+
+class WindowedAttention(nn.Module):
+    """Pre-norm transformer layer (FFN 2x, no dropout) in which frame t attends to frames [t - window + 1, t] only.
+
+    Attention is written out as MatMul and Softmax, and the mask is built from the input's own length, so the
+    graph exports with a dynamic number of frames and quantises like any other MatMul graph.
+    """
+
+    def __init__(self, d, heads=4, window=50):
+        super().__init__()
+        if d % heads:
+            raise ValueError(f"width {d} is not divisible by {heads} heads")
+        self.heads, self.window = heads, window
+        self.ln1, self.qkv, self.o = nn.LayerNorm(d), nn.Linear(d, 3 * d), nn.Linear(d, d)
+        self.ln2, self.ff = nn.LayerNorm(d), nn.Sequential(nn.Linear(d, 2 * d), nn.GELU(), nn.Linear(2 * d, d))
+
+    def forward(self, x):
+        B, T = x.shape[0], x.shape[1]  # explicit sizes keep every Reshape's shape of known rank for int8 tooling
+        q, k, v = (t.reshape(B, T, self.heads, -1).transpose(1, 2) for t in self.qkv(self.ln1(x)).chunk(3, -1))
+        pos = torch.ones_like(x[0, :, 0]).cumsum(0)
+        rel = pos[None, :] - pos[:, None]  # key position minus query position
+        att = (q @ k.transpose(-1, -2)) * q.shape[-1] ** -0.5
+        att = att.masked_fill((rel > 0) | (rel <= -self.window), float("-inf")).softmax(-1)
+        x = x + self.o((att @ v).transpose(1, 2).reshape(B, T, -1))
+        return x + self.ff(self.ln2(x))
+
+
+def span_mask(frames, prob, span=10):
+    """1 where a frame is kept, 0 inside masked spans: each frame starts a ``span``-frame span with probability
+    ``prob``, as wav2vec 2.0 masks its inputs. ``frames`` is ``[B, C, T]``; the result ``[B, 1, T]``."""
+    starts = (torch.rand(frames.shape[0], 1, frames.shape[2], device=frames.device) < prob).float()
+    return 1 - F.max_pool1d(F.pad(starts, (span - 1, 0)), span, 1)
+
+
 class MelTCNStudent(nn.Module):
     """Fixed causal log-mel, a strided stem to 50 frames per second, dilated causal depthwise-separable
     blocks, and a 1x1 projection to the exported features: convolution, batch norm and ReLU only, the
     pattern static int8 quantises well, and no recurrent state, so it streams with one buffer per layer.
 
     Frame t depends only on samples before 320 (t + 1), the same timing as ``WakeHuBERTStudent``.
+
+    Subclasses add ``layers`` sequence layers after the blocks (``seq_layer``), then LayerNorm and a
+    linear projection. ``mixconv`` makes every depthwise convolution a ``MixDWConv``. ``mask_prob`` zeroes
+    random 10-frame spans of the normalised log-mel, in training only. ``target_blocks`` (1-based, counting
+    the blocks and then the sequence layers) makes teacher layer i, for every layer but the last, a
+    prediction from that block's output; the last teacher layer is always predicted from the exported
+    features, so they stay distilled. ``forward_blocks`` returns the block outputs, ``forward`` never
+    computes them.
     """
 
-    def __init__(self, channels=256, blocks=8, feature_dim=128, n_mels=64, kernel=5, n_targets=3, target_dim=768):
+    streaming = True
+    seq_layer = None
+
+    def __init__(self, channels=256, blocks=8, feature_dim=128, n_mels=64, kernel=5, n_targets=3, target_dim=768,
+                 mixconv=False, mask_prob=0.0, target_blocks=(), layers=2, window=50):
         super().__init__()
+        self.window, self.mask_prob, self.target_blocks = window, mask_prob, tuple(target_blocks)
         self.mel = CausalLogMel(n_mels)
         self.norm = nn.BatchNorm1d(n_mels)
         self.stem = CausalConv1d(n_mels, channels, 4, 2)
         self.stem_bn = nn.BatchNorm1d(channels)
-        self.blocks = nn.Sequential(*(DSBlock(channels, kernel, 2 ** (i % 4)) for i in range(blocks)))
-        self.out = nn.Conv1d(channels, feature_dim, 1)
-        self.proj = nn.ModuleList(nn.Linear(feature_dim, target_dim) for _ in range(n_targets))
+        self.blocks = nn.Sequential(*(DSBlock(channels, kernel, 2 ** (i % 4), mixconv) for i in range(blocks)))
+        self.seq = nn.ModuleList(self.seq_layer(channels) for _ in range(layers if self.seq_layer else 0))
+        if self.seq:
+            self.ln, self.out = nn.LayerNorm(channels), nn.Linear(channels, feature_dim)
+        else:
+            self.out = nn.Conv1d(channels, feature_dim, 1)
+        taps = blocks + len(self.seq)
+        if self.target_blocks and (len(self.target_blocks) != n_targets - 1
+                                   or not all(1 <= b <= taps for b in self.target_blocks)):
+            raise SystemExit(f"target_blocks {'+'.join(map(str, self.target_blocks))}: needs {n_targets - 1} block "
+                             f"numbers in 1..{taps}, one per teacher layer but the last (which the features predict)")
+        widths = [channels] * len(self.target_blocks) + [feature_dim] * (n_targets - len(self.target_blocks))
+        self.proj = nn.ModuleList(nn.Linear(w, target_dim) for w in widths)
         self.feature_dim = feature_dim
 
+    def body(self, wav, taps=None):
+        m = self.norm(self.mel(wav))
+        if self.training and self.mask_prob > 0:
+            m = m * span_mask(m, self.mask_prob)
+        x = F.relu(self.stem_bn(self.stem(m)))
+        for b in self.blocks:
+            x = b(x)
+            if taps is not None:
+                taps.append(x.transpose(1, 2))
+        if not self.seq:
+            return self.out(x).transpose(1, 2)
+        x = x.transpose(1, 2)
+        for layer in self.seq:
+            x = layer(x)
+            if taps is not None:
+                taps.append(x)
+        return self.out(self.ln(x))
+
     def forward(self, wav):
-        x = F.relu(self.stem_bn(self.stem(self.norm(self.mel(wav)))))
-        return self.out(self.blocks(x)).transpose(1, 2)
+        return self.body(wav)
+
+    def forward_blocks(self, wav):
+        """(features, the output ``[B, T, C]`` of every block and then every sequence layer)."""
+        taps = []
+        return self.body(wav, taps), taps
 
     def heads(self, feats):
         return [p(feats) for p in self.proj]
+
+
+class MelGRUStudent(MelTCNStudent):
+    """``MelTCNStudent``'s front and blocks, then a causal unidirectional GRU of ``layers`` layers."""
+
+    def seq_layer(self, ch):
+        return GRULayer(ch)
+
+
+class MelBiGRUStudent(MelTCNStudent):
+    """``MelTCNStudent``'s front and blocks, then a bidirectional GRU (half the width per direction).
+
+    Not streaming: every frame depends on the whole input. A consumer recomputes the features over each
+    window it classifies (a wake-word head reads a window of one to two seconds), and the student is
+    trained on crops of that length.
+    """
+
+    streaming = False
+
+    def seq_layer(self, ch):
+        return GRULayer(ch, bidirectional=True)
+
+
+class MelAttnStudent(MelTCNStudent):
+    """``MelTCNStudent``'s front and blocks, then ``layers`` transformer layers (four heads) whose attention is
+    causal and limited to the last ``window`` frames, so it streams with a cache of ``window`` frames."""
+
+    def seq_layer(self, ch):
+        return WindowedAttention(ch, 4, self.window)
 
 
 class EnhanceHead(nn.Module):
@@ -218,9 +365,23 @@ class EnhanceHead(nn.Module):
 FAMILY = {"hubert": "WakeHuBERT", "wavlm": "WakeWav", "xeus": "WakeXeus"}
 
 
+MEL_STUDENTS = {"mel-tcn": MelTCNStudent, "mel-gru": MelGRUStudent, "mel-bigru": MelBiGRUStudent,
+                "mel-attn": MelAttnStudent}
+
+
+def parse_blocks(spec):
+    """``"4+8+12"`` -> (4, 8, 12); empty -> ()."""
+    return tuple(int(x) for x in str(spec).split("+") if x.strip())
+
+
 def build_student(a, n_targets, target_dim):
-    if a.student == "mel-tcn":
-        return MelTCNStudent(a.channels, a.blocks, a.feature_dim, a.n_mels, n_targets=n_targets, target_dim=target_dim)
+    if a.student in MEL_STUDENTS:
+        return MEL_STUDENTS[a.student](
+            a.channels, a.blocks, a.feature_dim, a.n_mels, n_targets=n_targets, target_dim=target_dim,
+            mixconv=bool(a.mixconv), mask_prob=a.mask_prob, target_blocks=parse_blocks(a.target_blocks),
+            layers=a.attn_layers if a.student == "mel-attn" else a.rnn_layers, window=a.attn_window)
+    if a.target_blocks or a.mask_prob or a.mixconv:
+        raise SystemExit("target_blocks, mask_prob and mixconv need a mel student")
     return WakeHuBERTStudent(a.cnn_dim, a.gru_hidden, a.gru_layers, n_targets, target_dim)
 
 
@@ -612,14 +773,25 @@ def forever(loader):
 
 
 # ------------------------------------------------------------------ training
+def student_preds(student, noisy, lag, n):
+    """(predictions ``[L, B, n, D]`` for teacher frames 0..n-1, features ``[B, Ts, H]``): from the heads on the
+    features, or from each ``target_blocks`` block's own head and, for the last teacher layer, the features."""
+    taps = getattr(student, "target_blocks", ())
+    if not taps:
+        feats = student(noisy)
+        return torch.stack(student.heads(feats[:, 1 + lag:1 + lag + n])), feats
+    feats, blocks = student.forward_blocks(noisy)
+    ins = [blocks[b - 1] for b in taps] + [feats]
+    return torch.stack([p(x[:, 1 + lag:1 + lag + n]) for p, x in zip(student.proj, ins)]), feats
+
+
 def step_pairs(student, teacher, norm, clean, noisy, lag, amp=False, with_feats=False):
     targets = norm(teacher(clean))  # [L, B, Tt, D]
+    n = pair_frames(noisy.shape[1] // HOP, targets.shape[2], lag)
+    if n == 0:
+        raise ValueError(f"no frame pairs: crop too short for lag {lag}")
     with torch.autocast(clean.device.type, dtype=torch.bfloat16, enabled=amp):
-        feats = student(noisy)  # [B, Ts, H]
-        n = pair_frames(feats.shape[1], targets.shape[2], lag)
-        if n == 0:
-            raise ValueError(f"no frame pairs: crop too short for lag {lag}")
-        preds = torch.stack(student.heads(feats[:, 1 + lag:1 + lag + n]))
+        preds, feats = student_preds(student, noisy, lag, n)
     if with_feats:
         return preds.float(), targets[:, :, :n], feats.float()
     return preds.float(), targets[:, :, :n]
@@ -653,7 +825,7 @@ def export(student, out_dir, meta, device):
     diff = float(np.abs(ref - got).max())
     if got.shape != ref.shape or diff > 1e-3:
         raise SystemExit(f"ONNX export disagrees with torch: shape {got.shape} vs {ref.shape}, max diff {diff}")
-    meta = {**meta, "onnx_max_abs_diff_vs_torch": diff,
+    meta = {**meta, "onnx_max_abs_diff_vs_torch": diff, "streaming": getattr(student, "streaming", True),
             "params_exported": sum(p.numel() for n, p in student.named_parameters() if not n.startswith("proj."))}
     (out_dir / "tinyhubert.json").write_text(json.dumps(meta, indent=1) + "\n")
     student.to(device)
@@ -664,7 +836,8 @@ def quantize_int8(out_dir, calib, probe):
     """Static int8 (QDQ, per-channel weights) of the exported extractor, calibrated on ``calib``.
 
     The log-mel front end and its input batch norm stay in float: a fixed spectrogram gains nothing
-    from int8 and its log compresses a dynamic range int8 cannot hold. Returns the mean and worst
+    from int8 and its log compresses a dynamic range int8 cannot hold. So do softmax, layer norm and the
+    attention mask (whose -inf int8 cannot represent); onnxruntime leaves GRU ops in float. Returns the mean and worst
     per-frame cosine between float and int8 features on ``probe`` (clips never used to calibrate).
     """
     import onnx
@@ -674,7 +847,8 @@ def quantize_int8(out_dir, calib, probe):
 
     fp32, pre, int8 = out_dir / "tinyhubert.onnx", out_dir / "tinyhubert.pre.onnx", out_dir / "tinyhubert_int8.onnx"
     quant_pre_process(str(fp32), str(pre))
-    keep_float = [n.name for n in onnx.load(str(pre)).graph.node if "/mel/" in n.name or "/norm/" in n.name]
+    keep_float = [n.name for n in onnx.load(str(pre)).graph.node
+                  if "/mel/" in n.name or "/norm/" in n.name or n.op_type in {"Softmax", "LayerNormalization", "Where"}]
 
     class Reader(CalibrationDataReader):
         def __init__(self):
@@ -699,6 +873,7 @@ def quantize_int8(out_dir, calib, probe):
 
 
 STUDENT_KEYS = ("student", "cnn_dim", "gru_hidden", "gru_layers", "channels", "blocks", "feature_dim", "n_mels",
+                "rnn_layers", "attn_layers", "attn_window", "mixconv", "target_blocks", "mask_prob",
                 "lag_frames", "lr", "warmup", "teacher")
 
 
@@ -745,10 +920,8 @@ def evaluate_many(runs, teachers, loader, device):
         by_teacher = {name: nm(t(clean)) for name, (t, nm) in teachers.items()}
         for r, s in zip(runs, acc):
             targets = by_teacher[r.teacher]
-            feats = r.student(noisy)
-            n = pair_frames(feats.shape[1], targets.shape[2], r.a.lag_frames)
-            loss, l1, cos = distil_loss(torch.stack(r.student.heads(feats[:, 1 + r.a.lag_frames:1 + r.a.lag_frames + n])),
-                                        targets[:, :, :n])
+            n = pair_frames(noisy.shape[1] // HOP, targets.shape[2], r.a.lag_frames)
+            loss, l1, cos = distil_loss(student_preds(r.student, noisy, r.a.lag_frames, n)[0], targets[:, :, :n])
             s[0] += loss.item(); s[1] = s[1] + l1; s[2] = s[2] + cos
         k += 1
     for r in runs:
@@ -800,12 +973,11 @@ def train_many(a, specs, teachers, train, train_ds, val, val_ns, val_ds, device,
             if r.step >= step:  # resumed ahead of the others
                 continue
             targets = by_teacher[r.teacher]
+            n = pair_frames(noisy.shape[1] // HOP, targets.shape[2], r.a.lag_frames)
+            if n == 0:
+                raise SystemExit(f"{r.name}: no frame pairs, crop too short for lag {r.a.lag_frames}")
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=a.amp):
-                feats = r.student(noisy)
-                n = pair_frames(feats.shape[1], targets.shape[2], r.a.lag_frames)
-                if n == 0:
-                    raise SystemExit(f"{r.name}: no frame pairs, crop too short for lag {r.a.lag_frames}")
-                preds = torch.stack(r.student.heads(feats[:, 1 + r.a.lag_frames:1 + r.a.lag_frames + n]))
+                preds = student_preds(r.student, noisy, r.a.lag_frames, n)[0]
             loss, _, cos = distil_loss(preds.float(), targets[:, :, :n])
             r.opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -861,8 +1033,10 @@ def main(argv=None):
     ap.add_argument("--teacher", default="facebook/hubert-base-ls960")
     ap.add_argument("--layers", default="4,8,12", help="teacher hidden layers to distil (DistilHuBERT's)")
     ap.add_argument("--lag-frames", type=int, default=4, help="extra 20 ms frames of audio the student hears before predicting a teacher frame")
-    ap.add_argument("--student", choices=("wave-gru", "mel-tcn"), default="wave-gru",
-                    help="wave-gru: convolutions on the waveform and a GRU; mel-tcn: log-mel and dilated causal convolutions")
+    ap.add_argument("--student", choices=("wave-gru", *MEL_STUDENTS), default="wave-gru",
+                    help="wave-gru: convolutions on the waveform and a GRU; mel-tcn: log-mel and dilated causal convolutions; "
+                         "mel-gru, mel-attn: mel-tcn's blocks then a causal GRU or windowed causal attention; mel-bigru: "
+                         "a bidirectional GRU (not streaming: features are recomputed per classified window)")
     ap.add_argument("--cnn-dim", type=int, default=64, help="wave-gru")
     ap.add_argument("--gru-hidden", type=int, default=256, help="wave-gru; also its feature dimension")
     ap.add_argument("--gru-layers", type=int, default=1, help="wave-gru")
@@ -870,6 +1044,17 @@ def main(argv=None):
     ap.add_argument("--blocks", type=int, default=8, help="mel-tcn")
     ap.add_argument("--feature-dim", type=int, default=128, help="mel-tcn")
     ap.add_argument("--n-mels", type=int, default=64, help="mel-tcn")
+    ap.add_argument("--rnn-layers", type=int, default=2, help="mel-gru, mel-bigru: GRU layers after the blocks")
+    ap.add_argument("--attn-layers", type=int, default=2, help="mel-attn: transformer layers after the blocks")
+    ap.add_argument("--attn-window", type=int, default=50, help="mel-attn: frames each frame attends to, itself included")
+    ap.add_argument("--mixconv", action="store_const", const=1, default=0,
+                    help="mel students: mixed depthwise kernels (3, 5, 7, 9) in every block")
+    ap.add_argument("--target-blocks", default="",
+                    help="mel students: teacher layer i predicted from block target_blocks[i] for every layer but the last, "
+                         "e.g. 4+8 with layers 4,8,12 (1-based, the blocks then the GRU or attention layers); the last "
+                         "layer always from the features")
+    ap.add_argument("--mask-prob", type=float, default=0.0,
+                    help="mel students: in training, probability that a 10 ms log-mel frame starts a masked 10-frame span")
     ap.add_argument("--crop-seconds", type=float, default=2.0)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--steps", type=int, default=60000)
