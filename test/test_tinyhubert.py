@@ -16,16 +16,24 @@ th = importlib.util.module_from_spec(_S)
 _S.loader.exec_module(th)
 
 
-def _student(kind="wave-gru"):
+MEL = {"mel-tcn": ("MelTCNStudent", {}), "mel-tcn-mixconv": ("MelTCNStudent", {"mixconv": True}),
+       "mel-gru": ("MelGRUStudent", {}), "mel-attn": ("MelAttnStudent", {"window": 5}),
+       "mel-bigru": ("MelBiGRUStudent", {})}
+
+
+def _student(kind="wave-gru", **kw):
     torch.manual_seed(0)
-    if kind == "mel-tcn":
-        s = th.MelTCNStudent(channels=16, blocks=4, feature_dim=16, n_mels=20, n_targets=2, target_dim=12)
+    if kind in MEL:
+        cls, extra = MEL[kind]
+        s = getattr(th, cls)(channels=16, blocks=4, feature_dim=16, n_mels=20, n_targets=2, target_dim=12,
+                             **{**extra, **kw})
     else:
         s = th.WakeHuBERTStudent(cnn_dim=8, gru_hidden=16, n_targets=2, target_dim=12)
     return s.eval()
 
 
-KINDS = ["wave-gru", "mel-tcn"]
+CAUSAL = ["wave-gru", "mel-tcn", "mel-tcn-mixconv", "mel-gru", "mel-attn"]
+KINDS = CAUSAL + ["mel-bigru"]
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -52,7 +60,7 @@ def test_the_log_mel_front_end_matches_torchaudio():
     assert torch.allclose(ours, torch.log(ref + 1e-6), atol=1e-3)
 
 
-@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("kind", CAUSAL)
 def test_a_frame_does_not_depend_on_any_later_sample(kind):
     s = _student(kind)
     x = torch.randn(1, 16000)
@@ -63,6 +71,64 @@ def test_a_frame_does_not_depend_on_any_later_sample(kind):
         out = s(y)
         assert torch.allclose(out[:, :t + 1], base[:, :t + 1], atol=1e-6), f"frame <= {t} saw the future"
         assert not torch.allclose(out[:, t + 1:], base[:, t + 1:], atol=1e-6)
+
+
+def test_the_bidirectional_student_hears_later_samples():
+    s = _student("mel-bigru")
+    x = torch.randn(1, 16000)
+    y = x.clone()
+    y[:, 320 * 31:] = torch.randn(1, 16000 - 320 * 31) * 5
+    assert not torch.allclose(s(y)[:, :31], s(x)[:, :31], atol=1e-6)
+    assert not s.streaming and _student("mel-gru").streaming
+
+
+def test_mixconv_splits_channels_over_four_kernel_sizes():
+    dw = _student("mel-tcn-mixconv").blocks[0].dw
+    assert isinstance(dw, th.MixDWConv) and [c.kernel_size[0] for c in dw.convs] == [3, 5, 7, 9]
+    assert sum(c.in_channels for c in dw.convs) == 16
+
+
+def test_target_blocks_feed_early_heads_from_their_blocks_and_the_last_from_the_features():
+    wav = torch.randn(2, 16000)
+    s = _student("mel-tcn", target_blocks=(1,))
+    base = th.student_preds(s, wav, 0, 40)[0]
+    assert base.shape == (2, 2, 40, 12)
+    with torch.no_grad():
+        s.out.weight.zero_(); s.out.bias.zero_()
+    zeroed = th.student_preds(s, wav, 0, 40)[0]
+    assert torch.allclose(zeroed[0], base[0]), "the tapped head read the output projection"
+    assert not torch.allclose(zeroed[1], base[1]), "the last teacher layer must come from the exported features"
+    s = _student("mel-tcn", target_blocks=(1,))
+    with torch.no_grad():
+        s.blocks[1].pw.weight.mul_(3)
+    after = th.student_preds(s, wav, 0, 40)[0]
+    assert torch.allclose(after[0], base[0]) and not torch.allclose(after[1], base[1])
+    plain = _student("mel-tcn")
+    ref = th.student_preds(plain, wav, 0, 40)[0]
+    with torch.no_grad():
+        plain.out.weight.zero_(); plain.out.bias.zero_()
+    assert not torch.allclose(th.student_preds(plain, wav, 0, 40)[0], ref)
+    g = _student("mel-gru", target_blocks=(6,))  # the second GRU layer
+    assert th.student_preds(g, wav, 0, 40)[0].shape == (2, 2, 40, 12)
+    for bad in ((1, 2), (0,), (7,)):
+        with pytest.raises(SystemExit):
+            _student("mel-gru", target_blocks=bad)
+
+
+def test_masking_acts_only_in_training():
+    x = torch.randn(2, 16000)
+    s = _student("mel-tcn", mask_prob=0.3).train()
+    assert not torch.allclose(s(x), s(x))
+    s.eval()
+    ref = s(x)
+    assert torch.allclose(s(x), ref)
+    s.mask_prob = 0.0
+    assert torch.allclose(s(x), ref)
+    s.train()
+    assert torch.allclose(s(x), s(x))
+    keep = th.span_mask(torch.zeros(1, 4, 200), 0.05)
+    starts = [i for i in range(200) if keep[0, 0, i] == 0 and (i == 0 or keep[0, 0, i - 1] == 1)]
+    assert starts and all(i + 9 >= 199 or (keep[0, 0, i:i + 10] == 0).all() for i in starts)
 
 
 @pytest.mark.parametrize("st, tt, lag, want", [(100, 99, 0, 99), (100, 99, 4, 95), (50, 49, 49, 0), (10, 99, 2, 7)])
@@ -301,10 +367,11 @@ def test_an_export_that_disagrees_with_torch_is_refused(tmp_path, monkeypatch):
     assert not (tmp_path / "tinyhubert.json").exists()
 
 
-def test_int8_export_keeps_the_front_end_float_and_agrees_with_float(tmp_path):
+@pytest.mark.parametrize("kind", [k for k in KINDS if k in MEL])
+def test_int8_export_keeps_the_front_end_float_and_agrees_with_float(tmp_path, kind):
     import onnx
 
-    s = _student("mel-tcn")
+    s = _student(kind)
     th.export(s, tmp_path, {}, "cpu")
     g = torch.Generator().manual_seed(3)
     clips = [torch.randn(16000, generator=g) * 0.1 for _ in range(16)]
@@ -399,6 +466,36 @@ def test_several_students_share_one_teacher_pass_and_each_exports_on_its_own(tmp
         assert [v["step"] for v in vals] == [2, 4]
     with pytest.raises(SystemExit):
         th.main(common + ["--out-dir", str(tmp_path / "bad"), "--steps", "2", "--student-spec", "a:dropout=0.1"])
+
+
+def test_every_student_kind_and_distillation_option_trains_and_exports(tmp_path, monkeypatch):
+    for name, n in (("train", 6), ("val", 4)):
+        d = tmp_path / name
+        d.mkdir()
+        for i in range(n):
+            sf.write(str(d / f"{i}.wav"), np.random.RandomState(i).randn(24000).astype(np.float32) * 0.1, 16000)
+    monkeypatch.setattr(th, "Teacher", _FakeTeacher)
+    common = ["--audio-dir", str(tmp_path / "train"), "--val-dir", str(tmp_path / "val"), "--layers", "1,2",
+              "--batch-size", "2", "--crop-seconds", "1.0", "--norm-batches", "2", "--eval-every", "2", "--workers", "0",
+              "--device", "cpu", "--student", "mel-tcn", "--channels", "8", "--blocks", "2", "--feature-dim", "8",
+              "--n-mels", "16", "--attn-window", "5", "--steps", "2", "--int8"]
+    specs = {"gru": "student=mel-gru,rnn_layers=1", "attn": "student=mel-attn,attn_layers=1",
+             "bigru": "student=mel-bigru", "mix": "mixconv=1,mask_prob=0.2", "taps": "target_blocks=1",
+             "grutaps": "student=mel-gru,target_blocks=4"}
+    out = tmp_path / "many"
+    th.main(common + ["--out-dir", str(out)] + [x for n, v in specs.items() for x in ("--student-spec", f"{n}:{v}")])
+    metas = {n: json.loads((out / n / "tinyhubert.json").read_text()) for n in specs}
+    assert all((out / n / "tinyhubert.onnx").exists() and "int8_feature_cosine_mean" in metas[n] for n in specs)
+    assert metas["attn"]["student"] == "mel-attn" and metas["attn"]["args"]["attn_layers"] == 1
+    assert metas["bigru"]["streaming"] is False and metas["gru"]["streaming"] is True
+    assert metas["mix"]["args"]["mixconv"] == 1 and metas["mix"]["args"]["mask_prob"] == 0.2
+    ck = torch.load(out / "grutaps" / "last.pt")["student"]
+    assert ck["proj.0.weight"].shape == (12, 8) and "seq.1.gru.weight_hh_l0" in ck
+    one = tmp_path / "one"
+    th.main(common + ["--out-dir", str(one), "--student", "mel-attn", "--target-blocks", "3", "--mask-prob", "0.1"])
+    assert json.loads((one / "tinyhubert.json").read_text())["student"] == "mel-attn"
+    with pytest.raises(SystemExit):
+        th.main(common + ["--out-dir", str(tmp_path / "bad"), "--student-spec", "x:target_blocks=1+2"])
 
 
 def test_several_teachers_each_run_once_per_batch_and_students_follow_their_own(tmp_path, monkeypatch):
