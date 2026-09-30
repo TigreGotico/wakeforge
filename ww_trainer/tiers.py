@@ -12,7 +12,7 @@ from typing import Optional
 class TierConfig:
     """Full configuration for one hardware tier."""
     name: str
-    extractor_type: str          # "mfcc" | "onnx" | "filterbank" | "sincnet" | "gammatone" | "leaf" | etc.
+    extractor_type: str          # "mfcc" | "onnx" | "wakehubert" | "filterbank" | "sincnet" | "gammatone" | "leaf" | etc.
     head_arch: str               # "ffn" | "gru" | "cnn"
     hidden_dim: int
     n_mfcc: int = 40             # only used when extractor_type == "mfcc"
@@ -55,6 +55,15 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         description="Pre-exported SSL ONNX featurizer + FFN — use with OnnxFeatureExtractor",
         approx_params="depends on featurizer + ~200K head",
         target_hardware="x86 / GPU server",
+    ),
+    "wakehubert": TierConfig(
+        name="wakehubert",
+        extractor_type="wakehubert",
+        head_arch="gru",
+        hidden_dim=128,
+        description="Pretrained WakeHuBERT streaming featurizer (128-d, 50 fps) + GRU",
+        approx_params="0.64M feat + ~100K head",
+        target_hardware="RPi 4 / x86 laptop",
     ),
     "ssl_medium": TierConfig(
         name="ssl_medium",

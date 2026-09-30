@@ -16,6 +16,7 @@ External packages can register new extractors/heads via:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Type
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ from ww_trainer.model import (
     BaseWakeModel,
 )
 from ww_trainer.phonmatch import PhonMatchHead
+from ww_trainer.pretrained import PRETRAINED_FEATURIZERS, load_pretrained_featurizer
 
 EXTRACTOR_REGISTRY: Dict[str, type] = {
     "onnx": OnnxFeatureExtractor,
@@ -58,6 +60,7 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
     "plp": PLPExtractor,
     "pncc": PNCCExtractor,
     "cqt": CQTExtractor,
+    **{name: OnnxFeatureExtractor for name in PRETRAINED_FEATURIZERS},
 }
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
@@ -166,9 +169,15 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
 
     Args:
         arch_name: Classifier head key (must exist in ``HEAD_REGISTRY``).
-        featurizer: Path or identifier for the feature extractor.
+        featurizer: Path or identifier for the feature extractor. For the
+            ``"onnx"`` type, a name from
+            :data:`~ww_trainer.pretrained.PRETRAINED_FEATURIZERS` (e.g.
+            ``"wakehubert"``) that is not an existing file is downloaded from
+            the Hub.
         feature_dim: Override for extractor output dimension.
-        featurizer_type: Key into ``EXTRACTOR_REGISTRY``.
+        featurizer_type: Key into ``EXTRACTOR_REGISTRY``; a pretrained name
+            such as ``"wakehubert"`` or ``"wakehubert-int8"`` downloads that
+            featurizer (``featurizer`` is then ignored).
         sample_rate: Audio sample rate.
         device: Target device string.
         shared_extractor: Pre-built extractor instance (bypasses registry).
@@ -179,6 +188,8 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
         keyword: Wake-word string stored as metadata on the model; also used
             to identify the model during export and checkpoint naming.
         **kwargs: Forwarded to extractor and head constructors.
+            ``featurizer_revision`` pins the Hub revision of a pretrained
+            featurizer.
 
     Returns:
         Fully assembled ``BaseWakeModel``.
@@ -193,8 +204,14 @@ def create_model(arch_name: str, featurizer: str, feature_dim: int = None,
         extractor = shared_extractor
     else:
         n_feat = kwargs.get("n_mfcc", kwargs.get("n_mels", kwargs.get("n_filters", 40)))
+        revision = kwargs.get("featurizer_revision")
+        if (featurizer_type == "onnx" and featurizer in PRETRAINED_FEATURIZERS
+                and not os.path.exists(featurizer)):
+            featurizer_type = featurizer
         _EXTRACTOR_BUILDERS = {
             "onnx": lambda: OnnxFeatureExtractor(featurizer, sample_rate, device),
+            **{name: (lambda name=name: load_pretrained_featurizer(
+                name, revision, sample_rate, device)) for name in PRETRAINED_FEATURIZERS},
             "mfcc": lambda: MfccExtractor(sr=sample_rate, n_mfcc=n_feat),
             "filterbank": lambda: FilterbankExtractor(sr=sample_rate, n_mels=n_feat),
             "sincnet": lambda: SincNetExtractor(sr=sample_rate, n_filters=n_feat),

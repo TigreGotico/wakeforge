@@ -8,16 +8,17 @@ All extractors inherit from `BaseExtractor` — `ww_trainer/feats.py:70` and out
 
 | Extractor | Class | Line | Output Dim | ONNX Export | Learnable |
 |-----------|-------|------|------------|-------------|-----------|
-| MFCC | `MfccExtractor` | `feats.py:304` | `n_mfcc` (40) | Yes | No |
-| FilterBank | `FilterbankExtractor` | `feats.py:398` | `n_mels` (80) | Yes | No |
-| PLP | `PLPExtractor` | `feats.py:914` | `n_plp` (13) | Yes | No |
-| PNCC | `PNCCExtractor` | `feats.py:1035` | `n_pncc` (13) | Yes | No |
-| CQT | `CQTExtractor` | `feats.py:1155` | `n_bins * n_octaves` (84) | Yes | No |
-| SincNet | `SincNetExtractor` | `feats.py:470` | `n_filters` (80) | Yes | Yes (freq bounds) |
-| Gammatone | `GammatoneExtractor` | `feats.py:650` | `n_filters` (64) | Yes | No |
-| LEAF | `LEAFExtractor` | `feats.py:747` | `n_filters` (40) | Yes | Yes (full frontend) |
-| ONNX | `OnnxFeatureExtractor` | `feats.py:157` | Model-dependent | N/A (already ONNX) | No |
-| Text (ONNX) | `OnnxTextExtractor` | `feats.py:2187` | Model-dependent | N/A (already ONNX) | No |
+| MFCC | `MfccExtractor` | `feats.py:352` | `n_mfcc` (40) | Yes | No |
+| FilterBank | `FilterbankExtractor` | `feats.py:446` | `n_mels` (80) | Yes | No |
+| PLP | `PLPExtractor` | `feats.py:962` | `n_plp` (13) | Yes | No |
+| PNCC | `PNCCExtractor` | `feats.py:1083` | `n_pncc` (13) | Yes | No |
+| CQT | `CQTExtractor` | `feats.py:1203` | `n_bins * n_octaves` (84) | Yes | No |
+| SincNet | `SincNetExtractor` | `feats.py:518` | `n_filters` (80) | Yes | Yes (freq bounds) |
+| Gammatone | `GammatoneExtractor` | `feats.py:698` | `n_filters` (64) | Yes | No |
+| LEAF | `LEAFExtractor` | `feats.py:795` | `n_filters` (40) | Yes | Yes (full frontend) |
+| ONNX | `OnnxFeatureExtractor` | `feats.py:162` | Model-dependent | N/A (already ONNX) | No |
+| WakeHuBERT family (pretrained) | `load_pretrained_featurizer` | `pretrained.py:133` | 128 or 256 | N/A (already ONNX) | No |
+| Text (ONNX) | `OnnxTextExtractor` | `feats.py:2235` | Model-dependent | N/A (already ONNX) | No |
 
 > **Removed in 0.2.0:** `HubertExtractor`, `Wav2Vec2Extractor`, and `Wav2Vec2BertExtractor` training wrappers are no longer in `feats.py`. Export those models once with the standalone scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then load with `OnnxFeatureExtractor`.
 
@@ -27,14 +28,14 @@ Wrappers decorate a base extractor, adding extra feature channels.
 
 | Wrapper | Class | Line | Extra Dims | What It Adds |
 |---------|-------|------|------------|--------------|
-| Delta | `DeltaExtractor` | `feats.py:579` | `2 * base_dim` | First and second temporal derivatives |
-| SileroVAD | `SileroVadWrapper` | `feats.py:1262` | 1 | Silero VAD speech probability per frame |
-| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1397` | 4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
-| Pitch | `PitchExtractor` | `feats.py:1521` | 3 | Normalized F0, voicing probability, F0 delta |
-| MultiResolution | `MultiResolutionExtractor` | `feats.py:1658` | `coarse_dim` | Concatenates fine + coarse extractor outputs |
-| SNRAware | `SNRAwareExtractor` | `feats.py:1714` | 2 | Per-frame SNR estimate, noise floor estimate |
-| Markov | `MarkovTransitionExtractor` | `feats.py:1830` | `n_codes` | Transition probabilities from trained Markov chain |
-| HMM | `HMMStateExtractor` | `feats.py:2029` | `n_states` | Latent state posterior probabilities (Forward algorithm) |
+| Delta | `DeltaExtractor` | `feats.py:627` | `2 * base_dim` | First and second temporal derivatives |
+| SileroVAD | `SileroVadWrapper` | `feats.py:1310` | 1 | Silero VAD speech probability per frame |
+| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1445` | 4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
+| Pitch | `PitchExtractor` | `feats.py:1569` | 3 | Normalized F0, voicing probability, F0 delta |
+| MultiResolution | `MultiResolutionExtractor` | `feats.py:1706` | `coarse_dim` | Concatenates fine + coarse extractor outputs |
+| SNRAware | `SNRAwareExtractor` | `feats.py:1762` | 2 | Per-frame SNR estimate, noise floor estimate |
+| Markov | `MarkovTransitionExtractor` | `feats.py:1878` | `n_codes` | Transition probabilities from trained Markov chain |
+| HMM | `HMMStateExtractor` | `feats.py:2077` | `n_states` | Latent state posterior probabilities (Forward algorithm) |
 
 Note: Unlike other wrappers, Markov and HMM extractors **do** support direct ONNX export of the full pipeline (Base + Wrapper).
 
@@ -42,7 +43,7 @@ Note: Unlike other wrappers, Markov and HMM extractors **do** support direct ONN
 
 ## Detailed Descriptions
 
-### MfccExtractor — `feats.py:304`
+### MfccExtractor — `feats.py:352`
 
 Pure-PyTorch MFCC (Mel-Frequency Cepstral Coefficients — Davis & Mermelstein, IEEE TASSP 1980, <https://ieeexplore.ieee.org/document/1163420>). Computes STFT, mel filterbank, log, then DCT.
 
@@ -60,7 +61,7 @@ Pure-PyTorch MFCC (Mel-Frequency Cepstral Coefficients — Davis & Mermelstein, 
 
 ---
 
-### FilterbankExtractor — `feats.py:398`
+### FilterbankExtractor — `feats.py:446`
 
 Log-mel spectrogram (mel scale: Stevens, Volkmann & Newman, JASA 1937) without DCT. Same pipeline as MFCC minus the final DCT step.
 
@@ -78,7 +79,7 @@ Log-mel spectrogram (mel scale: Stevens, Volkmann & Newman, JASA 1937) without D
 
 ---
 
-### PLPExtractor — `feats.py:914`
+### PLPExtractor — `feats.py:962`
 
 Perceptual Linear Prediction (Hermansky, *Perceptual Linear Predictive (PLP) Analysis of Speech*, JASA 1990). Models human auditory perception via Bark-scale warping, equal-loudness pre-emphasis, and cube-root compression.
 
@@ -96,7 +97,7 @@ Perceptual Linear Prediction (Hermansky, *Perceptual Linear Predictive (PLP) Ana
 
 ---
 
-### PNCCExtractor — `feats.py:1035`
+### PNCCExtractor — `feats.py:1083`
 
 Power-Normalized Cepstral Coefficients (Kim & Stern, IEEE/ACM TASLP 2016, <https://ieeexplore.ieee.org/document/7439789>). Uses gammatone-like filterbank, medium-time power processing for asymmetric noise suppression, and 1/15-power nonlinearity instead of log.
 
@@ -114,7 +115,7 @@ Power-Normalized Cepstral Coefficients (Kim & Stern, IEEE/ACM TASLP 2016, <https
 
 ---
 
-### CQTExtractor — `feats.py:1155`
+### CQTExtractor — `feats.py:1203`
 
 Constant-Q Transform (Brown, *Calculation of a Constant Q Spectral Transform*, JASA 1991). Logarithmic frequency spacing gives, by construction, higher low-frequency resolution than a linear-frequency FFT.
 
@@ -132,7 +133,7 @@ Constant-Q Transform (Brown, *Calculation of a Constant Q Spectral Transform*, J
 
 ---
 
-### SincNetExtractor — `feats.py:470`
+### SincNetExtractor — `feats.py:518`
 
 Learnable sinc bandpass filters (Ravanelli & Bengio, *Speaker Recognition from Raw Waveform with SincNet*, SLT 2018). ArXiv <https://arxiv.org/abs/1808.00158>. Frequency boundaries are learned during training. Hamming window, log1p energy.
 
@@ -150,7 +151,7 @@ Learnable sinc bandpass filters (Ravanelli & Bengio, *Speaker Recognition from R
 
 ---
 
-### GammatoneExtractor — `feats.py:650`
+### GammatoneExtractor — `feats.py:698`
 
 Gammatone filterbank on ERB frequency scale (Patterson & Holdsworth, 1996 — an auditory model, not a keyword-spotting paper). Models the human auditory system's cochlear response.
 
@@ -168,7 +169,7 @@ Gammatone filterbank on ERB frequency scale (Patterson & Holdsworth, 1996 — an
 
 ---
 
-### LEAFExtractor — `feats.py:747`
+### LEAFExtractor — `feats.py:795`
 
 Learnable Audio Frontend (Zeghidour et al., *LEAF: A Learnable Frontend for Audio Classification*, ICLR 2021). ArXiv <https://arxiv.org/abs/2101.08596>. Replaces fixed filterbanks with: Gabor convolution (learnable center freq + bandwidth), squared modulus, Gaussian low-pass pooling, PCEN normalization. All components are differentiable.
 
@@ -186,9 +187,9 @@ Learnable Audio Frontend (Zeghidour et al., *LEAF: A Learnable Frontend for Audi
 
 ---
 
-### OnnxFeatureExtractor — `feats.py:157`
+### OnnxFeatureExtractor — `feats.py:162`
 
-Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:192`).
+Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:240`).
 
 **Parameters:** `model_path` (ONNX file), `sample_rate` (16000).
 
@@ -200,7 +201,95 @@ Loads any ONNX feature extractor model. Used for inference after exporting a PyT
 
 ---
 
-### OnnxTextExtractor — `feats.py:2187`
+### Pretrained speech extractors (WakeHuBERT family) — `pretrained.py:133`
+
+The pretrained extractors are small speech feature extractors distilled from
+large self-supervised speech models with masked distillation: the student
+hears noisy, partly masked audio and learns to predict the teacher's layers
+on clean speech. Each turns 16 kHz audio into 128- or 256-dimensional
+features at 50 frames per second. Each is published as ONNX, in float32 and
+int8, in its own Hugging Face model repository, all listed in the
+[ONNX feature extractors collection](https://huggingface.co/collections/TigreGotico/onnx-feature-extractors-690a3d2bced386cc3c338c77).
+
+**Use `wakehubert` (an alias of `wakehubert-tiny`) as the default.** It is the
+extractor behind the measured result below. The others are published for
+comparison: other architectures, wider outputs, and other teachers.
+
+The name is the repository name; add `-int8` for the int8 file (for example
+`wakehubert-mel-tcn-wide-int8`). Selecting a name downloads the ONNX and its
+`config.json` into the shared Hugging Face cache and wraps it in
+`OnnxFeatureExtractor`. `feature_dim`, hop, frame rate, `streaming` and the
+licence come from the config, so `--feature-dim` is not needed.
+
+| Name | Params | Streaming | Licence | What it is |
+|------|--------|-----------|---------|------------|
+| `wakehubert-tiny` (`wakehubert`) | 0.64M | yes (2.5 s) | Apache-2.0 | HuBERT-base student, causal TCN, 128-d. **Default.** |
+| `wakehubert-mel-tcn-deep` | 0.69M | yes (5 s) | Apache-2.0 | HuBERT-base student, 16-block causal TCN, 128-d |
+| `wakehubert-mel-tcn-wide` | 2.01M | yes (4 s) | Apache-2.0 | HuBERT-base student, wide causal TCN, 256-d |
+| `wakehubert-mel-gru` | 1.16M | no, recurrent | Apache-2.0 | HuBERT-base student, causal GRU, 128-d |
+| `wakehubert-mel-bigru` | 0.96M | no, offline | Apache-2.0 | HuBERT-base student, bidirectional GRU, 128-d |
+| `wakehubert-mel-attn` | 1.43M | float32 only (4 s) | Apache-2.0 | HuBERT-base student, windowed causal attention, 128-d |
+| `wakehubert-mixconv` | 0.64M | yes (5 s) | Apache-2.0 | HuBERT-base student, causal mixed-kernel TCN, 128-d |
+| `wakewav-mel-tcn` | 0.64M | yes (2.5 s) | CC-BY-SA-3.0 | WavLM-base+ student, causal TCN, 128-d |
+| `wakewav-mel-tcn-wide` | 2.01M | yes (4 s) | CC-BY-SA-3.0 | WavLM-base+ student, wide causal TCN, 256-d |
+| `wakewav-mel-gru` | 1.16M | no, recurrent | CC-BY-SA-3.0 | WavLM-base+ student, causal GRU, 128-d |
+| `wakewav-mel-bigru` | 0.96M | no, offline | CC-BY-SA-3.0 | WavLM-base+ student, bidirectional GRU, 128-d |
+| `wakexeus-mel-tcn` | 0.64M | yes (2.5 s) | CC-BY-NC-SA-4.0 | XEUS student, causal TCN, 128-d. Non-commercial. |
+| `wakexeus-mel-tcn-wide` | 2.01M | yes (4 s) | CC-BY-NC-SA-4.0 | XEUS student, wide causal TCN, 256-d. Non-commercial. |
+| `wakexeus-mel-gru` | 1.16M | no, recurrent | CC-BY-NC-SA-4.0 | XEUS student, causal GRU, 128-d. Non-commercial. |
+| `wakexeus-mel-bigru` | 0.96M | no, offline | CC-BY-NC-SA-4.0 | XEUS student, bidirectional GRU, 128-d. Non-commercial. |
+
+Selecting a `wakexeus-*` extractor logs a warning, because its CC-BY-NC-SA-4.0
+licence forbids commercial use. Every extractor can be used for training and
+for whole-window scoring with `OnnxWakeWordInferencer`.
+
+```bash
+ww_trainer-train --wake-word alexa --metadata train.csv --test-metadata test.csv \
+    --tier wakehubert --epochs 30 --save-best
+# or: --featurizer-type wakehubert-mel-tcn-wide --arch gru
+# or: --featurizer wakehubert
+# pin a revision with --featurizer-revision <commit>
+```
+
+```python
+from ww_trainer.feats import OnnxFeatureExtractor
+feat = OnnxFeatureExtractor.from_pretrained("wakehubert")        # or "wakehubert-int8"
+trainer = WakeWordTrainer(arch="gru", featurizer="", featurizer_type="wakehubert", hidden_dim=128,
+                          losses_cfg=[{"name": "bce", "weight": 1.0}])
+```
+
+**Streaming.** The streaming column gives the past audio that determines one
+output frame; no frame depends on later audio. `OnnxStreamingWakeWord`
+re-featurizes that much past audio with each chunk, so every streamed frame
+equals its offline value. `OnnxStreamingWakeWord.from_extractor` takes the hop
+and context from the extractor. It refuses extractors that cannot be streamed
+this way: the bidirectional models, the recurrent models (whose frames depend
+on all earlier audio), and `wakehubert-mel-attn-int8`, whose frames also
+depend on later audio. Feed chunks whose length is a multiple of 320 samples.
+For `wakehubert`, one 0.1 s push costs a single featurizer call over 2.6 s of
+audio, a few milliseconds on one CPU thread.
+
+```python
+sw = OnnxStreamingWakeWord.from_extractor(feat, "head_streaming.onnx", window=75)
+```
+
+**Measured result.** With `wakehubert`, a GRU head trained on 900 synthetic "alexa" clips (TTS
+with voice conversion and noise, babble, reverberation, speed and gain
+augmentation) detected 95% (95% interval 92–97) of the real speakers in the
+Picovoice wake-word benchmark at a threshold set for 0.5 false activations per
+hour; 0.31 false activations per hour were measured on 6.5 h of held-out
+streams. In babble, recall was 94 / 85 / 56% at 10 / 5 / 0 dB. These figures
+come from a single run on one English wake word.
+
+**When to use:** A speech-aware front end on CPU for wake words trained from
+synthetic data, when MFCC-based models miss too many real speakers.
+
+**Hardware fit:** Any device that runs ONNX Runtime; the int8 file suits
+low-power CPUs.
+
+---
+
+### OnnxTextExtractor — `feats.py:2235`
 
 Loads a pre-exported text encoder ONNX model and provides text-based feature embeddings as a `BaseExtractor`. Enables optional audio+text conditioning — the text features are concatenated to audio features, allowing the model to be conditioned on the target wake-word string at training time.
 
@@ -214,7 +303,7 @@ Loads a pre-exported text encoder ONNX model and provides text-based feature emb
 
 ---
 
-### DeltaExtractor — `feats.py:579`
+### DeltaExtractor — `feats.py:627`
 
 Appends first-order (delta) and second-order (delta-delta) temporal derivatives. Output dim = `3 * base_dim`. Uses +/-N frame regression formula. A standard technique in ASR feature pipelines generally, not specific to one cited paper.
 
@@ -226,7 +315,7 @@ Appends first-order (delta) and second-order (delta-delta) temporal derivatives.
 
 ---
 
-### VoiceActivityExtractor — `feats.py:1397`
+### VoiceActivityExtractor — `feats.py:1445`
 
 Appends 4 VAD features: log RMS energy, zero-crossing rate, spectral flatness, combined VAD probability.
 
@@ -236,7 +325,7 @@ Appends 4 VAD features: log RMS energy, zero-crossing rate, spectral flatness, c
 
 ---
 
-### PitchExtractor — `feats.py:1521`
+### PitchExtractor — `feats.py:1569`
 
 Appends 3 pitch features via autocorrelation: normalized F0, voicing probability, F0 delta.
 
@@ -246,7 +335,7 @@ Appends 3 pitch features via autocorrelation: normalized F0, voicing probability
 
 ---
 
-### MultiResolutionExtractor — `feats.py:1658`
+### MultiResolutionExtractor — `feats.py:1706`
 
 Concatenates outputs from two extractors at different time resolutions. Coarse features are interpolated to match fine extractor's time axis.
 
@@ -256,7 +345,7 @@ Concatenates outputs from two extractors at different time resolutions. Coarse f
 
 ---
 
-### SNRAwareExtractor — `feats.py:1714`
+### SNRAwareExtractor — `feats.py:1762`
 
 Appends 2 SNR features: per-frame SNR estimate and noise floor estimate (`feats.py:1659`). Uses percentile-based noise floor tracking.
 
@@ -266,7 +355,7 @@ Appends 2 SNR features: per-frame SNR estimate and noise floor estimate (`feats.
 
 ---
 
-### MarkovTransitionExtractor — `feats.py:1830`
+### MarkovTransitionExtractor — `feats.py:1878`
 
 Classical sequential modeling using a Markov chain on top of quantized features. Captures the probability of acoustic patterns following one another. A generic technique, not from one specific cited paper.
 
@@ -280,7 +369,7 @@ Classical sequential modeling using a Markov chain on top of quantized features.
 
 ---
 
-### HMMStateExtractor — `feats.py:2029`
+### HMMStateExtractor — `feats.py:2077`
 
 Hidden Markov Model state posterior extraction. Models the wake word as a sequence of latent acoustic units (like phonemes).
 
@@ -294,7 +383,7 @@ Hidden Markov Model state posterior extraction. Models the wake word as a sequen
 
 ---
 
-### SileroVadWrapper — `feats.py:1262`
+### SileroVadWrapper — `feats.py:1310`
 
 Neural VAD enrichment stream using the pre-trained `snakers4/silero-vad` (GitHub <https://github.com/snakers4/silero-vad>). Appends a speech probability channel to every frame.
 

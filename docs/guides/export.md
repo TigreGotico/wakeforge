@@ -64,7 +64,7 @@ After export, `OnnxWakeWordInferencer` (`inference.py:111`) runs inference with 
 
 ## 2. Exporting `MfccExtractor`
 
-`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:358`) specifically to remain ONNX-exportable.
+`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:406`) specifically to remain ONNX-exportable.
 
 ```python
 from ww_trainer.feats import MfccExtractor
@@ -100,7 +100,7 @@ Large SSL models (HuBERT, Wav2Vec2, Wav2Vec2-BERT) are exported to ONNX once via
 .venv/bin/python scripts/export_w2vbert.py --out w2vbert.onnx
 ```
 
-After export, load with `OnnxFeatureExtractor` — `ww_trainer/feats.py:157`:
+After export, load with `OnnxFeatureExtractor` — `ww_trainer/feats.py:162`:
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
@@ -260,7 +260,7 @@ Any model with `*** HIGH ***` on a row has MaxAE ≥ 1e-3 and is flagged before 
 
 ## 8. Loading in `OnnxFeatureExtractor`
 
-After exporting, load the ONNX extractor back into training with `OnnxFeatureExtractor` (`feats.py:157`):
+After exporting, load the ONNX extractor back into training with `OnnxFeatureExtractor` (`feats.py:162`):
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor

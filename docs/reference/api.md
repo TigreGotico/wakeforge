@@ -124,7 +124,7 @@ Dynamic axes: batch size and time dimension. Opset 18. Verifies the exported mod
 
 ---
 
-### `OnnxFeatureExtractor` — `feats.py:157`
+### `OnnxFeatureExtractor` — `feats.py:162`
 
 ```python
 class OnnxFeatureExtractor(BaseExtractor)
@@ -132,19 +132,22 @@ class OnnxFeatureExtractor(BaseExtractor)
 
 Wraps a pre-exported extractor ONNX file as a `BaseExtractor`. Used for training when the extractor has already been exported (e.g. HuBERT exported once, reused across many training runs).
 
-#### `__init__` — `feats.py:158`
+#### `__init__` — `feats.py:180`
 
 ```python
-def __init__(self, model_path: str, sample_rate: int = 16000, device: str = "auto")
+def __init__(self, model_path: str, sample_rate: int = 16000, device: str = "auto",
+             feature_dim: int | None = None, hop_samples: int = 160,
+             frame_rate_hz: float | None = None, context_samples: int = 0,
+             streaming: bool = True, license: str = "")
 ```
 
-Loads `model_path` into an `onnxruntime.InferenceSession`.
+Loads `model_path` into an `onnxruntime.InferenceSession`. `hop_samples`, `frame_rate_hz`, `context_samples` (the past audio that determines one frame) and `streaming` describe the output frames for streaming, and `license` the model's licence; `OnnxFeatureExtractor.from_pretrained("wakehubert")` fills them and `feature_dim`.
 
-#### `feature_dim` property — `feats.py:178`
+#### `feature_dim` property — `feats.py:210`
 
-Reads from the ONNX output shape. If the last dimension is dynamic (None), runs a dummy `[1, sample_rate]` inference to determine the dimension at runtime.
+Returns `feature_dim` when it was given; otherwise reads from the ONNX output shape. If the last dimension is dynamic (None), runs a dummy `[1, sample_rate]` inference to determine the dimension at runtime.
 
-#### `forward` — `feats.py:246`
+#### `forward` — `feats.py:294`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -154,7 +157,7 @@ Processes each waveform individually (batch size 1 per ONNX run), pads results t
 
 ---
 
-### `MfccExtractor` — `feats.py:304`
+### `MfccExtractor` — `feats.py:352`
 
 ```python
 class MfccExtractor(BaseExtractor)
@@ -164,7 +167,7 @@ Pure-PyTorch MFCC extractor. Fully ONNX-exportable. Uses `return_complex=False` 
 
 A pre-exported version is available at https://huggingface.co/TigreGotico/mfcc-onnx.
 
-#### `__init__` — `feats.py:310`
+#### `__init__` — `feats.py:358`
 
 ```python
 def __init__(
@@ -191,11 +194,11 @@ def __init__(
 
 Registers `mel_fb` and `dct_mat` as buffers so they move with the model's device.
 
-#### `feature_dim` property — `feats.py:326`
+#### `feature_dim` property — `feats.py:374`
 
 Returns `self.n_mfcc`.
 
-#### `forward` — `feats.py:358`
+#### `forward` — `feats.py:406`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -626,7 +629,7 @@ EXTRACTOR_REGISTRY = {
 }
 ```
 
-Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:157`.
+Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:160`.
 
 For HuBERT and Wav2Vec2: export the SSL model to ONNX once with the standalone export scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then use `featurizer_type="onnx"` to load it as an `OnnxFeatureExtractor`. This guarantees train/inference feature parity.
 
@@ -785,7 +788,7 @@ Final model saved as `output_dir/final_model.pt`. Mining cache saved as `output_
 
 ---
 
-### CLI: `train` command — `cli.py:188`
+### CLI: `train` command — `cli.py:194`
 
 Entry point: `ww_trainer-train` (defined in `pyproject.toml`, implemented in `cli.py`).
 
@@ -831,7 +834,7 @@ Keys: `"micro"`, `"small"`, `"medium"`, `"large"`. See [architecture.md](../inte
 
 ---
 
-### `get_tier` — `tiers.py:201`
+### `get_tier` — `tiers.py:210`
 
 ```python
 def get_tier(name: str) -> TierConfig
@@ -841,7 +844,7 @@ Returns `HARDWARE_TIERS[name]`. Raises `ValueError` with available names if `nam
 
 ---
 
-### `list_tiers` — `tiers.py:188`
+### `list_tiers` — `tiers.py:197`
 
 ```python
 def list_tiers() -> str

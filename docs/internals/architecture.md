@@ -163,12 +163,12 @@ When `quantize=True`:
 
 | Class | Type | `feature_dim` source | Output shape | ONNX-exportable | Requires |
 |-------|------|---------------------|--------------|-----------------|---------|
-| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:304`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
-| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:157`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
+| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:352`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
+| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:162`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
 | `HubertExtractor` | Neural (HuBERT) | `hubert.config.hidden_size` (`feats.py:264`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 | `Wav2Vec2Extractor` | Neural (Wav2Vec2) | `model.config.hidden_size` (`feats.py:296`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 
-`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:304`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
+`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:352`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
 
 `HubertExtractor` and `Wav2Vec2Extractor` mark `_REQUIRES_TRANSFORMERS = True` (`feats.py:249`, `feats.py:283`) as a documentation convention. Import is guarded with `try/except ImportError` in both `__init__` methods and in `WakeWordTrainer.create_model` (`trainer.py:37`–`47`).
 
@@ -185,7 +185,7 @@ Defined in `ww_trainer/tiers.py`. Each tier is a `TierConfig` dataclass (`tiers.
 | `medium` | `onnx` | `ffn` | 128 | — | No | 1 | ~90M feat + 200K head | RPi 4, laptop |
 | `large` | `hubert` | `gru` | 256 | — | Yes | 2 | ~300M feat + 1M head | Server/workstation |
 
-`HARDWARE_TIERS` dict: `tiers.py:201`. `get_tier(name)`: `tiers.py:201`. `list_tiers()` formatted table: `tiers.py:201`.
+`HARDWARE_TIERS` dict: `tiers.py:210`. `get_tier(name)`: `tiers.py:210`. `list_tiers()` formatted table: `tiers.py:210`.
 
 When `--tier` is passed to the CLI (`cli.py:230`–`239`), it sets `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and optionally `n_mfcc`.
 

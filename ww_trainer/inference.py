@@ -357,6 +357,29 @@ class OnnxStreamingWakeWord:
         self.context = context_samples    # left-context carried for clean MFCC
         self.reset()
 
+    @classmethod
+    def from_extractor(cls, extractor, streaming_head_path: str, window: int = 100,
+                       hidden_dim: int = 128) -> "OnnxStreamingWakeWord":
+        """Build a streamer for an :class:`~ww_trainer.feats.OnnxFeatureExtractor`.
+
+        Takes the featurizer path, hop and context from the extractor, e.g. one
+        from :meth:`~ww_trainer.feats.OnnxFeatureExtractor.from_pretrained`.
+
+        Raises:
+            ValueError: If the extractor cannot be streamed: its frames depend
+                on later audio (bidirectional) or on unbounded history
+                (recurrent), so re-featurizing a window of past audio would not
+                reproduce the features the head was trained on.
+        """
+        if not extractor.streaming:
+            raise ValueError(
+                f"Featurizer {extractor.model_path} is not streamable: its frames depend "
+                "on later audio or on unbounded history. Score whole windows with "
+                "OnnxWakeWordInferencer instead, or pick a streaming featurizer.")
+        kwargs = {"context_samples": extractor.context_samples} if extractor.context_samples else {}
+        return cls(extractor.model_path, streaming_head_path, window=window,
+                   hidden_dim=hidden_dim, hop_samples=extractor.hop_samples, **kwargs)
+
     def reset(self) -> None:
         """Clear the carried GRU state and audio context (call between utterances)."""
         self._h = np.zeros((1, 1, self.hidden_dim), dtype=np.float32)

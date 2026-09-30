@@ -153,10 +153,42 @@ class BaseExtractor(torch.nn.Module):
             quantize_dynamic(out, out_int8, op_types_to_quantize=["MatMul", "Gemm"], weight_type=QuantType.QInt8)
             logger.info("Quantized ONNX model saved to %s", out_int8)
 
+    @property
+    def cache_key(self) -> str:
+        """Identity string for on-disk feature caches."""
+        return f"{self.feature_dim}_{self.sample_rate}"
+
 
 class OnnxFeatureExtractor(BaseExtractor):
-    def __init__(self, model_path, sample_rate: int = 16000, device="auto"):
+    """Frozen feature extractor backed by an ONNX graph ``[B, samples] -> [B, frames, F]``.
+
+    Args:
+        model_path: Path to the ONNX file.
+        sample_rate: Audio sample rate the graph expects.
+        device: ``"cpu"``, ``"cuda"`` or ``"auto"``.
+        feature_dim: Output feature size; read from the graph when omitted.
+        hop_samples: Samples per output frame, for streaming frame accounting.
+        frame_rate_hz: Output frames per second.
+        context_samples: Past audio that determines one output frame; a stream
+            must re-featurize at least this much with each chunk for its frames
+            to equal offline ones (0 when unknown).
+        streaming: Whether frames can be streamed by re-featurizing a bounded
+            window of past audio (``False`` for bidirectional models).
+        license: Licence of the ONNX model, when known.
+    """
+
+    def __init__(self, model_path, sample_rate: int = 16000, device="auto",
+                 feature_dim: Optional[int] = None, hop_samples: int = 160,
+                 frame_rate_hz: Optional[float] = None, context_samples: int = 0,
+                 streaming: bool = True, license: str = ""):
         super().__init__(sample_rate, device)
+        self.model_path = str(model_path)
+        self._feature_dim = feature_dim
+        self.hop_samples = hop_samples
+        self.frame_rate_hz = frame_rate_hz or sample_rate / hop_samples
+        self.context_samples = context_samples
+        self.streaming = streaming
+        self.license = license
 
         # 1. Determine Execution Providers based on device
         if self.device.type == "cuda":
@@ -176,6 +208,8 @@ class OnnxFeatureExtractor(BaseExtractor):
 
     @property
     def feature_dim(self) -> int:
+        if self._feature_dim is not None:
+            return self._feature_dim
         shape = self.output_info.shape
         if shape is not None and len(shape) >= 1 and shape[-1] is not None:
             try:
@@ -187,6 +221,20 @@ class OnnxFeatureExtractor(BaseExtractor):
         dummy = np.zeros((1, self.sample_rate), dtype=np.float32)
         out = self.sess.run([self.output_name], {self.input_name: dummy})[0]
         return int(out.shape[-1])
+
+    @property
+    def cache_key(self) -> str:
+        return f"{super().cache_key}_{self.model_path}"
+
+    @classmethod
+    def from_pretrained(cls, name: str, revision: Optional[str] = None,
+                        sample_rate: int = 16000, device: str = "auto") -> "OnnxFeatureExtractor":
+        """Download a named pretrained featurizer (e.g. ``"wakehubert"``) from the Hub.
+
+        See :data:`ww_trainer.pretrained.PRETRAINED_FEATURIZERS` for the names.
+        """
+        from ww_trainer.pretrained import load_pretrained_featurizer
+        return load_pretrained_featurizer(name, revision, sample_rate, device)
 
     @classmethod
     def from_whisper(cls, model_size: str = "tiny", cache_dir: str = None,

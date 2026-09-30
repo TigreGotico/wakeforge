@@ -60,6 +60,7 @@ Track D — Advanced
   nb07  TinyHuBERT distillation         Researcher          ~90 min T4 (GPU required)
   nb08  WakeHuBERT inference            ML Eng / Researcher ~30 min T4 / ~2 h CPU
   nb09  Full ablation                   Researcher          ~3–5 h T4 / multi-day CPU
+  nb12  Pretrained WakeHuBERT featurizer ML Eng / Researcher CPU (300 positives)
 ```
 
 ---
@@ -180,6 +181,21 @@ top-N survivors across multiple tiers.
 a single best config.
 **Runtime:** ~2–4 h T4.
 **Key outputs:** Pareto-front plot, best HP JSON, trained multi-tier ONNX files.
+
+---
+
+### nb12 — Pretrained WakeHuBERT Featurizer
+**File:** `nb12_wakehubert.ipynb`
+**Purpose:** Train a detector for a typed wake word on the published WakeHuBERT featurizer
+(`featurizer_type="wakehubert"`), with no distillation step: synthetic positives from
+wakeforge's datagen, negatives and augmentation folders as in the quickstart, a GRU head,
+ONNX export and a stateful streaming demo.
+**Prerequisites:** nb01.
+**What you learn:** Selecting a pretrained featurizer by name; streaming a 50 fps featurizer
+through `OnnxStreamingWakeWord`.
+**Runtime:** sized for CPU with 300 positives. The published WakeHuBERT results used about
+900 augmented positives.
+**Key outputs:** `best_f1.onnx`, `head_streaming.onnx`, a streaming score trace.
 
 ---
 
