@@ -38,6 +38,7 @@ dev = [
     "umap-learn",      # visualisation tests
     "optuna",          # sweep tests
     "voiceclonnx",     # VC delegation tests
+    "torchvision",     # EfficientNet head tests
 ]
 
 # Alias used by CI (build-tests.yml installs [test])
@@ -49,6 +50,7 @@ test = [
     "umap-learn",
     "optuna",
     "voiceclonnx",
+    "torchvision",
 ]
 
 # ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─

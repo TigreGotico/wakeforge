@@ -39,7 +39,7 @@ from ww_trainer.feats import (
     SileroVadWrapper,
 )
 from ww_trainer.model import (
-    FfnClassifierHead, GruClassifierHead, CnnClassifierHead, BCResNetHead,
+    FfnClassifierHead, GruClassifierHead, BiGruClassifierHead, CnnClassifierHead, BCResNetHead,
     TCResNetHead, DSCNNHead, MatchboxNetHead, Res15Head,
     KWTHead, ConformerHead, CRNNHead, MixConvHead,
     EfficientNetHead, OCSVMHead,
@@ -65,7 +65,8 @@ EXTRACTOR_REGISTRY: Dict[str, type] = {
 
 HEAD_REGISTRY: Dict[str, Tuple[Type, Set[str]]] = {
     "ffn": (FfnClassifierHead, {"hidden_dim", "dropout"}),
-    "gru": (GruClassifierHead, {"hidden_dim", "dropout", "bidirectional", "gru_n_layers"}),
+    "gru": (GruClassifierHead, {"hidden_dim", "linear_dim", "dropout", "bidirectional", "gru_n_layers"}),
+    "bigru": (BiGruClassifierHead, {"hidden_dim", "linear_dim", "dropout", "gru_n_layers"}),
     "cnn": (CnnClassifierHead, {"conv_dim", "linear_dim", "kernel_size", "stride"}),
     "bcresnet": (BCResNetHead, {"tau"}),
     "tcresnet": (TCResNetHead, {"variant", "channels", "kernel_size"}),

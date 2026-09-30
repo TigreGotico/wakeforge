@@ -8,35 +8,35 @@ Deep-dive into the system design: why it is structured the way it is, how data f
 
 The entire system rests on three abstract types defined in `ww_trainer/feats.py` and `ww_trainer/model.py`.
 
-### `BaseExtractor` — `ww_trainer/feats.py:70`
+### `BaseExtractor` — `ww_trainer/feats.py:77`
 
 Converts raw audio `[B, T]` float32 waveforms into dense frame-level feature tensors `[B, T_frames, F]`.
 
 Every concrete extractor must:
-1. Implement the `feature_dim` property (`feats.py:97`) — the integer `F` that downstream heads need to know their `input_size`.
-2. Implement `forward(wavs: WavInput) -> Tensor[B, T_frames, F]` (`feats.py:101`).
-3. Inherit `export_to_onnx(out, quantize=False, dynamo=False)` from the base class (`feats.py:107`).
+1. Implement the `feature_dim` property (`feats.py:104`) — the integer `F` that downstream heads need to know their `input_size`.
+2. Implement `forward(wavs: WavInput) -> Tensor[B, T_frames, F]` (`feats.py:108`).
+3. Inherit `export_to_onnx(out, quantize=False, dynamo=False)` from the base class (`feats.py:114`).
 
 The split between extractor and head exists so that a heavy neural extractor (HuBERT, ~90M parameters) can be:
 - Exported to ONNX **once** and reused across many training runs without re-exporting.
 - Shared by multiple heads simultaneously via the `shared_extractor` argument to `WakeWordTrainer`.
 - Replaced at inference time without changing the head.
 
-### `ClassifierHead` — `ww_trainer/model.py:27`
+### `ClassifierHead` — `ww_trainer/model.py:79`
 
 Maps feature frames `[B, T_frames, F]` to a scalar logit `[B]` (pre-sigmoid).
 
 Every concrete head must implement:
-- `forward(feats) -> Tensor[B]` (`model.py:45`) — full forward pass returning logits.
-- `embed(feats) -> Tensor[B, D]` (`model.py:49`) — returns the pre-logit embedding for metric learning and visualization.
+- `forward(feats) -> Tensor[B]` (`model.py:97`) — full forward pass returning logits.
+- `embed(feats) -> Tensor[B, D]` (`model.py:101`) — returns the pre-logit embedding for metric learning and visualization.
 
 The `embed()` method is what makes metric losses (triplet, RPPL, cn2pair) possible.
 
-### `BaseWakeModel` — `ww_trainer/model.py:93`
+### `BaseWakeModel` — `ww_trainer/model.py:145`
 
 Combines one extractor and one head. Holds no learnable parameters directly; they all live in the extractor and head submodules.
 
-`BaseWakeModel.forward(wavs)` (`model.py:147`) calls `feature_extractor(wavs)` then `classifier.forward(feats)`. `BaseWakeModel.embed(wavs)` (`model.py:168`) calls `feature_extractor(wavs)` then `classifier.embed(feats)`.
+`BaseWakeModel.forward(wavs)` (`model.py:253`) calls `feature_extractor(wavs)` then `classifier.forward(feats)`. `BaseWakeModel.embed(wavs)` (`model.py:168`) calls `feature_extractor(wavs)` then `classifier.embed(feats)`.
 
 ---
 
@@ -64,7 +64,7 @@ This modularity allows for "Best-of-Breed" component swapping (e.g., swapping a 
 CSV file: /path/audio.wav,1
      |
      v
-AudioDataset.__getitem__          dataset.py:315
+AudioDataset.__getitem__          dataset.py:325
   FeatureCache.get(path)?         cache.py (if cache hit + no augment → skip load)
   torchaudio.load(path)
   resample to 16 kHz if needed
@@ -72,24 +72,24 @@ AudioDataset.__getitem__          dataset.py:315
   FeatureCache.put(path) if no augment
      |  wav: Tensor[T]  float32
      v
-collate_fn(batch, device)         dataset.py:371
+collate_fn(batch, device)         dataset.py:431
   zero-pad all wavs to max_len
   stack into Tensor[B, T]
   move to device
      |  wavs: Tensor[B, T]
      |  labels: Tensor[B]  float32
      v
-BaseWakeModel.forward(wavs)       model.py:147
+BaseWakeModel.forward(wavs)       model.py:253
   BaseExtractor.forward(wavs)
      |  feats: Tensor[B, T_frames, F]
   ClassifierHead.forward(feats)
      |  logits: Tensor[B]
      v
-BaseWakeModel.embed(wavs)         model.py:168
+BaseWakeModel.embed(wavs)         model.py:273
   (same extractor call, head.embed)
      |  embeds: Tensor[B, D]
      v
-LossManager.compute_loss(         loss.py:1391
+LossManager.compute_loss(         loss.py:1394
   model, wavs, labels, dataset_ref)
   → total scalar loss
      v
@@ -102,7 +102,7 @@ optimizer.step()
 audio: np.ndarray  shape [T]  float32
      |
      v
-OnnxWakeWordInferencer.infer(audio)    inference.py:212
+OnnxWakeWordInferencer.infer(audio)    inference.py:242
   audio[np.newaxis, :]  →  shape [1, T]
   extractor ONNX session.run()
      |  feats: np.ndarray  [1, T_frames, F]
@@ -121,7 +121,7 @@ audio_chunk: np.ndarray  shape [chunk_T]
 cache: np.ndarray | None  shape [T_cached, F]
      |
      v
-OnnxWakeWordInferencer.infer_streaming    inference.py:276
+OnnxWakeWordInferencer.infer_streaming    inference.py:306
   extractor ONNX session on [1, chunk_T]
      |  new_feats: [T_new, F]
   cache = concat(cache, new_feats)
@@ -149,13 +149,13 @@ ClassifierHead (GruClassifierHead)      head.onnx
 No PyTorch at runtime.
 ```
 
-`BaseExtractor.export_to_onnx` (`feats.py:107`): uses `torch.onnx.export` with opset 18, dynamic axes for both batch and time dimensions, `do_constant_folding=True`, `TrainingMode.EVAL`. Verifies with `onnx.checker.check_model`.
+`BaseExtractor.export_to_onnx` (`feats.py:114`): uses `torch.onnx.export` with opset 18, dynamic axes for both batch and time dimensions, `do_constant_folding=True`, `TrainingMode.EVAL`. Verifies with `onnx.checker.check_model`.
 
-`ClassifierHead.export_to_onnx` (`model.py:52`): same approach. Dynamic axis on the time dimension (`T_features`) of the feature input. Input name `input_features`; output name `logits`.
+`ClassifierHead.export_to_onnx` (`model.py:104`): same approach. Dynamic axis on the time dimension (`T_features`) of the feature input. Input name `input_features`; output name `logits`.
 
 When `quantize=True`:
-- `BaseExtractor.export_to_onnx`: writes both `_int16.onnx` and `_int8.onnx` via `quantize_dynamic` (`feats.py:107`–`113`).
-- `ClassifierHead.export_to_onnx`: writes `_int8.onnx` only (`model.py:52`–`57`).
+- `BaseExtractor.export_to_onnx`: writes both `_int16.onnx` and `_int8.onnx` via `quantize_dynamic` (`feats.py:114`–`120`).
+- `ClassifierHead.export_to_onnx`: writes `_int8.onnx` only (`model.py:104`–`109`).
 
 ---
 
@@ -163,12 +163,12 @@ When `quantize=True`:
 
 | Class | Type | `feature_dim` source | Output shape | ONNX-exportable | Requires |
 |-------|------|---------------------|--------------|-----------------|---------|
-| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:352`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
-| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:162`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
+| `MfccExtractor` | Classical DSP | `n_mfcc` parameter (`feats.py:366`) | `[B, T, n_mfcc]` | Yes (pure PyTorch) | `torch` only |
+| `OnnxFeatureExtractor` | Runtime ONNX loader | ONNX output shape or dummy run (`feats.py:169`) | `[B, T, F]` | Already ONNX | `onnxruntime` |
 | `HubertExtractor` | Neural (HuBERT) | `hubert.config.hidden_size` (`feats.py:264`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 | `Wav2Vec2Extractor` | Neural (Wav2Vec2) | `model.config.hidden_size` (`feats.py:296`) | `[B, T, hidden]` | Yes (via base class) | `transformers` |
 
-`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:352`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
+`MfccExtractor` uses `return_complex=False` in `torch.stft` (`feats.py:366`) specifically to remain ONNX-exportable (complex return values are not yet supported by the ONNX exporter).
 
 `HubertExtractor` and `Wav2Vec2Extractor` mark `_REQUIRES_TRANSFORMERS = True` (`feats.py:249`, `feats.py:283`) as a documentation convention. Import is guarded with `try/except ImportError` in both `__init__` methods and in `WakeWordTrainer.create_model` (`trainer.py:37`–`47`).
 
@@ -185,7 +185,7 @@ Defined in `ww_trainer/tiers.py`. Each tier is a `TierConfig` dataclass (`tiers.
 | `medium` | `onnx` | `ffn` | 128 | — | No | 1 | ~90M feat + 200K head | RPi 4, laptop |
 | `large` | `hubert` | `gru` | 256 | — | Yes | 2 | ~300M feat + 1M head | Server/workstation |
 
-`HARDWARE_TIERS` dict: `tiers.py:210`. `get_tier(name)`: `tiers.py:210`. `list_tiers()` formatted table: `tiers.py:210`.
+`HARDWARE_TIERS` dict: `tiers.py:220`. `get_tier(name)`: `tiers.py:220`. `list_tiers()` formatted table: `tiers.py:220`.
 
 When `--tier` is passed to the CLI (`cli.py:230`–`239`), it sets `arch`, `featurizer_type`, `hidden_dim`, `bidirectional`, `gru_n_layers`, and optionally `n_mfcc`.
 
@@ -211,13 +211,13 @@ trainer_b = WakeWordTrainer(
 )
 ```
 
-`WakeWordTrainer.create_model` checks `if shared_extractor is not None` first (`trainer.py:251`) and skips constructing a new extractor if one is provided.
+`WakeWordTrainer.create_model` checks `if shared_extractor is not None` first (`trainer.py:255`) and skips constructing a new extractor if one is provided.
 
 ---
 
 ## Sliding Feature Cache
 
-`SlidingFeatureCacheTensor` — `ww_trainer/feats.py:31`
+`SlidingFeatureCacheTensor` — `ww_trainer/feats.py:38`
 
 Used in streaming inference to accumulate the most recent `window_size` feature frames without recomputing the entire history.
 
@@ -228,13 +228,13 @@ Used in streaming inference to accumulate the most recent `window_size` feature 
 **`forward(new_feats: Tensor[T_new, F])` — `feats.py:36`:**
 
 1. Computes shift = `max(0, current_len + T_new - window_size)`.
-2. If shift > 0, copies `feature_cache[shift:current_len]` to `feature_cache[:new_len]` using `.clone()` to avoid aliasing (`feats.py:46`).
+2. If shift > 0, copies `feature_cache[shift:current_len]` to `feature_cache[:new_len]` using `.clone()` to avoid aliasing (`feats.py:53`).
 3. Appends `new_feats` at position `current_len`.
 4. Returns `feature_cache[:current_len]` — always a `[T_current, F]` slice.
 
-The cache is updated **in-place** (it is a `nn.Module` buffer). The ONNX inference equivalent is the numpy rolling array in `OnnxWakeWordInferencer.infer_streaming` (`inference.py:276`–`281`), which keeps the last 50 frames by simple array concatenation and slicing.
+The cache is updated **in-place** (it is a `nn.Module` buffer). The ONNX inference equivalent is the numpy rolling array in `OnnxWakeWordInferencer.infer_streaming` (`inference.py:306`–`311`), which keeps the last 50 frames by simple array concatenation and slicing.
 
-`BaseWakeModel.forward_streaming` (`model.py:200`) uses this cache:
+`BaseWakeModel.forward_streaming` (`model.py:303`) uses this cache:
 
 ```python
 feats = self.feature_extractor([audio_chunk])   # [1, T_new, F]
@@ -249,11 +249,11 @@ return torch.sigmoid(logit).item()
 
 ### ONNX-only inference
 
-PyTorch is not required at runtime. This is intentional: wake word detection runs on embedded devices (RPi Zero, MCUs) where installing PyTorch is impractical. `OnnxWakeWordInferencer` (`inference.py:111`) imports only `numpy` and `onnxruntime`.
+PyTorch is not required at runtime. This is intentional: wake word detection runs on embedded devices (RPi Zero, MCUs) where installing PyTorch is impractical. `OnnxWakeWordInferencer` (`inference.py:137`) imports only `numpy` and `onnxruntime`.
 
 ### `feature_dim` as a property, not a constructor argument
 
-If `feature_dim` were a constructor argument to the head, callers would have to know it upfront. By making it a property on every `BaseExtractor` subclass, `WakeWordTrainer.create_model` (`trainer.py:251`–`252`) can auto-detect it:
+If `feature_dim` were a constructor argument to the head, callers would have to know it upfront. By making it a property on every `BaseExtractor` subclass, `WakeWordTrainer.create_model` (`trainer.py:255`–`256`) can auto-detect it:
 
 ```python
 if feature_dim is None:
@@ -264,7 +264,7 @@ This allows the tier presets to work without specifying the dimension explicitly
 
 ### Separate `.pt` and `.ts` checkpoint files
 
-`save_checkpoint` (`checkpoint.py:13`) writes two files:
+`save_checkpoint` (`checkpoint.py:15`) writes two files:
 - `name.pt` — model weights only (via `model.save_checkpoint`).
 - `name.ts` — trainer state: epoch, metrics dict, optimizer state.
 

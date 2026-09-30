@@ -13,7 +13,7 @@ class TierConfig:
     """Full configuration for one hardware tier."""
     name: str
     extractor_type: str          # "mfcc" | "onnx" | "wakehubert" | "filterbank" | "sincnet" | "gammatone" | "leaf" | etc.
-    head_arch: str               # "ffn" | "gru" | "cnn"
+    head_arch: str               # key in HEAD_REGISTRY: "ffn" | "gru" | "bigru" | "cnn" | ...
     hidden_dim: int
     n_mfcc: int = 40             # only used when extractor_type == "mfcc"
     bidirectional: bool = False  # only used when head_arch == "gru"
@@ -63,6 +63,16 @@ HARDWARE_TIERS: dict[str, TierConfig] = {
         hidden_dim=128,
         description="Pretrained WakeHuBERT streaming featurizer (128-d, 50 fps) + GRU",
         approx_params="0.64M feat + ~100K head",
+        target_hardware="RPi 4 / x86 laptop",
+    ),
+    "wakehubert-bigru": TierConfig(
+        name="wakehubert-bigru",
+        extractor_type="wakehubert",
+        head_arch="bigru",
+        hidden_dim=128,
+        bidirectional=True,
+        description="Pretrained WakeHuBERT featurizer (128-d, 50 fps) + bidirectional GRU (whole-window scoring)",
+        approx_params="0.64M feat + ~200K head",
         target_hardware="RPi 4 / x86 laptop",
     ),
     "ssl_medium": TierConfig(

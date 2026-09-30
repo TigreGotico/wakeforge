@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-import torchaudio
 from torch.utils.data import DataLoader
 
 from ww_trainer.dataset import AudioDataset, collate_fn
@@ -37,6 +36,10 @@ from ww_trainer.loss import LossManager
 from ww_trainer.metrics import find_optimal_threshold
 from ww_trainer.mining import mine_hard_negatives, save_mining_cache, load_mining_cache
 from ww_trainer.checkpoint import save_intermediate_checkpoint
+from ww_trainer.feats import frames_per_second
+from ww_trainer.feature_store import store_for
+from ww_trainer.loop import clip_frames, with_embed_dim
+from ww_trainer.model import batch_forward
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +229,18 @@ def infinite_training_loop(
     readiness_every: int = 3,
     cache_file: Optional[str] = None,  # path to persist mining cache across runs
     resume_cache: bool = True,
+    cache_features: Optional[bool] = None,
+    feature_cache_variants: int = 0,
+    feature_cache_dir: Optional[str] = None,
     **kwargs: Any,
 ) -> float:
-    """Open-ended training loop; returns best F1 achieved."""
+    """Open-ended training loop; returns best F1 achieved.
+
+    With a frozen featurizer, features are computed once per clip and reused
+    across epochs, mining scans and evaluation (``cache_features``,
+    ``feature_cache_variants`` and ``feature_cache_dir`` as in
+    :func:`~ww_trainer.loop.training_loop`).
+    """
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +258,10 @@ def infinite_training_loop(
     model = trainer.model
     device = trainer.device
 
-    loss_manager = LossManager(trainer.losses_cfg or [{"name": "bce", "weight": 1.0}], device=device)
+    loss_manager = LossManager(
+        with_embed_dim(trainer.losses_cfg or [{"name": "bce", "weight": 1.0}], model),
+        device=device,
+    )
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad] + loss_manager.parameters(),
         lr=lr, weight_decay=1e-4,
@@ -254,6 +269,15 @@ def infinite_training_loop(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=20, T_mult=2, eta_min=lr * 0.01,
     )
+    extractor = model.feature_extractor
+    fps = frames_per_second(extractor)
+    if spec_augment:
+        from ww_trainer.augment import SpectrogramAugment
+        loss_manager.set_spec_augment(
+            SpectrogramAugment.for_features(model.classifier.input_size, fps))
+    feature_store = store_for(extractor, cache_features, feature_cache_dir,
+                              trainer.unfreeze_at_epoch)
+    trainer.stream_window = clip_frames(wakes, fps)
 
     # Mining cache
     hardness_cache: Dict[str, float] = {}
@@ -330,6 +354,7 @@ def infinite_training_loop(
             max_cache_size=min(100_000, len(nww_pool)),
             wake_cache=epoch_wakes,
             rppl_proto=loss_proto,
+            feature_store=feature_store,
         )
 
         # Persist cache
@@ -391,13 +416,12 @@ def infinite_training_loop(
                 try:
                     import numpy as np
                     def _get_embeds(samples):
-                        wavs = []
-                        for item in samples:
-                            p = item[0] if isinstance(item, (list, tuple)) else item
-                            wav, _ = torchaudio.load(p)
-                            wavs.append(wav.squeeze(0))
+                        embed_loader = DataLoader(
+                            AudioDataset(samples, feature_store=feature_store),
+                            batch_size=batch_size, collate_fn=lambda b: collate_fn(b, device))
                         with torch.no_grad():
-                            return model.embed(wavs).cpu().numpy()
+                            return np.concatenate([batch_forward(model, b, embed=True).cpu().numpy()
+                                                   for b in embed_loader])
                     pos_emb = _get_embeds(pos_sample)
                     neg_emb = _get_embeds(neg_sample)
                     all_emb = np.concatenate([pos_emb, neg_emb], axis=0)
@@ -428,6 +452,8 @@ def infinite_training_loop(
             device=device.type,
             aug_prob=current_aug_prob,
             feature_cache=None,
+            feature_store=feature_store,
+            feature_variants=feature_cache_variants,
             **trainer.augment_opts,
         )
         loader = DataLoader(
@@ -443,28 +469,17 @@ def infinite_training_loop(
         total_loss = 0.0
         n_batches = 0
 
-        for wavs, labels, paths, _ in loader:
+        for batch in loader:
+            wavs, labels, _, _ = batch
             labels_f = labels.float()
-            neg_mask = labels_f == 0
-            pos_mask = labels_f == 1
-            weights = torch.ones_like(labels_f)
-            weights[neg_mask] = neg_weight
+            lengths = batch.lengths
 
             # Mixup
-            if use_mixup and random.random() < 0.5:
-                import numpy as np
-                lam = np.random.beta(mixup_alpha, mixup_alpha)
-                idx = torch.randperm(len(wavs))
-                mixed = [lam * w + (1 - lam) * wavs[idx[i]]
-                         for i, w in enumerate(wavs)]
-                mixed_labels = lam * labels_f + (1 - lam) * labels_f[idx]
-                loss, _ = loss_manager.compute_loss(
-                    model, mixed, mixed_labels,
-                )
-            else:
-                loss, _ = loss_manager.compute_loss(
-                    model, wavs, labels_f,
-                )
+            if use_mixup and len(wavs) > 1 and random.random() < 0.5:
+                from ww_trainer.augment import Mixup
+                wavs, labels_f, lengths = Mixup.mix_padded(wavs, labels_f, lengths,
+                                                           beta_param=mixup_alpha)
+            loss, _ = loss_manager.compute_loss(model, wavs, labels_f, lengths=lengths)
 
             optimizer.zero_grad()
             loss.backward()
@@ -505,24 +520,17 @@ def infinite_training_loop(
                 epoch=ep,
                 output_dir=output_dir,
                 mlflow=trainer.mlflow,
+                feature_store=feature_store,
             )
-            # evaluate_model returns (f1, eer, auc, far, frr, prec, rec, threshold, n_fp, n_fn)
-            if isinstance(metrics_tuple, (tuple, list)) and len(metrics_tuple) >= 2:
-                f1_val  = float(metrics_tuple[0])
-                eer_val = float(metrics_tuple[1])
-                auc_val = float(metrics_tuple[2]) if len(metrics_tuple) > 2 else 0.0
-            else:
-                f1_val = eer_val = auc_val = 0.0
-
-            # Try to get FAR@FRR metrics if available
+            # (acc, prec, rec, f1, auc, fp_paths, fn_paths, paths, targets, preds, probs, report)
+            f1_val = float(metrics_tuple[3])
+            auc_val = float(metrics_tuple[4])
+            eer_val = float(metrics_tuple[11].eer) if len(metrics_tuple) > 11 else 1.0
             metrics_dict = {
                 "f1":    f1_val,
                 "eer":   eer_val,
                 "auc":   auc_val,
             }
-            if len(metrics_tuple) >= 10:
-                metrics_dict["far"] = float(metrics_tuple[3])
-                metrics_dict["frr"] = float(metrics_tuple[4])
 
             logger.info("[Eval] Epoch %d  F1=%.4f  EER=%.4f  AUC=%.4f",
                         ep + 1, f1_val, eer_val, auc_val)
@@ -537,6 +545,7 @@ def infinite_training_loop(
                     ep, best_metrics, optimizer,
                     output_dir / "best_f1.pt",
                     trainer.export_onnx, trainer.mlflow,
+                    stream_window=trainer.stream_window,
                 )
                 logger.info("[Best] New best F1=%.4f at epoch %d", best_f1, ep + 1)
             else:
@@ -594,6 +603,7 @@ def infinite_training_loop(
         ep, best_metrics, optimizer,
         output_dir / "final.pt",
         trainer.export_onnx, trainer.mlflow,
+        stream_window=trainer.stream_window,
     )
 
     if trainer.mlflow:

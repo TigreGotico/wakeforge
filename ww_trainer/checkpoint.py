@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 
 import torch
 
+from ww_trainer.pretrained import featurizer_metadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +54,7 @@ def save_intermediate_checkpoint(
         model_file: Path,
         export_onnx: bool = True,
         mlflow=None,
+        stream_window: Optional[int] = None,
 ) -> None:
     """Save a training checkpoint with ONNX export and MLflow logging.
 
@@ -70,6 +73,9 @@ def save_intermediate_checkpoint(
         model_file: Destination path for the ``.pt`` file.
         export_onnx: Kept for backwards-compatibility; ONNX is always attempted.
         mlflow: Optional mlflow module for artifact logging.
+        stream_window: GRU-output frames the streaming head pools. When set and
+            the model streams (:attr:`~ww_trainer.model.BaseWakeModel.streamable`),
+            ``<stem>_streaming.onnx`` is exported beside the batch head.
     """
     model_file = Path(model_file)
     onnx_path = model_file.with_suffix(".onnx")
@@ -91,10 +97,23 @@ def save_intermediate_checkpoint(
         logger.warning("Classifier ONNX export failed (non-fatal): %s", exc)
         onnx_path = None
 
-    # Always export featurizer ONNX
+    stream_onnx_path = None
+    if stream_window and model.streamable:
+        stream_onnx_path = model_file.with_name(model_file.stem + "_streaming.onnx")
+        try:
+            model.export_streaming_onnx(str(stream_onnx_path), window=stream_window,
+                                        metadata={**meta, "mode": "streaming"})
+        except Exception as exc:
+            logger.warning("Streaming head ONNX export failed (non-fatal): %s", exc)
+            stream_onnx_path = None
+
+    # Export the featurizer ONNX, except a pretrained one: the head's metadata
+    # names it and inference rebuilds it from the registry.
     feat_onnx_path = model_file.with_name(model_file.stem + "_featurizer.onnx")
     try:
-        if hasattr(model, "feature_extractor") and hasattr(model.feature_extractor, "export_to_onnx"):
+        if featurizer_metadata(model.feature_extractor):
+            feat_onnx_path = None
+        elif hasattr(model, "feature_extractor") and hasattr(model.feature_extractor, "export_to_onnx"):
             model.feature_extractor.export_to_onnx(str(feat_onnx_path))
             logger.info("Exported featurizer to onnx: %s", feat_onnx_path)
     except Exception as exc:
@@ -105,7 +124,7 @@ def save_intermediate_checkpoint(
         stem = model_file.stem  # e.g. "best_f1"
         artifact_path = f"models/{stem}"
         # Log ONNX artifacts first — they are the primary inference artifacts
-        for path in [onnx_path, feat_onnx_path]:
+        for path in [onnx_path, stream_onnx_path, feat_onnx_path]:
             if path and Path(path).exists():
                 try:
                     mlflow.log_artifact(str(path), artifact_path=artifact_path)

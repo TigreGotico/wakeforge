@@ -1,12 +1,12 @@
 """Pretrained Hub featurizers ("wakehubert", "wakehubert-int8").
 
-The Hub download is replaced by a local directory holding a stand-in ONNX
-with the published I/O contract (``waveform`` [B, samples] -> ``features``
-[B, samples // 320, 128]) and a ``config.json`` shaped like the published one,
-so these tests never touch the network.
+The Hub download is replaced by the ``fake_hub`` fixture (``conftest.py``): a
+local directory holding a stand-in ONNX with the published I/O contract
+(``waveform`` [B, samples] -> ``features`` [B, samples // 320, 128]) and a
+``config.json`` shaped like the published one, so these tests never touch the
+network.
 """
 import csv
-import json
 import logging
 import wave
 from pathlib import Path
@@ -16,7 +16,6 @@ import pytest
 import torch
 from click.testing import CliRunner
 
-import ww_trainer.pretrained as pretrained
 from ww_trainer.cli import train
 from ww_trainer.factory import create_model
 from ww_trainer.feats import OnnxFeatureExtractor
@@ -27,75 +26,6 @@ from ww_trainer.tiers import get_tier
 
 HOP = 320
 DIM = 128
-
-
-class _StandIn(torch.nn.Module):
-    """Causal stand-in: a stride-320 conv, then a conv over the 20 previous frames."""
-
-    def __init__(self, seed, dim):
-        super().__init__()
-        torch.manual_seed(seed)
-        self.frames = torch.nn.Conv1d(1, dim, kernel_size=HOP, stride=HOP)
-        self.context = torch.nn.Conv1d(dim, dim, kernel_size=21)
-
-    def forward(self, waveform):
-        x = torch.tanh(self.frames(waveform.unsqueeze(1)))
-        x = torch.tanh(self.context(torch.nn.functional.pad(x, (20, 0))))
-        return x.transpose(1, 2)
-
-
-def _export(path, seed, dim=DIM):
-    torch.onnx.export(_StandIn(seed, dim).eval(), torch.zeros(1, 16000), str(path),
-                      input_names=["waveform"], output_names=["features"],
-                      dynamic_axes={"waveform": {0: "batch", 1: "samples"},
-                                    "features": {0: "batch", 1: "frames"}},
-                      opset_version=18, dynamo=False)
-
-
-def _config(repo):
-    name = repo.split("/")[-1]
-    licence, _, fp32, _ = REPOS[name]
-    return {
-        "family": "stand-in",
-        "license": licence,
-        "output": {"name": "features", "frame_rate_hz": 50.0, "hop_samples": HOP},
-        "feature_dim": 256 if name.endswith("-wide") else DIM,
-        "streaming": not name.endswith("bigru"),
-        "files": {"float32": "wakehubert.onnx", "int8": "wakehubert_int8.onnx"},
-    }
-
-
-@pytest.fixture(scope="module")
-def stand_in_repos(tmp_path_factory):
-    """One directory per published repository, holding stand-in ONNX files."""
-    root = tmp_path_factory.mktemp("hub")
-    onnx = {}
-    for dim in (DIM, 256):
-        for variant, seed in (("wakehubert.onnx", 0), ("wakehubert_int8.onnx", 1)):
-            onnx[dim, variant] = root / f"{dim}_{variant}"
-            _export(onnx[dim, variant], seed, dim)
-    repos = {}
-    for name in REPOS:
-        repo = root / name
-        repo.mkdir()
-        config = _config(name)
-        (repo / "config.json").write_text(json.dumps(config))
-        for variant in config["files"].values():
-            (repo / variant).symlink_to(onnx[config["feature_dim"], variant])
-        repos[f"TigreGotico/{name}"] = repo
-    return repos
-
-
-@pytest.fixture
-def fake_hub(stand_in_repos, monkeypatch):
-    calls = []
-
-    def fake_download(repo_id, filename, revision=None, **kwargs):
-        calls.append((repo_id, filename, revision))
-        return str(stand_in_repos[repo_id] / filename)
-
-    monkeypatch.setattr(pretrained, "hf_hub_download", fake_download)
-    return stand_in_repos["TigreGotico/wakehubert-tiny"], calls
 
 
 def test_featurizer_type_resolves_to_onnx_extractor(fake_hub):
@@ -271,16 +201,16 @@ class _CacheKeyCaptured(Exception):
 
 def test_cli_feature_cache_key_distinguishes_onnx_files(fake_hub, tmp_path, monkeypatch):
     """Two ONNX featurizers with the same feature_dim must not share cached features."""
-    import ww_trainer.cache
+    import ww_trainer.feature_store
 
-    keys = []
+    identities = []
 
-    class RecordingCache(ww_trainer.cache.FeatureCache):
-        def __init__(self, cache_dir, extractor_name, extractor_params_hash):
-            keys.append((extractor_name, extractor_params_hash))
-            raise _CacheKeyCaptured
+    def recording_store(extractor, cache_dir=None, max_bytes=None):
+        identities.append(ww_trainer.feature_store.extractor_identity(extractor))
+        raise _CacheKeyCaptured
 
-    monkeypatch.setattr(ww_trainer.cache, "FeatureCache", RecordingCache)
+    monkeypatch.setattr(ww_trainer.feature_store.FeatureStore, "for_extractor",
+                        staticmethod(recording_store))
     wav = tmp_path / "a.wav"
     _write_wav(wav, 440)
     meta = tmp_path / "train.csv"
@@ -292,6 +222,5 @@ def test_cli_feature_cache_key_distinguishes_onnx_files(fake_hub, tmp_path, monk
             "--feature-cache-dir", str(tmp_path / "feature_cache"),
         ])
         assert isinstance(result.exception, _CacheKeyCaptured), result.output
-    (name_a, key_a), (name_b, key_b) = keys
-    assert name_a == name_b == "OnnxFeatureExtractor"
-    assert key_a != key_b
+    key_a, key_b = identities
+    assert key_a and key_b and key_a != key_b

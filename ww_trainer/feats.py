@@ -28,6 +28,13 @@ def ensure_wav_list(wavs: WavInput) -> List[torch.Tensor]:
     raise TypeError("wavs must be a torch.Tensor or a list of torch.Tensor")
 
 
+def frames_per_second(extractor: "BaseExtractor") -> float:
+    """Output frames per second of *extractor*, measured on one second of silence."""
+    with torch.no_grad():
+        silence = torch.zeros(extractor.sample_rate, device=extractor.device)
+        return float(extractor([silence]).shape[1])
+
+
 class SlidingFeatureCacheTensor(torch.nn.Module):
     def __init__(self, feature_dim=768, window_size=50):
         super().__init__()
@@ -175,12 +182,17 @@ class OnnxFeatureExtractor(BaseExtractor):
         streaming: Whether frames can be streamed by re-featurizing a bounded
             window of past audio (``False`` for bidirectional models).
         license: Licence of the ONNX model, when known.
+        pretrained_name: Registry name when the graph is a pretrained featurizer
+            (see :data:`~ww_trainer.pretrained.PRETRAINED_FEATURIZERS`); exported
+            models record it so inference can rebuild the featurizer.
+        revision: Hub revision the pretrained featurizer was downloaded at.
     """
 
     def __init__(self, model_path, sample_rate: int = 16000, device="auto",
                  feature_dim: Optional[int] = None, hop_samples: int = 160,
                  frame_rate_hz: Optional[float] = None, context_samples: int = 0,
-                 streaming: bool = True, license: str = ""):
+                 streaming: bool = True, license: str = "",
+                 pretrained_name: str = "", revision: str = ""):
         super().__init__(sample_rate, device)
         self.model_path = str(model_path)
         self._feature_dim = feature_dim
@@ -189,6 +201,8 @@ class OnnxFeatureExtractor(BaseExtractor):
         self.context_samples = context_samples
         self.streaming = streaming
         self.license = license
+        self.pretrained_name = pretrained_name
+        self.revision = revision
 
         # 1. Determine Execution Providers based on device
         if self.device.type == "cuda":

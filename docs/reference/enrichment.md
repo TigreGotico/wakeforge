@@ -10,14 +10,14 @@ Wrappers that decorate any `BaseExtractor`, appending extra feature channels wit
 
 | Wrapper | Class | Line | Extra Dims | Features Added |
 |---------|-------|------|------------|----------------|
-| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1445` | +4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
-| Pitch | `PitchExtractor` | `feats.py:1569` | +3 | Normalized F0, voicing probability, F0 delta |
-| MultiResolution | `MultiResolutionExtractor` | `feats.py:1706` | +coarse_dim | Fine + coarse extractor outputs concatenated |
-| SNRAware | `SNRAwareExtractor` | `feats.py:1762` | +2 | Per-frame SNR estimate, noise floor estimate |
+| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1459` | +4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
+| Pitch | `PitchExtractor` | `feats.py:1583` | +3 | Normalized F0, voicing probability, F0 delta |
+| MultiResolution | `MultiResolutionExtractor` | `feats.py:1720` | +coarse_dim | Fine + coarse extractor outputs concatenated |
+| SNRAware | `SNRAwareExtractor` | `feats.py:1776` | +2 | Per-frame SNR estimate, noise floor estimate |
 
 ---
 
-## VoiceActivityExtractor -- `feats.py:1445`
+## VoiceActivityExtractor -- `feats.py:1459`
 
 Appends 4 energy-based VAD signals computed per frame (`feats.py:1430`):
 
@@ -41,7 +41,7 @@ extractor = VoiceActivityExtractor(base)  # output dim: 44
 
 ---
 
-## PitchExtractor -- `feats.py:1569`
+## PitchExtractor -- `feats.py:1583`
 
 Appends 3 pitch features via autocorrelation-based F0 estimation (`feats.py:1559`):
 
@@ -64,7 +64,7 @@ extractor = PitchExtractor(base, f0_min=50.0, f0_max=600.0)  # output dim: 43
 
 ---
 
-## MultiResolutionExtractor -- `feats.py:1706`
+## MultiResolutionExtractor -- `feats.py:1720`
 
 Runs two extractors with different hop lengths and concatenates outputs. Coarse features are interpolated to match the fine extractor's time axis (`feats.py:1697-1700`).
 
@@ -80,7 +80,7 @@ extractor = MultiResolutionExtractor(fine, coarse)  # output dim: 80
 
 ---
 
-## SNRAwareExtractor -- `feats.py:1762`
+## SNRAwareExtractor -- `feats.py:1776`
 
 Appends 2 per-frame SNR features (`feats.py:1747`):
 

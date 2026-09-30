@@ -10,7 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
-from ww_trainer.feats import WavInput, ensure_wav_list, BaseExtractor
+from ww_trainer.feats import WavInput, ensure_wav_list, BaseExtractor, OnnxFeatureExtractor
+from ww_trainer.pretrained import featurizer_metadata
 from ww_trainer.utils import embed_onnx_metadata
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,57 @@ def _accepts_phoneme_ids(fn) -> bool:
         return "phoneme_ids" in inspect.signature(fn).parameters
     except (ValueError, TypeError):
         return False
+
+
+def _accepts_lengths(fn) -> bool:
+    """Return True if *fn* has a ``lengths`` parameter (pools over real frames only)."""
+    try:
+        return "lengths" in inspect.signature(fn).parameters
+    except (ValueError, TypeError):
+        return False
+
+
+def frames_for_samples(lengths: torch.Tensor, n_samples: int, n_frames: int) -> torch.Tensor:
+    """Real step count of each row after a layer maps *n_samples* steps to *n_frames*.
+
+    Args:
+        lengths: ``[B]`` real length of each row, out of *n_samples*.
+        n_samples: Padded length of the input axis.
+        n_frames: Length of the output axis.
+
+    Returns:
+        ``[B]`` int64 counts in ``[1, n_frames]``. An output step that straddles
+        the end of the real input is not counted: it has seen padding.
+    """
+    lengths = torch.as_tensor(lengths, dtype=torch.float64)
+    frames = torch.floor(lengths * n_frames / max(1, n_samples))
+    return frames.clamp(1, n_frames).long()
+
+
+def time_mask(lengths: Optional[torch.Tensor], n_in: int, n_out: int,
+              device: "torch.device") -> Optional[torch.Tensor]:
+    """``[B, n_out]`` boolean mask of real steps, or ``None`` when *lengths* is ``None``.
+
+    *lengths* counts input frames out of *n_in*; a layer that changed the time
+    axis to *n_out* steps keeps the same proportion.
+    """
+    if lengths is None:
+        return None
+    steps = frames_for_samples(lengths, n_in, n_out).to(device)
+    return torch.arange(n_out, device=device)[None, :] < steps[:, None]
+
+
+def masked_mean(x: torch.Tensor, mask: Optional[torch.Tensor], dim: int = 1) -> torch.Tensor:
+    """Mean of *x* over time axis *dim* counting only steps where *mask* is true.
+
+    *mask* is ``[B, T]`` (see :func:`time_mask`); ``None`` averages every step.
+    """
+    if mask is None:
+        return x.mean(dim=dim)
+    shape = [mask.shape[0]] + [1] * (x.dim() - 1)
+    shape[dim] = mask.shape[1]
+    m = mask.reshape(shape).to(x.dtype)
+    return (x * m).sum(dim=dim) / m.sum(dim=dim).clamp(min=1.0)
 
 
 class ClassifierHead(torch.nn.Module):
@@ -114,6 +166,8 @@ class BaseWakeModel(nn.Module):
         self.keyword = keyword                # stored for metadata / export only
         # Cache inspect result — classifier is fixed after init
         self._classifier_takes_phoneme_ids: bool = _accepts_phoneme_ids(classifier.forward)
+        self._classifier_takes_lengths: bool = _accepts_lengths(classifier.forward)
+        self._frame_counts: dict = {}
         self.to(self.device)
 
     def _apply_text_conditioning(
@@ -144,44 +198,93 @@ class BaseWakeModel(nn.Module):
         return torch.cat([feats, text_emb], dim=-1)                      # [B, T, F+D]
 
     # --- forward / embed ---
+    def features(self, wavs: WavInput,
+                 lengths: Optional[torch.Tensor] = None,
+                 text_token_ids: Optional[torch.Tensor] = None,
+                 ) -> "tuple[torch.Tensor, Optional[torch.Tensor]]":
+        """Return ``(features [B, T, F], frame_lengths [B] or None)`` for a batch.
+
+        ``wavs`` is a list of 1-D waveforms, a padded ``[B, samples]`` tensor, or
+        features already extracted by this model's extractor as a padded
+        ``[B, T, F]`` tensor (as :class:`~ww_trainer.feature_store.FeatureStore`
+        batches are). ``lengths`` holds the real length of each row, in samples
+        for waveforms and in frames for features; a list of waveforms of
+        different lengths carries its own. Heads that accept ``lengths`` pool
+        over real frames only.
+        """
+        if isinstance(wavs, torch.Tensor) and wavs.dim() == 3:
+            feats = wavs.to(self.device)
+            wav_list = list(feats)
+            frame_lengths = lengths
+        else:
+            wav_list = ensure_wav_list(wavs)
+            feats = self.feature_extractor(wav_list)
+            n_samples = [w.shape[-1] for w in wav_list]
+            if lengths is None and len(set(n_samples)) > 1:
+                lengths = torch.tensor(n_samples)
+            frame_lengths = None
+            if lengths is not None:
+                frame_lengths = torch.tensor([self.frames_for(int(n)) for n in lengths])
+                frame_lengths = frame_lengths.clamp(1, feats.shape[1])
+        feats = self._apply_text_conditioning(feats, wav_list, text_token_ids)
+        return feats, frame_lengths
+
+    @torch.no_grad()
+    def frames_for(self, n_samples: int) -> int:
+        """Frames the extractor produces for *n_samples* of audio (measured once per length)."""
+        if n_samples not in self._frame_counts:
+            silence = torch.zeros(n_samples, device=self.feature_extractor.device)
+            self._frame_counts[n_samples] = int(self.feature_extractor([silence]).shape[1])
+        return self._frame_counts[n_samples]
+
+    def classify(self, feats: torch.Tensor,
+                 frame_lengths: Optional[torch.Tensor] = None,
+                 text_token_ids: Optional[torch.Tensor] = None,
+                 embed: bool = False) -> torch.Tensor:
+        """Run the head on features: ``[B]`` logits, or ``[B, D]`` embeddings when *embed*."""
+        fn = self.classifier.embed if embed else self.classifier.forward
+        kwargs = {}
+        if self._classifier_takes_phoneme_ids:
+            kwargs["phoneme_ids"] = text_token_ids
+        if frame_lengths is not None and self._classifier_takes_lengths:
+            kwargs["lengths"] = frame_lengths.to(feats.device)
+        return fn(feats, **kwargs)
+
     def forward(self, wavs: WavInput,
-                text_token_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+                text_token_ids: Optional[torch.Tensor] = None,
+                lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Run the full model: extract features, optionally condition on text, classify.
 
         Args:
-            wavs: Audio input — list of 1-D tensors or a padded ``[B, T]`` tensor.
+            wavs: Audio input — list of 1-D tensors or a padded ``[B, T]`` tensor —
+                or precomputed ``[B, T, F]`` features (see :meth:`features`).
             text_token_ids: Optional ``[B, seq_len]`` int64 phoneme IDs.
                 Pass per-batch keyword IDs during multi-keyword training; omit
                 for single-keyword inference (uses precomputed cache).
+            lengths: Optional ``[B]`` real length of each padded row
+                (``Batch.lengths`` from :func:`~ww_trainer.dataset.collate_fn`).
 
         Returns:
             ``[B]`` raw logits (pre-sigmoid).
         """
-        wavs = ensure_wav_list(wavs)
-        feats = self.feature_extractor(wavs)
-        feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
-        # PhonMatchHead takes phoneme_ids directly; all other heads ignore the kwarg
-        if self._classifier_takes_phoneme_ids:
-            return self.classifier.forward(feats, phoneme_ids=text_token_ids)
-        return self.classifier.forward(feats)
+        feats, frame_lengths = self.features(wavs, lengths, text_token_ids)
+        return self.classify(feats, frame_lengths, text_token_ids)
 
     def embed(self, wavs: WavInput,
-              text_token_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+              text_token_ids: Optional[torch.Tensor] = None,
+              lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Return embeddings for metric losses.
 
         Args:
-            wavs: Audio input.
+            wavs: Audio input or precomputed features, as for :meth:`forward`.
             text_token_ids: Optional per-batch keyword phoneme IDs.
+            lengths: Optional ``[B]`` real length of each padded row.
 
         Returns:
             ``[B, D]`` embeddings.
         """
-        wavs = ensure_wav_list(wavs)
-        feats = self.feature_extractor(wavs)
-        feats = self._apply_text_conditioning(feats, wavs, text_token_ids)
-        if self._classifier_takes_phoneme_ids:
-            return self.classifier.embed(feats, phoneme_ids=text_token_ids)
-        return self.classifier.embed(feats)
+        feats, frame_lengths = self.features(wavs, lengths, text_token_ids)
+        return self.classify(feats, frame_lengths, text_token_ids, embed=True)
 
     # --- convenience ---
     def load_checkpoint(self, ckpt_path: str) -> None:
@@ -233,11 +336,55 @@ class BaseWakeModel(nn.Module):
                        quantize: bool = False,
                        export_featurizer: bool = False,
                        metadata: dict = None) -> None:
+        """Export the head to ONNX (and, with *export_featurizer*, the extractor).
+
+        A pretrained featurizer is recorded in the head's metadata by registry
+        name and revision (see :func:`~ww_trainer.pretrained.featurizer_metadata`)
+        so inference rebuilds it without being given the featurizer file.
+        """
+        metadata = {**featurizer_metadata(self.feature_extractor), **(metadata or {})} or None
         # usually featurizer was already exported previously, only head missing
         self.classifier.export_to_onnx(out, quantize=quantize, dynamo=simplify, metadata=metadata)
         if export_featurizer:
             f_out = out.replace(".onnx", "") + "_featurizer.onnx"
             self.feature_extractor.export_to_onnx(f_out, quantize=quantize, metadata=metadata)
+
+    @property
+    def streamable(self) -> bool:
+        """Whether a stateful streaming head can be exported and run on this model.
+
+        The head must be a unidirectional single-layer :class:`GruClassifierHead`
+        with no text conditioning, and an ONNX featurizer must reproduce its
+        frames from a bounded window of past audio.
+        """
+        head = self.classifier
+        ext = self.feature_extractor
+        return (type(head) is GruClassifierHead and not head.gru.bidirectional
+                and head.gru.num_layers == 1 and self.text_extractor is None
+                and not (isinstance(ext, OnnxFeatureExtractor) and not ext.streaming))
+
+    def export_streaming_onnx(self, out: str, window: int = 50, metadata: dict = None) -> None:
+        """Export the stateful streaming head (see :meth:`GruClassifierHead.export_streaming_onnx`).
+
+        The featurizer is recorded as in :meth:`export_to_onnx`, so
+        :meth:`~ww_trainer.inference.OnnxStreamingWakeWord.from_head` needs only
+        the exported file.
+        """
+        metadata = {**featurizer_metadata(self.feature_extractor), **(metadata or {})}
+        self.classifier.export_streaming_onnx(out, window=window, metadata=metadata)
+
+
+def batch_forward(model: nn.Module, batch, embed: bool = False) -> torch.Tensor:
+    """Logits (or embeddings, with *embed*) for a :func:`~ww_trainer.dataset.collate_fn` batch.
+
+    A :class:`BaseWakeModel` also gets the batch's keyword IDs and ``lengths``,
+    so text-conditioned heads see their keyword and padded frames are left out
+    of pooling; any other module is called on the batch tensor.
+    """
+    fn = model.embed if embed else model
+    if isinstance(model, BaseWakeModel):
+        return fn(batch[0], text_token_ids=batch[3], lengths=batch.lengths)
+    return fn(batch[0])
 
 
 # ---------------------- classifier heads ----------------------
@@ -259,12 +406,12 @@ class FfnClassifierHead(ClassifierHead):
                                         nn.Dropout(dropout),
                                         nn.Linear(hidden_dim, 1))
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        pooled = feats.mean(dim=1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        pooled = masked_mean(feats, time_mask(lengths, feats.shape[1], feats.shape[1], feats.device))
         return self.sequential(pooled).squeeze(-1)
 
-    def embed(self, feats: WavInput) -> torch.Tensor:
-        pooled = feats.mean(dim=1)
+    def embed(self, feats: WavInput, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        pooled = masked_mean(feats, time_mask(lengths, feats.shape[1], feats.shape[1], feats.device))
         return F.relu(self.sequential[0](pooled))
 
 
@@ -340,6 +487,15 @@ class OCSVMHead(ClassifierHead):
         self.register_buffer("_degree_val", torch.tensor(float(degree)))
         self.register_buffer("_coef0_val", torch.tensor(coef0))
 
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs) -> None:
+        # The support-vector count is set by fit_ocsvm(); size the buffers to
+        # the checkpoint so a fitted head loads into a fresh one.
+        for name in ("_sv_vectors", "_sv_weights"):
+            if prefix + name in state_dict:
+                setattr(self, name, torch.empty_like(state_dict[prefix + name],
+                                                     device=getattr(self, name).device))
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
     def _kernel_vals(self, emb: torch.Tensor) -> torch.Tensor:
         """Compute kernel matrix K(emb, support_vectors) — pure torch, ONNX-safe.
 
@@ -362,7 +518,7 @@ class OCSVMHead(ClassifierHead):
         sq_dist = sq_x + sq_sv - 2.0 * dot            # [B, N]
         return torch.exp(-self._gamma_val * sq_dist)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute wake-word score.
 
         Before fitting, all SV buffers are zero, producing a constant-zero score.
@@ -370,26 +526,30 @@ class OCSVMHead(ClassifierHead):
 
         Args:
             feats: ``[B, T, F]`` feature frames.
+            lengths: Optional ``[B]`` real frame count of each row.
 
         Returns:
             ``[B]`` scores (positive = inlier / wake-word after fitting).
         """
-        emb = self.backbone(feats.mean(dim=1))           # [B, embed_dim]
+        emb = self.embed(feats, lengths)                  # [B, embed_dim]
         k = self._kernel_vals(emb)                        # [B, N]
         return (k * self._sv_weights).sum(dim=1) - self._rho.squeeze()
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Return backbone embeddings.
 
         Args:
             feats: ``[B, T, F]`` feature frames.
+            lengths: Optional ``[B]`` real frame count of each row.
 
         Returns:
             ``[B, embed_dim]`` embeddings.
         """
-        return self.backbone(feats.mean(dim=1))
+        mask = time_mask(lengths, feats.shape[1], feats.shape[1], feats.device)
+        return self.backbone(masked_mean(feats, mask))
 
-    def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader") -> None:
+    def fit_ocsvm(self, dataloader: "torch.utils.data.DataLoader",
+                  model: Optional["BaseWakeModel"] = None) -> None:
         """Fit the OCSVM on positive-class embeddings from *dataloader*.
 
         Requires ``scikit-learn``. After fitting, all kernel parameters (support
@@ -403,6 +563,10 @@ class OCSVMHead(ClassifierHead):
         Args:
             dataloader: Yields ``(feats, labels, ...)`` batches where ``labels == 1``
                         marks positive (wake-word) samples.
+            model: The :class:`BaseWakeModel` this head belongs to. When given,
+                batches hold waveforms (or cached features) from
+                :func:`~ww_trainer.dataset.collate_fn` and are featurized by the
+                model, padded frames excluded.
 
         Raises:
             ImportError: If ``scikit-learn`` is not installed.
@@ -421,9 +585,13 @@ class OCSVMHead(ClassifierHead):
         with torch.no_grad():
             for batch in dataloader:
                 feats, labels = batch[0], batch[1]
-                pos = feats[labels == 1]
-                if pos.shape[0]:
-                    embeds.append(self.embed(pos.to(self.device)).cpu())
+                lengths = None
+                if model is not None:
+                    feats, lengths = model.features(feats, batch.lengths)
+                pos = (labels == 1).to(feats.device)
+                if pos.any():
+                    pos_lengths = None if lengths is None else lengths.to(feats.device)[pos]
+                    embeds.append(self.embed(feats[pos].to(self.device), pos_lengths).cpu())
 
         if not embeds:
             raise ValueError("No positive samples found in dataloader — cannot fit OCSVM.")
@@ -468,15 +636,12 @@ class CnnClassifierHead(ClassifierHead):
         self.fc1 = nn.Linear(conv_dim, linear_dim)
         self.fc2 = nn.Linear(linear_dim, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        feats = feats.transpose(1, 2)  # [B, T, F] -> [B, F, T] for Conv1d
-        conv_out = self.conv(feats).squeeze(-1)
-        h = F.relu(self.fc1(conv_out))
-        return self.fc2(h).squeeze(-1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc2(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: WavInput) -> torch.Tensor:
-        feats = feats.transpose(1, 2)  # [B, T, F] -> [B, F, T] for Conv1d
-        conv_out = self.conv(feats).squeeze(-1)
+    def embed(self, feats: WavInput, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.conv[:-1](feats.transpose(1, 2))  # [B, T, F] -> [B, C, T']
+        conv_out = masked_mean(x, time_mask(lengths, feats.shape[1], x.shape[-1], x.device), dim=-1)
         return F.relu(self.fc1(conv_out))
 
 
@@ -520,18 +685,31 @@ class GruClassifierHead(ClassifierHead):
             return feats.transpose(1, 2)
         return feats  # already correct
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def _pooled(self, feats: torch.Tensor, lengths: Optional[torch.Tensor]) -> torch.Tensor:
+        """GRU outputs mean-pooled over real frames.
+
+        With *lengths*, padded frames never enter the recurrence (so the
+        backward direction of a bidirectional GRU starts at each row's last
+        real frame) and are excluded from the mean.
+        """
         feats = self._ensure_correct_shape(feats)
-        out, _ = self.gru(feats)
-        pooled = out.mean(dim=1)
-        h = F.relu(self.fc1(pooled))
+        if lengths is None:
+            out, _ = self.gru(feats)
+            return out.mean(dim=1)
+        T = feats.shape[1]
+        steps = frames_for_samples(lengths, T, T).cpu()
+        packed = nn.utils.rnn.pack_padded_sequence(feats, steps, batch_first=True,
+                                                   enforce_sorted=False)
+        out, _ = self.gru(packed)
+        out, _ = nn.utils.rnn.pad_packed_sequence(out, batch_first=True, total_length=T)
+        return masked_mean(out, time_mask(steps, T, T, out.device))
+
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        h = F.relu(self.fc1(self._pooled(feats, lengths)))
         return self.fc2(h).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        feats = self._ensure_correct_shape(feats)
-        out, _ = self.gru(feats)
-        pooled = out.mean(dim=1)
-        return F.relu(self.fc1(pooled))
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return F.relu(self.fc1(self._pooled(feats, lengths)))
 
     def export_streaming_onnx(self, out: str, window: int = 50,
                               metadata: dict = None) -> None:
@@ -587,10 +765,32 @@ class GruClassifierHead(ClassifierHead):
             input_names=["feat_frame", "h_in", "out_window"],
             output_names=["logit", "h_out", "out_window_next"],
             opset_version=18,
+            dynamo=False,
         )
-        if metadata:
-            embed_onnx_metadata(out, metadata)
+        embed_onnx_metadata(out, {"stream_window": str(window), "hidden_dim": str(H),
+                                  **(metadata or {})})
         logger.info("Exported streaming head to %s (window=%d, parity OK)", out, window)
+
+
+class BiGruClassifierHead(GruClassifierHead):
+    """Bidirectional GRU head: :class:`GruClassifierHead` with ``bidirectional=True``.
+
+    Sees each clip in both directions, so it scores whole windows
+    (:class:`~ww_trainer.inference.OnnxWakeWordInferencer`) and has no
+    stateful streaming export.
+    """
+
+    def __init__(self,
+                 hidden_dim: int = 128,
+                 linear_dim: int = 128,
+                 dropout=0.0,
+                 gru_n_layers=1,
+                 sample_rate: int = 16000,
+                 device: str = "auto",
+                 input_size=None) -> None:
+        super().__init__(hidden_dim=hidden_dim, linear_dim=linear_dim, dropout=dropout,
+                         bidirectional=True, gru_n_layers=gru_n_layers,
+                         sample_rate=sample_rate, device=device, input_size=input_size)
 
 
 class _GruStreamingHead(nn.Module):
@@ -924,10 +1124,10 @@ class AttentionPooling(nn.Module):
         self.attn = nn.MultiheadAttention(dim, n_heads, dropout=dropout, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Pool ``[B, T, F]`` → ``[B, F]`` via attention."""
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Pool ``[B, T, F]`` → ``[B, F]`` via attention; ``True`` in *key_padding_mask* marks padding."""
         q = self.query.expand(x.size(0), -1, -1)
-        out, _ = self.attn(q, x, x, need_weights=False)
+        out, _ = self.attn(q, x, x, key_padding_mask=key_padding_mask, need_weights=False)
         return out.squeeze(1)
 
 
@@ -981,19 +1181,14 @@ class TCResNetHead(ClassifierHead):
         for _ in range(n_blocks - 1):
             layers.append(_TCResBlock(channels, channels, kernel_size))
         self.blocks = nn.Sequential(*layers)
-        self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(channels, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)  # [B, F, T]
-        x = self.blocks(x)
-        x = self.pool(x).squeeze(-1)
-        return self.fc(x).squeeze(-1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)
-        x = self.blocks(x)
-        return self.pool(x).squeeze(-1)
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.blocks(feats.transpose(1, 2))  # [B, C, T]
+        return masked_mean(x, time_mask(lengths, feats.shape[1], x.shape[-1], x.device), dim=-1)
 
 
 # ---------------------- DS-CNN head ----------------------
@@ -1146,23 +1341,14 @@ class MatchboxNetHead(ClassifierHead):
             nn.BatchNorm1d(C * 2),
             nn.ReLU(inplace=True),
         )
-        self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(C * 2, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)  # [B, F, T]
-        x = self.prologue(x)
-        x = self.blocks(x)
-        x = self.epilogue(x)
-        x = self.pool(x).squeeze(-1)
-        return self.fc(x).squeeze(-1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)
-        x = self.prologue(x)
-        x = self.blocks(x)
-        x = self.epilogue(x)
-        return self.pool(x).squeeze(-1)
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.epilogue(self.blocks(self.prologue(feats.transpose(1, 2))))  # [B, 2C, T]
+        return masked_mean(x, time_mask(lengths, feats.shape[1], x.shape[-1], x.device), dim=-1)
 
 
 # ---------------------- Res15 head ----------------------
@@ -1211,21 +1397,14 @@ class Res15Head(ClassifierHead):
         self.blocks = nn.Sequential(*[
             _Res15Block(channels, dilation=2 ** i) for i in range(6)
         ])
-        self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(channels, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)  # [B, F, T]
-        x = self.stem(x)
-        x = self.blocks(x)
-        x = self.pool(x).squeeze(-1)
-        return self.fc(x).squeeze(-1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2)
-        x = self.stem(x)
-        x = self.blocks(x)
-        return self.pool(x).squeeze(-1)
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.blocks(self.stem(feats.transpose(1, 2)))  # [B, C, T]
+        return masked_mean(x, time_mask(lengths, feats.shape[1], x.shape[-1], x.device), dim=-1)
 
 
 # ---------------------- KWT (Keyword Transformer) head ----------------------
@@ -1276,26 +1455,21 @@ class KWTHead(ClassifierHead):
         feats = feats[:, :n_patches * self.patch_len, :]
         return feats.reshape(B, n_patches, F * self.patch_len)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = self._patchify(feats)                   # [B, N, patch_dim]
         x = self.patch_proj(x)                       # [B, N, d_model]
         B, N, _ = x.shape
         cls = self.cls_token.expand(B, -1, -1)
         x = torch.cat([cls, x], dim=1)              # [B, N+1, d_model]
         x = x + self.pos_embed[:, :N + 1, :]
-        x = self.encoder(x)
-        x = self.norm(x[:, 0])                      # CLS token
-        return self.fc(x).squeeze(-1)
-
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = self._patchify(feats)
-        x = self.patch_proj(x)
-        B, N, _ = x.shape
-        cls = self.cls_token.expand(B, -1, -1)
-        x = torch.cat([cls, x], dim=1)
-        x = x + self.pos_embed[:, :N + 1, :]
-        x = self.encoder(x)
-        return self.norm(x[:, 0])
+        mask = time_mask(lengths, feats.shape[1], N, x.device)
+        pad = None if mask is None else torch.cat(
+            [torch.zeros(B, 1, dtype=torch.bool, device=x.device), ~mask], dim=1)
+        x = self.encoder(x, src_key_padding_mask=pad)
+        return self.norm(x[:, 0])                   # CLS token
 
 
 # ---------------------- Conformer head ----------------------
@@ -1336,10 +1510,10 @@ class _ConformerBlock(nn.Module):
         )
         self.norm_out = nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = x + 0.5 * self.ffn1(x)
         xn = self.norm_attn(x)
-        x = x + self.attn(xn, xn, xn, need_weights=False)[0]
+        x = x + self.attn(xn, xn, xn, key_padding_mask=key_padding_mask, need_weights=False)[0]
         xn = self.norm_conv(x).transpose(1, 2)
         x = x + self.conv(xn).transpose(1, 2)
         x = x + 0.5 * self.ffn2(x)
@@ -1377,16 +1551,16 @@ class ConformerHead(ClassifierHead):
         self.pool = AttentionPooling(d_model, n_heads=n_heads)
         self.fc = nn.Linear(d_model, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
-        x = self.proj(feats)       # [B, T, d_model]
-        x = self.blocks(x)
-        x = self.pool(x)           # [B, d_model]
-        return self.fc(x).squeeze(-1)
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = self.proj(feats)
-        x = self.blocks(x)
-        return self.pool(x)
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        mask = time_mask(lengths, feats.shape[1], feats.shape[1], feats.device)
+        pad = None if mask is None else ~mask
+        x = self.proj(feats)       # [B, T, d_model]
+        for block in self.blocks:
+            x = block(x, pad)
+        return self.pool(x, pad)   # [B, d_model]
 
 
 # ---------------------- CRNN head ----------------------
@@ -1486,37 +1660,32 @@ class MixConvHead(ClassifierHead):
         self.blocks = nn.Sequential(*[
             _MixConvBlock(filters, kernel_groups) for _ in range(n_blocks)
         ])
-        self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(filters, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Classify features.
 
         Args:
             feats: ``[B, T, F]`` feature tensor.
+            lengths: Optional ``[B]`` real frame count of each row.
 
         Returns:
             ``[B]`` raw logits.
         """
-        x = feats.transpose(1, 2)  # [B, F, T]
-        x = self.stem(x)
-        x = self.blocks(x)
-        x = self.pool(x).squeeze(-1)
-        return self.fc(x).squeeze(-1)
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
 
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Extract embeddings from penultimate layer.
 
         Args:
             feats: ``[B, T, F]`` feature tensor.
+            lengths: Optional ``[B]`` real frame count of each row.
 
         Returns:
             ``[B, filters]`` embedding vectors.
         """
-        x = feats.transpose(1, 2)
-        x = self.stem(x)
-        x = self.blocks(x)
-        return self.pool(x).squeeze(-1)
+        x = self.blocks(self.stem(feats.transpose(1, 2)))  # [B, C, T]
+        return masked_mean(x, time_mask(lengths, feats.shape[1], x.shape[-1], x.device), dim=-1)
 
 
 class CRNNHead(ClassifierHead):
@@ -1555,21 +1724,16 @@ class CRNNHead(ClassifierHead):
                           batch_first=True, dropout=dropout if gru_layers > 1 else 0.0)
         self.fc = nn.Linear(gru_hidden, 1)
 
-    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.fc(self.embed(feats, lengths)).squeeze(-1)
+
+    def embed(self, feats: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = feats.transpose(1, 2).unsqueeze(1)  # [B, 1, F, T]
         x = self.cnn(x)                         # [B, C, F', T]
         B, C, Fp, T = x.shape
         x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fp)  # [B, T, C*F']
         out, _ = self.gru(x)
-        return self.fc(out.mean(dim=1)).squeeze(-1)
-
-    def embed(self, feats: torch.Tensor) -> torch.Tensor:
-        x = feats.transpose(1, 2).unsqueeze(1)
-        x = self.cnn(x)
-        B, C, Fp, T = x.shape
-        x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fp)
-        out, _ = self.gru(x)
-        return out.mean(dim=1)
+        return masked_mean(out, time_mask(lengths, feats.shape[1], T, out.device))
 
 
 class EfficientNetHead(ClassifierHead):

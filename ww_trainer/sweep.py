@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from ww_trainer.pretrained import PRETRAINED_FEATURIZERS, is_non_commercial
+
 logger = logging.getLogger(__name__)
 
 _VALID_FITNESS_FNS = frozenset({"f1", "exp_f1", "double_exp_f1"})
@@ -100,6 +102,7 @@ def run_sweep(
     study_name: str = "ww_trainer_sweep",
     storage: Optional[str] = None,
     full: bool = False,
+    feature_cache_dir: Optional[str] = None,
 ) -> None:
     """Run an Optuna hyperparameter sweep over ww-trainer configurations.
 
@@ -115,6 +118,8 @@ def run_sweep(
         study_name: Optuna study name.
         storage: Optuna storage URL (e.g. 'sqlite:///sweep.db'). None = in-memory.
         full: If True, also search over featurizer, classifier, and loss.
+        feature_cache_dir: Directory where features of frozen featurizers
+            persist, shared by trials in other processes.
     """
     try:
         import optuna
@@ -159,6 +164,7 @@ def run_sweep(
         return _evaluate_config(
             config, train_data, val_data, featurizer,
             featurizer_type, device, epochs_per_trial, out_dir, trial.number,
+            feature_cache_dir,
         )
 
     study = optuna.create_study(
@@ -187,7 +193,11 @@ def _build_search_space(full: bool = False) -> dict:
     Args:
         full: If True, include featurizer_type, classifier arch, and loss
               in the search space.  If False, only tune hyperparameters
-              (arch, hidden_dim, lr, batch_size, dropout).
+              (arch, hidden_dim, lr, batch_size, dropout). The featurizer
+              gene holds the built-in extractors and the commercially usable
+              pretrained featurizers (:data:`PRETRAINED_GENES`); any other
+              registry name, e.g. ``"wakexeus-mel-tcn"``, can be added to a
+              custom ``search_space``.
 
     Returns:
         Dict mapping parameter names to lists of candidate values.
@@ -203,9 +213,10 @@ def _build_search_space(full: bool = False) -> dict:
         space.update({
             "featurizer_type": [
                 "mfcc", "filterbank", "sincnet", "gammatone",
+                *PRETRAINED_GENES,
             ],
             "arch": [
-                "ffn", "gru", "cnn",
+                "ffn", "gru", "bigru", "cnn",
                 "bcresnet", "tcresnet", "dscnn", "matchboxnet",
                 "res15", "conformer", "crnn",
             ],
@@ -217,6 +228,15 @@ def _build_search_space(full: bool = False) -> dict:
         })
     return space
 
+
+# Pretrained featurizers in the full search space: the float32 graph of every
+# published repository whose licence allows commercial use. Candidates on the
+# same featurizer share one FeatureStore, so each clip is featurized once.
+PRETRAINED_GENES = [
+    name for name, entry in PRETRAINED_FEATURIZERS.items()
+    if name == entry.repo_id.split("/")[-1] and entry.variant == "float32"
+    and not is_non_commercial(entry.license)
+]
 
 # Map featurizer_type to kwargs for WakeWordTrainer
 _FEAT_KWARGS = {
@@ -237,11 +257,15 @@ def _evaluate_config(
     epochs: int,
     output_dir: Path,
     trial_id: int,
+    feature_cache_dir: Optional[str] = None,
 ) -> float:
     """Train one configuration and return F1 score.
 
     Supports both simple configs (arch/hidden_dim/lr/batch_size/dropout)
-    and full configs (featurizer_type/arch/loss/n_features).
+    and full configs (featurizer_type/arch/loss/n_features). With a frozen
+    featurizer, features come from the store shared by every candidate on
+    that featurizer (persisted in *feature_cache_dir* when given, so demes in
+    other processes reuse them).
     """
     from ww_trainer.trainer import WakeWordTrainer
 
@@ -260,12 +284,8 @@ def _evaluate_config(
     kwargs["hidden_dim"] = config.get("hidden_dim", 128)
     kwargs["dropout"] = config.get("dropout", 0.1)
 
-    # Determine loss config
-    loss_name = config.get("loss", "bce")
-    losses_cfg = [{"name": loss_name, "weight": 1.0}]
-    # Losses that need embed_dim
-    if loss_name in ("arcface", "center", "proxy_nca", "oc_softmax"):
-        losses_cfg[0]["embed_dim"] = kwargs["hidden_dim"]
+    # Losses with class centres take the head's embedding size from the model.
+    losses_cfg = [{"name": config.get("loss", "bce"), "weight": 1.0}]
 
     arch = config.get("arch", "ffn")
 
@@ -289,6 +309,7 @@ def _evaluate_config(
             save_best="f1",
             metrics_log=str(trial_dir / "metrics.csv"),
             tsne_every=0, pca_every=0, umap_every=0,
+            feature_cache_dir=feature_cache_dir,
         )
         return float(best_f1) if best_f1 is not None else 0.0
     except Exception as exc:
@@ -305,6 +326,7 @@ def run_grid_search(
     epochs_per_trial: int = 5,
     search_space: Optional[dict] = None,
     full: bool = False,
+    feature_cache_dir: Optional[str] = None,
 ) -> dict:
     """Exhaustive grid search over all hyperparameter combinations.
 
@@ -320,6 +342,8 @@ def run_grid_search(
         epochs_per_trial: Epochs per configuration.
         search_space: Dict mapping param names to lists of values.
                       Defaults to a standard KWS grid.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Dict with ``best_config``, ``best_score``, ``all_results``.
@@ -355,7 +379,7 @@ def run_grid_search(
 
         score = _evaluate_config(
             config, train_data, val_data, featurizer, featurizer_type,
-            device, epochs_per_trial, out_dir, i,
+            device, epochs_per_trial, out_dir, i, feature_cache_dir,
         )
         results.append({"config": config, "score": score})
 
@@ -381,6 +405,7 @@ def run_random_search(
     epochs_per_trial: int = 5,
     search_space: Optional[dict] = None,
     full: bool = False,
+    feature_cache_dir: Optional[str] = None,
 ) -> dict:
     """Random search: sample configurations uniformly from the search space.
 
@@ -397,6 +422,8 @@ def run_random_search(
         device: Device.
         epochs_per_trial: Epochs per configuration.
         search_space: Dict mapping param names to lists of values.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Dict with ``best_config``, ``best_score``, ``all_results``.
@@ -425,7 +452,7 @@ def run_random_search(
 
         score = _evaluate_config(
             config, train_data, val_data, featurizer, featurizer_type,
-            device, epochs_per_trial, out_dir, i,
+            device, epochs_per_trial, out_dir, i, feature_cache_dir,
         )
         results.append({"config": config, "score": score})
 
@@ -462,6 +489,7 @@ def _run_deme(
     on_generation: Optional[callable] = None,
     stage: int = 1,
     deme_id: int = 0,
+    feature_cache_dir: Optional[str] = None,
 ) -> dict:
     """Run one GA deme (island).  Top-level so it is picklable for multiprocessing.
 
@@ -489,6 +517,8 @@ def _run_deme(
             ``elapsed_seconds``, ``deme``.
         stage: Stage index (1 or 2) forwarded to ``on_generation`` callback.
         deme_id: 0-based deme index forwarded to ``on_generation`` callback.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
@@ -549,7 +579,7 @@ def _run_deme(
         for ind in population:
             raw = _evaluate_config(
                 ind, train_data, val_data, None, featurizer_type,
-                device, epochs_per_trial, out_dir, trial_id,
+                device, epochs_per_trial, out_dir, trial_id, feature_cache_dir,
             )
             fit = _apply_fitness_fn(raw, fitness_fn)
             raw_scores.append(raw)
@@ -663,6 +693,7 @@ def _run_generation(
     current_mutation_rate: float,
     fitness_fn: str,
     mutation_decay: float,
+    feature_cache_dir: Optional[str] = None,
 ) -> tuple:
     """Run a single GA generation and return updated state.
 
@@ -680,6 +711,8 @@ def _run_generation(
         current_mutation_rate: Mutation probability for this generation.
         fitness_fn: Fitness transform name.
         mutation_decay: Multiplicative decay applied to mutation rate after selection.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Tuple of ``(new_population, new_trial_id_offset, raw_scores,
@@ -700,7 +733,7 @@ def _run_generation(
     for ind in population:
         raw = _evaluate_config(
             ind, train_data, val_data, None, featurizer_type,
-            device, epochs_per_trial, out_dir, trial_id,
+            device, epochs_per_trial, out_dir, trial_id, feature_cache_dir,
         )
         fit = _apply_fitness_fn(raw, fitness_fn)
         raw_scores.append(raw)
@@ -764,6 +797,7 @@ def run_genetic_search(
     migration_interval: int = 5,
     migration_size: int = 1,
     _stage: int = 1,
+    feature_cache_dir: Optional[str] = None,
 ) -> dict:
     """Genetic algorithm hyperparameter search.
 
@@ -820,6 +854,8 @@ def run_genetic_search(
         migration_size: Number of top individuals exchanged per migration
             event.  Must be >= 1.
         _stage: Internal stage index (1 or 2) forwarded to ``on_generation``.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``all_results``,
@@ -860,6 +896,7 @@ def run_genetic_search(
         mutation_decay=mutation_decay,
         on_generation=on_generation,
         stage=_stage,
+        feature_cache_dir=feature_cache_dir,
     )
 
     # ------------------------------------------------------------------ #
@@ -913,6 +950,7 @@ def run_genetic_search(
                     current_mutation_rate=current_mutation_rates[deme_idx],
                     fitness_fn=fitness_fn,
                     mutation_decay=mutation_decay,
+                    feature_cache_dir=feature_cache_dir,
                 )
                 populations[deme_idx] = new_pop
                 trial_offsets[deme_idx] = new_trial_id
@@ -1049,6 +1087,7 @@ def run_two_stage_genetic_search(
     on_generation: Optional[callable] = None,
     migration_interval: int = 5,
     migration_size: int = 1,
+    feature_cache_dir: Optional[str] = None,
 ) -> dict:
     """Two-stage genetic search: broad exploration then focused refinement.
 
@@ -1083,6 +1122,8 @@ def run_two_stage_genetic_search(
             for stage 2.
         migration_interval: Deme migration interval forwarded to both stages.
         migration_size: Deme migration size forwarded to both stages.
+        feature_cache_dir: Directory where features of frozen featurizers persist,
+            shared by candidates in other processes.
 
     Returns:
         Dict with ``best_config``, ``best_score`` (raw F1), ``stage1``,
@@ -1109,6 +1150,7 @@ def run_two_stage_genetic_search(
         on_generation=on_generation,
         migration_interval=migration_interval,
         migration_size=migration_size,
+        feature_cache_dir=feature_cache_dir,
     )
 
     # Stage 1 — broad search
@@ -1394,7 +1436,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default="sweep_results", help="Output directory")
     parser.add_argument("--featurizer", default=None, help="ONNX extractor path")
     parser.add_argument("--featurizer-type", default="mfcc",
-                        choices=["mfcc", "onnx", "hubert", "wav2vec2"])
+                        choices=["mfcc", "onnx", "hubert", "wav2vec2", *PRETRAINED_FEATURIZERS])
     parser.add_argument("--epochs", type=int, default=5, help="Epochs per trial")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--storage", default=None, help="Optuna storage URL")

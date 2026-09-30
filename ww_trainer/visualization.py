@@ -16,6 +16,7 @@ from sklearn.metrics import roc_curve, precision_recall_curve, det_curve
 from torch.utils.data import DataLoader
 
 from ww_trainer.dataset import AudioDataset, collate_fn
+from ww_trainer.model import batch_forward
 
 try:
     import umap
@@ -419,6 +420,7 @@ def _collect_embeddings(
     device,
     sample_size: int = 300,
     aug_prob: float = 0.0,
+    feature_store=None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (embeddings, labels, confidences) arrays for a balanced sample.
 
@@ -440,7 +442,7 @@ def _collect_embeddings(
     random.shuffle(subset)
 
     loader = DataLoader(
-        AudioDataset(subset, aug_prob=aug_prob),
+        AudioDataset(subset, aug_prob=aug_prob, feature_store=feature_store),
         batch_size=min(128, len(subset)), shuffle=False,
         collate_fn=lambda b: collate_fn(b, device),
     )
@@ -448,9 +450,10 @@ def _collect_embeddings(
     embeddings, labels, confs = [], [], []
     model.eval()
     with torch.no_grad():
-        for wavs, lbls, *_ in loader:
-            emb = model.embed(wavs)
-            logits = model(wavs)
+        for batch in loader:
+            _, lbls, _, _ = batch
+            emb = batch_forward(model, batch, embed=True)
+            logits = batch_forward(model, batch)
             probs = torch.sigmoid(logits).cpu().numpy().flatten()
             embeddings.append(emb.cpu().numpy())
             labels.extend(lbls.cpu().numpy().tolist())
@@ -575,6 +578,7 @@ def log_pca(
     device,
     sample_size: int = 300,
     mlflow=None,
+    feature_store=None,
 ) -> Tuple[Optional[str], dict]:
     """PCA embedding plot — 3 panels: labels, confidence heatmap, conf histogram.
 
@@ -591,7 +595,8 @@ def log_pca(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size)
+    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size,
+                                                    feature_store=feature_store)
     if len(embeddings) == 0:
         return None, {}
 
@@ -629,6 +634,7 @@ def log_tsne(
     device,
     sample_size: int = 300,
     mlflow=None,
+    feature_store=None,
 ) -> Tuple[Optional[str], dict]:
     """t-SNE embedding plot — same 3-panel layout as log_pca, also logs embedding metrics.
 
@@ -642,7 +648,8 @@ def log_tsne(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size)
+    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size,
+                                                    feature_store=feature_store)
     if len(embeddings) == 0:
         return None, {}
 
@@ -679,6 +686,7 @@ def log_umap(
     device,
     sample_size: int = 300,
     mlflow=None,
+    feature_store=None,
 ) -> Tuple[Optional[str], dict]:
     """UMAP embedding plot (falls back to t-SNE if umap-learn not installed).
 
@@ -692,7 +700,8 @@ def log_umap(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size)
+    embeddings, labels, confs = _collect_embeddings(model, dataset, device, sample_size,
+                                                    feature_store=feature_store)
     if len(embeddings) == 0:
         return None, {}
 
@@ -728,14 +737,17 @@ def log_umap(
     return str(outpath), embed_metrics
 
 
-def log_embeddings_stats(model, dataset, epoch: int, device, batch_size: int = 128, mlflow=None) -> dict:
+def log_embeddings_stats(model, dataset, epoch: int, device, batch_size: int = 128, mlflow=None,
+                         feature_store=None) -> dict:
     import torch
-    loader = DataLoader(AudioDataset(dataset, aug_prob=0), batch_size=batch_size, shuffle=True,
+    loader = DataLoader(AudioDataset(dataset, aug_prob=0, feature_store=feature_store),
+                        batch_size=batch_size, shuffle=True,
                         collate_fn=lambda b: collate_fn(b, device))
     embeds_all, labels_all = [], []
     with torch.no_grad():
-        for wavs, labels, *_ in loader:
-            embeds = model.embed(wavs)
+        for batch in loader:
+            _, labels, _, _ = batch
+            embeds = batch_forward(model, batch, embed=True)
             embeds_all.append(embeds.cpu())
             labels_all.append(labels.cpu())
     embeds_all = torch.cat(embeds_all)

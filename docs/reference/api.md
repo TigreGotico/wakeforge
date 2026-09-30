@@ -36,7 +36,7 @@ Raises `ValueError` for unsupported tensor shapes, `TypeError` for non-tensor in
 
 ---
 
-### `SlidingFeatureCacheTensor` — `feats.py:31`
+### `SlidingFeatureCacheTensor` — `feats.py:38`
 
 ```python
 class SlidingFeatureCacheTensor(torch.nn.Module)
@@ -44,7 +44,7 @@ class SlidingFeatureCacheTensor(torch.nn.Module)
 
 Rolling buffer that accumulates the most recent `window_size` feature frames for streaming inference.
 
-#### `__init__` — `feats.py:32`
+#### `__init__` — `feats.py:39`
 
 ```python
 def __init__(self, feature_dim: int = 768, window_size: int = 50)
@@ -57,7 +57,7 @@ def __init__(self, feature_dim: int = 768, window_size: int = 50)
 
 Registers `feature_cache: Tensor[window_size, feature_dim]` as a buffer (zero-initialized).
 
-#### `forward` — `feats.py:49`
+#### `forward` — `feats.py:56`
 
 ```python
 def forward(self, new_feats: Tensor) -> Tensor
@@ -71,7 +71,7 @@ Returns `Tensor[T_current, F]` — the current window (up to `window_size` frame
 
 ---
 
-### `BaseExtractor` — `feats.py:70`
+### `BaseExtractor` — `feats.py:77`
 
 ```python
 class BaseExtractor(torch.nn.Module)
@@ -79,7 +79,7 @@ class BaseExtractor(torch.nn.Module)
 
 Abstract base for all feature extractors.
 
-#### `__init__` — `feats.py:72`
+#### `__init__` — `feats.py:79`
 
 ```python
 def __init__(self, sample_rate: int = 16000, device: str = "auto") -> None
@@ -87,7 +87,7 @@ def __init__(self, sample_rate: int = 16000, device: str = "auto") -> None
 
 `device="auto"` selects CUDA if available, otherwise CPU.
 
-#### `feature_dim` property — `feats.py:97`
+#### `feature_dim` property — `feats.py:104`
 
 ```python
 @property
@@ -96,7 +96,7 @@ def feature_dim(self) -> int
 
 Abstract. Subclasses must return the integer feature dimension F. Raises `NotImplementedError` in the base class.
 
-#### `forward` — `feats.py:101`
+#### `forward` — `feats.py:108`
 
 ```python
 @abc.abstractmethod
@@ -105,7 +105,7 @@ def forward(self, wavs: WavInput, **kwargs) -> torch.Tensor
 
 Abstract. Must return `Tensor[B, T_frames, F]`.
 
-#### `export_to_onnx` — `feats.py:107`
+#### `export_to_onnx` — `feats.py:114`
 
 ```python
 def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None
@@ -124,7 +124,7 @@ Dynamic axes: batch size and time dimension. Opset 18. Verifies the exported mod
 
 ---
 
-### `OnnxFeatureExtractor` — `feats.py:162`
+### `OnnxFeatureExtractor` — `feats.py:169`
 
 ```python
 class OnnxFeatureExtractor(BaseExtractor)
@@ -132,7 +132,7 @@ class OnnxFeatureExtractor(BaseExtractor)
 
 Wraps a pre-exported extractor ONNX file as a `BaseExtractor`. Used for training when the extractor has already been exported (e.g. HuBERT exported once, reused across many training runs).
 
-#### `__init__` — `feats.py:180`
+#### `__init__` — `feats.py:191`
 
 ```python
 def __init__(self, model_path: str, sample_rate: int = 16000, device: str = "auto",
@@ -143,11 +143,11 @@ def __init__(self, model_path: str, sample_rate: int = 16000, device: str = "aut
 
 Loads `model_path` into an `onnxruntime.InferenceSession`. `hop_samples`, `frame_rate_hz`, `context_samples` (the past audio that determines one frame) and `streaming` describe the output frames for streaming, and `license` the model's licence; `OnnxFeatureExtractor.from_pretrained("wakehubert")` fills them and `feature_dim`.
 
-#### `feature_dim` property — `feats.py:210`
+#### `feature_dim` property — `feats.py:224`
 
 Returns `feature_dim` when it was given; otherwise reads from the ONNX output shape. If the last dimension is dynamic (None), runs a dummy `[1, sample_rate]` inference to determine the dimension at runtime.
 
-#### `forward` — `feats.py:294`
+#### `forward` — `feats.py:308`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -157,7 +157,7 @@ Processes each waveform individually (batch size 1 per ONNX run), pads results t
 
 ---
 
-### `MfccExtractor` — `feats.py:352`
+### `MfccExtractor` — `feats.py:366`
 
 ```python
 class MfccExtractor(BaseExtractor)
@@ -167,7 +167,7 @@ Pure-PyTorch MFCC extractor. Fully ONNX-exportable. Uses `return_complex=False` 
 
 A pre-exported version is available at https://huggingface.co/TigreGotico/mfcc-onnx.
 
-#### `__init__` — `feats.py:358`
+#### `__init__` — `feats.py:372`
 
 ```python
 def __init__(
@@ -194,11 +194,11 @@ def __init__(
 
 Registers `mel_fb` and `dct_mat` as buffers so they move with the model's device.
 
-#### `feature_dim` property — `feats.py:374`
+#### `feature_dim` property — `feats.py:388`
 
 Returns `self.n_mfcc`.
 
-#### `forward` — `feats.py:406`
+#### `forward` — `feats.py:420`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -220,7 +220,7 @@ Source: `ww_trainer/model.py`
 
 ---
 
-### `ClassifierHead` — `model.py:27`
+### `ClassifierHead` — `model.py:79`
 
 ```python
 class ClassifierHead(torch.nn.Module)
@@ -228,7 +228,7 @@ class ClassifierHead(torch.nn.Module)
 
 Abstract base for all classifier heads.
 
-#### `__init__` — `model.py:28`
+#### `__init__` — `model.py:80`
 
 ```python
 def __init__(self, input_size: int, sample_rate: int = 16000, device: str = "auto") -> None
@@ -240,7 +240,7 @@ def __init__(self, input_size: int, sample_rate: int = 16000, device: str = "aut
 | `sample_rate` | Audio sample rate (informational) |
 | `device` | `"auto"`, `"cuda"`, or `"cpu"` |
 
-#### `forward` — `model.py:45`
+#### `forward` — `model.py:97`
 
 ```python
 @abc.abstractmethod
@@ -249,7 +249,7 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 Abstract. Must return scalar logits `Tensor[B]`.
 
-#### `embed` — `model.py:49`
+#### `embed` — `model.py:101`
 
 ```python
 @abc.abstractmethod
@@ -258,7 +258,7 @@ def embed(self, feats: torch.Tensor) -> torch.Tensor
 
 Abstract. Must return pre-logit embeddings `Tensor[B, D]` for metric learning.
 
-#### `export_to_onnx` — `model.py:52`
+#### `export_to_onnx` — `model.py:104`
 
 ```python
 def export_to_onnx(self, out: str, quantize: bool = False, dynamo: bool = False, metadata: dict = None) -> None
@@ -268,7 +268,7 @@ Exports the head to ONNX with a dummy `[1, 200, input_size]` input. Dynamic axis
 
 ---
 
-### `FfnClassifierHead` — `model.py:246`
+### `FfnClassifierHead` — `model.py:393`
 
 ```python
 class FfnClassifierHead(ClassifierHead)
@@ -276,7 +276,7 @@ class FfnClassifierHead(ClassifierHead)
 
 Mean-pool over the time dimension, then a two-layer feed-forward network.
 
-#### `__init__` — `model.py:249`
+#### `__init__` — `model.py:396`
 
 ```python
 def __init__(
@@ -291,7 +291,7 @@ def __init__(
 
 Architecture: `Linear(input_size → hidden_dim) → ReLU → Dropout(dropout) → Linear(hidden_dim → 1)`.
 
-#### `forward` — `model.py:262`
+#### `forward` — `model.py:409`
 
 ```python
 def forward(self, feats: torch.Tensor) -> torch.Tensor
@@ -299,13 +299,13 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 `pooled = feats.mean(dim=1)` then sequential forward. Returns `Tensor[B]`.
 
-#### `embed` — `model.py:266`
+#### `embed` — `model.py:413`
 
 Returns the hidden layer activation, shape `[B, hidden_dim]`.
 
 ---
 
-### `CnnClassifierHead` — `model.py:451`
+### `CnnClassifierHead` — `model.py:619`
 
 ```python
 class CnnClassifierHead(ClassifierHead)
@@ -315,7 +315,7 @@ Two Conv1d layers over the feature dimension, adaptive average pooling, then two
 
 **Note:** Conv1d operates on `[B, C, T]` so the head transposes features internally — feats arrive as `[B, T, F]` and `self.conv` receives `[B, F, T]`.
 
-#### `__init__` — `model.py:453`
+#### `__init__` — `model.py:621`
 
 ```python
 def __init__(
@@ -332,17 +332,17 @@ def __init__(
 
 Architecture: `Conv1d(input_size, conv_dim, kernel_size) → ReLU → Conv1d(conv_dim, conv_dim, kernel_size) → ReLU → AdaptiveAvgPool1d(1) → FC(conv_dim, linear_dim) → FC(linear_dim, 1)`.
 
-#### `forward` — `model.py:471`
+#### `forward` — `model.py:639`
 
 Returns `Tensor[B]`.
 
-#### `embed` — `model.py:477`
+#### `embed` — `model.py:642`
 
 Returns the relu-activated fc1 output — shape `[B, linear_dim]`.
 
 ---
 
-### `GruClassifierHead` — `model.py:483`
+### `GruClassifierHead` — `model.py:648`
 
 ```python
 class GruClassifierHead(ClassifierHead)
@@ -350,7 +350,7 @@ class GruClassifierHead(ClassifierHead)
 
 GRU recurrent network over the time dimension, mean-pooled, then two FC layers.
 
-#### `__init__` — `model.py:485`
+#### `__init__` — `model.py:650`
 
 ```python
 def __init__(
@@ -376,7 +376,7 @@ def __init__(
 
 FC size after GRU: `hidden_dim * 2` if bidirectional, else `hidden_dim`.
 
-#### `_ensure_correct_shape` — `model.py:504`
+#### `_ensure_correct_shape` — `model.py:669`
 
 ```python
 def _ensure_correct_shape(self, feats: torch.Tensor) -> torch.Tensor
@@ -384,7 +384,7 @@ def _ensure_correct_shape(self, feats: torch.Tensor) -> torch.Tensor
 
 Auto-detects `[B, F, T]` vs `[B, T, F]` input orientation by comparing `D1` and `D2` to `input_size`. Transposes if `D1 == input_size and D2 != input_size`. Raises `ValueError` when both dimensions equal `input_size` (ambiguous).
 
-#### `forward` — `model.py:523`
+#### `forward` — `model.py:707`
 
 ```python
 def forward(self, feats: torch.Tensor) -> torch.Tensor
@@ -392,13 +392,13 @@ def forward(self, feats: torch.Tensor) -> torch.Tensor
 
 Calls `_ensure_correct_shape`, runs GRU, mean-pools GRU outputs, then two FC layers. Returns `Tensor[B]`.
 
-#### `embed` — `model.py:530`
+#### `embed` — `model.py:711`
 
 Returns the relu-activated fc1 output — shape `[B, linear_dim]`.
 
 ---
 
-### `BaseWakeModel` — `model.py:93`
+### `BaseWakeModel` — `model.py:145`
 
 ```python
 class BaseWakeModel(nn.Module)
@@ -406,7 +406,7 @@ class BaseWakeModel(nn.Module)
 
 Combines an extractor and a head into a single trainable module.
 
-#### `__init__` — `model.py:99`
+#### `__init__` — `model.py:151`
 
 ```python
 def __init__(
@@ -420,7 +420,7 @@ def __init__(
 
 Moves both submodules to `device`.
 
-#### `forward` — `model.py:147`
+#### `forward` — `model.py:253`
 
 ```python
 def forward(self, wavs: WavInput) -> torch.Tensor
@@ -428,7 +428,7 @@ def forward(self, wavs: WavInput) -> torch.Tensor
 
 Runs `feature_extractor(wavs)` then `classifier.forward(feats)`. Returns logits `Tensor[B]`.
 
-#### `embed` — `model.py:168`
+#### `embed` — `model.py:273`
 
 ```python
 def embed(self, wavs: WavInput) -> torch.Tensor
@@ -436,7 +436,7 @@ def embed(self, wavs: WavInput) -> torch.Tensor
 
 Returns `classifier.embed(feature_extractor(wavs))`. Used by metric losses and visualization.
 
-#### `forward_streaming` — `model.py:200`
+#### `forward_streaming` — `model.py:303`
 
 ```python
 def forward_streaming(
@@ -455,7 +455,7 @@ Processes one audio chunk with a rolling feature cache.
 
 Returns sigmoid probability as a Python `float`.
 
-#### `infer` — `model.py:222`
+#### `infer` — `model.py:325`
 
 ```python
 def infer(self, audio: np.ndarray) -> float
@@ -463,7 +463,7 @@ def infer(self, audio: np.ndarray) -> float
 
 Single-waveform inference. Wraps the audio in a tensor, calls `forward`, applies sigmoid. Returns `float` in `[0, 1]`. Raises `ValueError` if `audio.ndim != 1`.
 
-#### `load_checkpoint` — `model.py:187`
+#### `load_checkpoint` — `model.py:290`
 
 ```python
 def load_checkpoint(self, ckpt_path: str) -> None
@@ -471,7 +471,7 @@ def load_checkpoint(self, ckpt_path: str) -> None
 
 Loads a `.pt` file into the model with `strict=False`. Falls back to `state["model"]` key if a full dict is detected.
 
-#### `save_checkpoint` — `model.py:197`
+#### `save_checkpoint` — `model.py:300`
 
 ```python
 def save_checkpoint(self, ckpt_path: str) -> None
@@ -479,7 +479,7 @@ def save_checkpoint(self, ckpt_path: str) -> None
 
 Saves `self.state_dict()` via `torch.save`.
 
-#### `export_to_onnx` — `model.py:231`
+#### `export_to_onnx` — `model.py:334`
 
 ```python
 def export_to_onnx(
@@ -503,7 +503,7 @@ No PyTorch imports at module level. Requires only `numpy` and `onnxruntime`.
 
 ---
 
-### `OnnxWakeWordInferencer` — `inference.py:111`
+### `OnnxWakeWordInferencer` — `inference.py:137`
 
 ```python
 class OnnxWakeWordInferencer
@@ -511,7 +511,7 @@ class OnnxWakeWordInferencer
 
 Chains two ONNX sessions (extractor + head) for wake word detection.
 
-#### `__init__` — `inference.py:133`
+#### `__init__` — `inference.py:161`
 
 ```python
 def __init__(
@@ -532,7 +532,7 @@ def __init__(
 
 `device="auto"` checks `ort.get_all_providers()` for `CUDAExecutionProvider` (`inference.py:23`–`24`).
 
-#### `infer` — `inference.py:212`
+#### `infer` — `inference.py:242`
 
 ```python
 def infer(self, audio: np.ndarray) -> float
@@ -556,7 +556,7 @@ prob = inf.infer(audio)
 print(f"Wake probability: {prob:.4f}")
 ```
 
-#### `infer_batch` — `inference.py:246`
+#### `infer_batch` — `inference.py:276`
 
 ```python
 def infer_batch(self, audio_batch: np.ndarray) -> np.ndarray
@@ -575,7 +575,7 @@ batch = np.zeros((8, 16000), dtype=np.float32)
 probs = inf.infer_batch(batch)  # shape [8]
 ```
 
-#### `infer_streaming` — `inference.py:276`
+#### `infer_streaming` — `inference.py:306`
 
 ```python
 def infer_streaming(
@@ -629,7 +629,7 @@ EXTRACTOR_REGISTRY = {
 }
 ```
 
-Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:160`.
+Maps string extractor type names to classes. Used by `create_model`. Register custom extractors with `register_extractor(name, cls)` — `factory.py:161`.
 
 For HuBERT and Wav2Vec2: export the SSL model to ONNX once with the standalone export scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then use `featurizer_type="onnx"` to load it as an `OnnxFeatureExtractor`. This guarantees train/inference feature parity.
 
@@ -680,7 +680,7 @@ def __init__(
 
 When `mlflow_uri` is provided, starts an MLflow run named `<featurizer_slug>-<arch>` and logs all params (`trainer.py:99`–`116`).
 
-#### `create_model` — `trainer.py:251`
+#### `create_model` — `trainer.py:255`
 
 ```python
 @staticmethod
@@ -716,7 +716,7 @@ Builds and returns a `BaseWakeModel`. Extractor is resolved via `EXTRACTOR_REGIS
 | `"ocsvm"` | `OCSVMHead` |
 | `"conv_attention"` | `ConvAttentionHead` |
 
-#### `save_checkpoint` — `trainer.py:216`
+#### `save_checkpoint` — `trainer.py:219`
 
 ```python
 def save_checkpoint(
@@ -730,7 +730,7 @@ def save_checkpoint(
 
 Delegates to `ww_trainer.checkpoint.save_checkpoint`.
 
-#### `load_checkpoint` — `trainer.py:226`
+#### `load_checkpoint` — `trainer.py:229`
 
 ```python
 def load_checkpoint(
@@ -742,7 +742,7 @@ def load_checkpoint(
 
 Delegates to `ww_trainer.checkpoint.load_checkpoint`. Returns `(start_epoch, metrics)`.
 
-#### `train` — `trainer.py:300`
+#### `train` — `trainer.py:304`
 
 ```python
 def train(
@@ -788,7 +788,7 @@ Final model saved as `output_dir/final_model.pt`. Mining cache saved as `output_
 
 ---
 
-### CLI: `train` command — `cli.py:194`
+### CLI: `train` command — `cli.py:212`
 
 Entry point: `ww_trainer-train` (defined in `pyproject.toml`, implemented in `cli.py`).
 
@@ -834,7 +834,7 @@ Keys: `"micro"`, `"small"`, `"medium"`, `"large"`. See [architecture.md](../inte
 
 ---
 
-### `get_tier` — `tiers.py:210`
+### `get_tier` — `tiers.py:220`
 
 ```python
 def get_tier(name: str) -> TierConfig
@@ -844,7 +844,7 @@ Returns `HARDWARE_TIERS[name]`. Raises `ValueError` with available names if `nam
 
 ---
 
-### `list_tiers` — `tiers.py:197`
+### `list_tiers` — `tiers.py:207`
 
 ```python
 def list_tiers() -> str
@@ -868,7 +868,7 @@ class AudioDataset(Dataset)
 
 PyTorch `Dataset` for loading audio files with optional on-the-fly augmentation.
 
-#### `__init__` — `dataset.py:123`
+#### `__init__` — `dataset.py:129`
 
 ```python
 def __init__(
@@ -899,11 +899,11 @@ On construction: validates files (warns on missing), logs label distribution (`d
 
 When `vc_folder` and `vc_prob > 0`: loads the selected `voiceclonnx` VC engine (`dataset.py:145`–`148`), raising `ImportError` if `voiceclonnx` is not installed.
 
-#### `__len__` — `dataset.py:239`
+#### `__len__` — `dataset.py:249`
 
 Returns `len(self.samples)`.
 
-#### `__getitem__` — `dataset.py:315`
+#### `__getitem__` — `dataset.py:325`
 
 Returns `(wav: Tensor[T], label: int, path: str)`.
 
@@ -911,7 +911,7 @@ Load order: optionally voice-converts wake samples (`label=="1"`, prob `vc_prob`
 
 ---
 
-### `collate_fn` — `dataset.py:371`
+### `collate_fn` — `dataset.py:431`
 
 ```python
 def collate_fn(batch, device="auto") -> Tuple[Tensor, Tensor, Tuple[str, ...]]
@@ -927,7 +927,7 @@ Source: `ww_trainer/loss.py`
 
 ---
 
-### `CN2Plus1PairLoss` — `loss.py:43`
+### `CN2Plus1PairLoss` — `loss.py:44`
 
 (C_N,2 + 1)-pair loss from López-Espejo et al., TASLP 2021.
 
@@ -941,7 +941,7 @@ Inputs: `anchor [B, D]`, `positive [B, D]`, `negatives [N_neg, D]`. Encourages a
 
 ---
 
-### `SoftTripletLoss` — `loss.py:116`
+### `SoftTripletLoss` — `loss.py:117`
 
 Soft triplet loss: `log(1 + exp(D(a,p) - D(a,n)))`.
 
@@ -954,7 +954,7 @@ L2-normalizes inputs, computes squared L2 distances, applies softplus. Gradient 
 
 ---
 
-### `ContrastiveLoss` — `loss.py:156`
+### `ContrastiveLoss` — `loss.py:157`
 
 Classic contrastive (Siamese) loss.
 
@@ -968,7 +968,7 @@ Pulls positive pairs together (squared distance), pushes negative pairs beyond `
 
 ---
 
-### `LiftedStructureLoss` — `loss.py:202`
+### `LiftedStructureLoss` — `loss.py:203`
 
 Lifted Structured Embedding loss. Uses all positive and negative pairs via log-sum-exp.
 
@@ -980,7 +980,7 @@ def forward(self, embeds: Tensor, labels: Tensor) -> Tensor
 
 ---
 
-### `AngularLoss` — `loss.py:244`
+### `AngularLoss` — `loss.py:245`
 
 Cosine-based margin loss. Enforces `cos(A,P) > cos(A,N) + margin`.
 
@@ -994,7 +994,7 @@ Mines semi-hard triplets using Euclidean distance, then applies the angular (cos
 
 ---
 
-### `RobustProtoDiversityLoss` (RPPL) — `loss.py:297`
+### `RobustProtoDiversityLoss` (RPPL) — `loss.py:298`
 
 Composite loss: BCE + prototype contrastive + positive center loss + negative diversity + consistency.
 
@@ -1033,7 +1033,7 @@ When `aug_embeds` is provided, adds a consistency term `||z - z_aug||^2` (`loss.
 
 ---
 
-### `LossManager` — `loss.py:1164`
+### `LossManager` — `loss.py:1166`
 
 ```python
 class LossManager
@@ -1056,7 +1056,7 @@ Manages multiple weighted loss functions. `loss_configs` is a list of dicts:
 
 Supported names: `"bce"`, `"triplet"`, `"soft_triplet"`, `"pair"`, `"cn2pair"`, `"lse"`, `"contrastive"`, `"angular"`, `"rppl"`.
 
-#### `compute_loss` — `loss.py:1391`
+#### `compute_loss` — `loss.py:1394`
 
 ```python
 def compute_loss(
@@ -1201,7 +1201,7 @@ All functions are standalone (not methods). They accept `mlflow` as an optional 
 
 ---
 
-### `plot_roc` — `visualization.py:38`
+### `plot_roc` — `visualization.py:39`
 
 ```python
 def plot_roc(
@@ -1213,7 +1213,7 @@ Plots ROC curve, saves to `plot_dir/roc_epoch_{epoch}.png`.
 
 ---
 
-### `plot_pr` — `visualization.py:57`
+### `plot_pr` — `visualization.py:58`
 
 ```python
 def plot_pr(
@@ -1225,7 +1225,7 @@ Plots Precision-Recall curve, saves to `plot_dir/pr_epoch_{epoch}.png`.
 
 ---
 
-### `plot_det` — `visualization.py:77`
+### `plot_det` — `visualization.py:78`
 
 ```python
 def plot_det(
@@ -1237,7 +1237,7 @@ Plots DET curve (log-log axes), saves to `plot_dir/det_epoch_{epoch}.png`.
 
 ---
 
-### `log_confidence_histogram` — `visualization.py:372`
+### `log_confidence_histogram` — `visualization.py:373`
 
 ```python
 def log_confidence_histogram(
@@ -1254,7 +1254,7 @@ Plots two overlapping histograms — wake vs non-wake confidence distributions. 
 
 ---
 
-### `log_pca` — `visualization.py:570`
+### `log_pca` — `visualization.py:573`
 
 ```python
 def log_pca(
@@ -1267,7 +1267,7 @@ Runs PCA on embeddings of up to `sample_size` samples, plots 2-D scatter by clas
 
 ---
 
-### `log_tsne` — `visualization.py:624`
+### `log_tsne` — `visualization.py:629`
 
 ```python
 def log_tsne(
@@ -1280,7 +1280,7 @@ Runs t-SNE (perplexity=30, init="pca") on embeddings, plots 2-D scatter.
 
 ---
 
-### `log_umap` — `visualization.py:674`
+### `log_umap` — `visualization.py:681`
 
 ```python
 def log_umap(
@@ -1293,7 +1293,7 @@ Runs UMAP if `umap-learn` is installed; falls back to t-SNE with a `logging.warn
 
 ---
 
-### `log_embeddings_stats` — `visualization.py:731`
+### `log_embeddings_stats` — `visualization.py:740`
 
 ```python
 def log_embeddings_stats(
@@ -1321,7 +1321,7 @@ Source: `ww_trainer/mining.py`
 
 ---
 
-### `mine_hard_negatives` — `mining.py:18`
+### `mine_hard_negatives` — `mining.py:19`
 
 ```python
 def mine_hard_negatives(
@@ -1357,7 +1357,7 @@ Hardness score: `new = cache_decay * old + (1 - cache_decay) * max(0, prob - neg
 
 ---
 
-### `save_mining_cache` — `mining.py:161`
+### `save_mining_cache` — `mining.py:169`
 
 ```python
 def save_mining_cache(cache: dict, path: str) -> None
@@ -1367,7 +1367,7 @@ Saves `cache` dict via `torch.save`.
 
 ---
 
-### `load_mining_cache` — `mining.py:167`
+### `load_mining_cache` — `mining.py:175`
 
 ```python
 def load_mining_cache(path: str) -> dict
@@ -1383,7 +1383,7 @@ Source: `ww_trainer/checkpoint.py`
 
 ---
 
-### `save_checkpoint` — `checkpoint.py:13`
+### `save_checkpoint` — `checkpoint.py:15`
 
 ```python
 def save_checkpoint(
@@ -1403,7 +1403,7 @@ Creates parent directories if needed.
 
 ---
 
-### `load_checkpoint` — `checkpoint.py:121`
+### `load_checkpoint` — `checkpoint.py:140`
 
 ```python
 def load_checkpoint(
@@ -1424,7 +1424,7 @@ Source: `ww_trainer/sweep.py`
 
 ---
 
-### `run_sweep` — `sweep.py:91`
+### `run_sweep` — `sweep.py:93`
 
 ```python
 def run_sweep(
@@ -1491,7 +1491,7 @@ Builds a deterministic hash string from extractor configuration. Used as the `ex
 
 ## `ww_trainer.evaluation` — `compute_fitness_score`
 
-### `compute_fitness_score` — `evaluation.py:158`
+### `compute_fitness_score` — `evaluation.py:165`
 
 ```python
 def compute_fitness_score(

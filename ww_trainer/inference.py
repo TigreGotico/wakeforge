@@ -9,6 +9,32 @@ import numpy as np
 import onnxruntime as ort
 
 
+def head_metadata(head_path: str) -> dict:
+    """Custom metadata of an exported head ONNX (``wake_word``, ``pretrained_featurizer``, ...)."""
+    sess = ort.InferenceSession(head_path, providers=["CPUExecutionProvider"])
+    return dict(sess.get_modelmeta().custom_metadata_map)
+
+
+def pretrained_featurizer_path(head_path: str) -> str:
+    """Local path of the pretrained featurizer an exported head was trained on.
+
+    Reads ``pretrained_featurizer`` and ``featurizer_revision`` from the head's
+    metadata and downloads that revision from the Hub (cached).
+
+    Raises:
+        ValueError: If the head does not name a pretrained featurizer.
+    """
+    meta = head_metadata(head_path)
+    name = meta.get("pretrained_featurizer")
+    if not name:
+        raise ValueError(
+            f"{head_path} does not record a pretrained featurizer; pass the featurizer "
+            "ONNX it was trained with.")
+    from ww_trainer.pretrained import resolve_pretrained
+    onnx_path, _ = resolve_pretrained(name, meta.get("featurizer_revision") or None)
+    return onnx_path
+
+
 class PredictionSmoother:
     """Smooths raw per-frame predictions for robust wake word detection.
 
@@ -119,7 +145,9 @@ class OnnxWakeWordInferencer:
     exactly the same pattern used for the optional VAD channel.
 
     Args:
-        extractor_path: Path to the audio feature extractor ONNX file.
+        extractor_path: Path to the audio feature extractor ONNX file, or
+            ``None`` for a head trained on a pretrained featurizer: the head's
+            metadata names it and it is downloaded at the recorded revision.
         head_path: Path to the classifier head ONNX file.
         vad_path: Optional path to a VAD ONNX file (e.g. Silero VAD).
         text_extractor_path: Optional path to a text-encoder ONNX file.
@@ -130,7 +158,7 @@ class OnnxWakeWordInferencer:
         device: ``"cpu"``, ``"cuda"``, or ``"auto"`` (selects CUDA if available).
     """
 
-    def __init__(self, extractor_path: str, head_path: str,
+    def __init__(self, extractor_path: Optional[str], head_path: str,
                  vad_path: Optional[str] = None,
                  text_extractor_path: Optional[str] = None,
                  text_emb_dim: int = 128,
@@ -140,6 +168,8 @@ class OnnxWakeWordInferencer:
             device = "cuda" if "CUDAExecutionProvider" in available else "cpu"
         providers = (["CUDAExecutionProvider", "CPUExecutionProvider"]
                      if device == "cuda" else ["CPUExecutionProvider"])
+        if extractor_path is None:
+            extractor_path = pretrained_featurizer_path(head_path)
         self.extractor = ort.InferenceSession(extractor_path, providers=providers)
         self.head = ort.InferenceSession(head_path, providers=providers)
         self.vad = ort.InferenceSession(vad_path, providers=providers) if vad_path else None
@@ -358,6 +388,31 @@ class OnnxStreamingWakeWord:
         self.reset()
 
     @classmethod
+    def from_head(cls, streaming_head_path: str) -> "OnnxStreamingWakeWord":
+        """Build a streamer from a streaming head trained on a pretrained featurizer.
+
+        The head's metadata gives the featurizer (``pretrained_featurizer`` at
+        ``featurizer_revision``), the window and the GRU size; the featurizer
+        is downloaded and checked as in :meth:`from_extractor`.
+
+        Raises:
+            ValueError: If the head does not name a pretrained featurizer, or
+                the featurizer cannot be streamed.
+        """
+        meta = head_metadata(streaming_head_path)
+        if not meta.get("pretrained_featurizer"):
+            raise ValueError(
+                f"{streaming_head_path} does not record a pretrained featurizer; construct "
+                "OnnxStreamingWakeWord with the featurizer ONNX it was trained with.")
+        from ww_trainer.pretrained import load_pretrained_featurizer
+        extractor = load_pretrained_featurizer(meta["pretrained_featurizer"],
+                                               meta.get("featurizer_revision") or None,
+                                               device="cpu")
+        return cls.from_extractor(extractor, streaming_head_path,
+                                  window=int(meta["stream_window"]),
+                                  hidden_dim=int(meta["hidden_dim"]))
+
+    @classmethod
     def from_extractor(cls, extractor, streaming_head_path: str, window: int = 100,
                        hidden_dim: int = 128) -> "OnnxStreamingWakeWord":
         """Build a streamer for an :class:`~ww_trainer.feats.OnnxFeatureExtractor`.
@@ -430,7 +485,9 @@ def cli_main() -> None:
         prog="ww_trainer-infer",
         description="Score an audio file with a trained ONNX wake-word model.",
     )
-    parser.add_argument("--featurizer", required=True, help="Path to featurizer ONNX file.")
+    parser.add_argument("--featurizer", default=None,
+                        help="Path to featurizer ONNX file (omit for a head trained on a "
+                             "pretrained featurizer: its metadata names it).")
     parser.add_argument("--model", required=True, help="Path to head ONNX file.")
     parser.add_argument("--audio", required=True, help="Path to WAV file (16 kHz mono float32).")
     parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold (default 0.5).")
