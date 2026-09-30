@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0a1](https://github.com/TigreGotico/wakeforge/tree/0.6.0a1) (2026-09-30)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.5.0a1...0.6.0a1)
+
+**Merged pull requests:**
+
+- feat: WakeHuBERT pretrained featurizer and notebook [\#70](https://github.com/TigreGotico/wakeforge/pull/70) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.5.0a1](https://github.com/TigreGotico/wakeforge/tree/0.5.0a1) (2026-09-30)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.5a1...0.5.0a1)
@@ -151,19 +159,19 @@
 
 ## [0.4.0a3](https://github.com/TigreGotico/wakeforge/tree/0.4.0a3) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a3)
 
 **Merged pull requests:**
 
 - docs: publish-ready overhaul + repo cleanup + CI fixes [\#11](https://github.com/TigreGotico/wakeforge/pull/11) ([JarbasAl](https://github.com/JarbasAl))
 
-## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
-
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a2)
-
 ## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a1)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a1)
+
+## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a2)
 
 **Merged pull requests:**
 
