@@ -1,11 +1,12 @@
 # Changelog
 
-## [0.6.0a1](https://github.com/TigreGotico/wakeforge/tree/0.6.0a1) (2026-09-30)
+## [0.7.0a1](https://github.com/TigreGotico/wakeforge/tree/0.7.0a1) (2026-09-30)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.5.0a1...0.6.0a1)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.5.0a1...0.7.0a1)
 
 **Merged pull requests:**
 
+- feat: pretrained featurizers across every training path [\#73](https://github.com/TigreGotico/wakeforge/pull/73) ([JarbasAl](https://github.com/JarbasAl))
 - feat: WakeHuBERT pretrained featurizer and notebook [\#70](https://github.com/TigreGotico/wakeforge/pull/70) ([JarbasAl](https://github.com/JarbasAl))
 
 ## [0.5.0a1](https://github.com/TigreGotico/wakeforge/tree/0.5.0a1) (2026-09-30)
