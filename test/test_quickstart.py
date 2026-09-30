@@ -96,6 +96,27 @@ class TestQuickstartConfigDefaults:
         assert cfg.seed == 42
         assert cfg.device == "auto"
         assert cfg.lr == pytest.approx(5e-4)
+        assert cfg.max_negative is None
+
+
+class TestMaxNegativeReachesDatagen:
+    """QuickstartConfig.max_negative is passed to DatagenConfig."""
+
+    def test_cap_is_forwarded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import ww_trainer.datagen as datagen_mod
+        import ww_trainer.quickstart as qs
+
+        seen: dict = {}
+
+        def fake_pipeline(datagen_cfg):
+            seen["max_negative"] = datagen_cfg.max_negative
+            raise RuntimeError("stop after config")
+
+        monkeypatch.setattr(datagen_mod, "run_datagen_pipeline", fake_pipeline)
+        cfg = QuickstartConfig(wake_word="hey_x", output_dir=tmp_path, max_negative=20)
+        with pytest.raises(RuntimeError, match="stop after config"):
+            qs._run_or_load_datagen(cfg)
+        assert seen["max_negative"] == 20
 
 
 class TestReadCsv:

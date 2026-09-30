@@ -127,6 +127,7 @@ def load_generated(
     extra_bg_noise_hf: str = "",
     extra_music_hf: str = "",
     extra_rir_hf: str = "",
+    max_negative: Optional[int] = None,
 ) -> DatagenResult:
     """Run (or resume) datagen with optional HF and negative overrides.
 
@@ -143,6 +144,7 @@ def load_generated(
         extra_bg_noise_hf: Comma-sep HF repos appended to bg-noise.
         extra_music_hf: Comma-sep HF repos appended to music.
         extra_rir_hf: Comma-sep HF repos appended to RIR.
+        max_negative: Cap on clips per negative dataset (``None`` = all).
 
     Returns:
         :class:`~ww_trainer.datagen.DatagenResult`.
@@ -165,6 +167,7 @@ def load_generated(
         lang=lang,
         adversarial=adversarial,
         download_augmentation=download_augmentation,
+        max_negative=max_negative,
         reuse_dataset=True,
         seed=seed,
     )
