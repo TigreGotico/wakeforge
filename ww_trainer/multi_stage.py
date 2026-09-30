@@ -141,10 +141,10 @@ def run_multi_stage_training(
         epochs = kwargs.pop("epochs", 30)
         lr = kwargs.pop("lr", 1e-4)
 
-        # Resume from previous stage's best checkpoint
-        resume = None
+        # Start from the previous stage's best weights, with this stage's own
+        # epochs and learning-rate schedule.
         if best_ckpt is not None and best_ckpt.exists():
-            resume = str(best_ckpt)
+            trainer.model.load_checkpoint(str(best_ckpt))
 
         logger.info("=== Multi-Stage %d/%d: epochs=%d, lr=%g ===", i + 1, len(stages), epochs, lr)
 
@@ -154,7 +154,6 @@ def run_multi_stage_training(
             test_data=test_data,
             epochs=epochs,
             lr=lr,
-            resume=resume,
             **kwargs,
         )
 

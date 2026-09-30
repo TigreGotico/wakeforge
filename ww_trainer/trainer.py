@@ -67,6 +67,9 @@ class WakeWordTrainer:
         self.scaler = torch.amp.GradScaler(enabled=use_amp) if use_amp else None
         self.arch = arch
         self.training_params = model_kwargs
+        # GRU-output frames the streaming head pools; set by the training loop
+        # from the clip lengths in frames.
+        self.stream_window: Optional[int] = None
         # Pass keyword so factory can store it on the model and text featurizers
         # can use it for metadata; text_featurizer / text_emb_dim flow via model_kwargs
         model_kwargs.setdefault("keyword", self.wake_word)
@@ -243,6 +246,7 @@ class WakeWordTrainer:
             self.model, self.wake_word, self.arch,
             epoch, metrics or {}, optimizer, model_file,
             self.export_onnx, self.mlflow,
+            stream_window=self.stream_window,
         )
 
     # --------------------- Model Factory ---------------------

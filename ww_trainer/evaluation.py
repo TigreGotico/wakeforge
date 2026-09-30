@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ww_trainer.dataset import AudioDataset, collate_fn
+from ww_trainer.model import batch_forward
 from ww_trainer.metrics import DetectionReport, classification_report as _metrics_report
 from ww_trainer.visualization import plot_roc, plot_pr, plot_det
 
@@ -34,6 +35,7 @@ def evaluate_model(
     aug_prob: float = 0,
     mlflow=None,
     feature_cache=None,
+    feature_store=None,
 ) -> tuple:
     """Run evaluation on *dataset* and return metrics.
 
@@ -47,6 +49,9 @@ def evaluate_model(
         output_dir: If set, ROC/PR/DET plots are saved here.
         aug_prob: Augmentation probability for the dataset.
         mlflow: Optional mlflow module for metric logging.
+        feature_cache: Optional waveform cache.
+        feature_store: Optional :class:`~ww_trainer.feature_store.FeatureStore`
+            of the model's frozen featurizer; stored features are reused.
 
     Returns:
         Tuple of ``(acc, prec, rec, f1, auc, fp_paths, fn_paths,
@@ -56,7 +61,8 @@ def evaluate_model(
         return 0.0, 0.0, 0.0, 0.0, 0.0, [], [], [], [], [], []
 
     loader = DataLoader(
-        AudioDataset(dataset, aug_prob=aug_prob, feature_cache=feature_cache),
+        AudioDataset(dataset, aug_prob=aug_prob, feature_cache=feature_cache,
+                     feature_store=feature_store),
         batch_size=batch_size,
         shuffle=True,
         collate_fn=lambda b: collate_fn(b, device),
@@ -66,8 +72,9 @@ def evaluate_model(
     paths_all: List[str] = []
     model.eval()
     with torch.no_grad():
-        for wavs, labels, paths, *_ in tqdm(loader, desc="Evaluating", leave=False):
-            logits = model(wavs)
+        for batch in tqdm(loader, desc="Evaluating", leave=False):
+            _, labels, paths, _ = batch
+            logits = batch_forward(model, batch)
             prob = torch.sigmoid(logits).cpu().numpy().flatten()
             pred = (prob > threshold).astype(int)
             preds.extend(pred.tolist())

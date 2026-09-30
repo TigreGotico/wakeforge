@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ww_trainer.dataset import AudioDataset, collate_fn
+from ww_trainer.model import batch_forward
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ def mine_hard_negatives(
         wake_cache: Optional[List[Tuple[str, str]]] = None,
         feature_cache=None,
         rppl_proto: Optional[torch.Tensor] = None,
+        feature_store=None,
 ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], Dict[str, float]]:
     """Mine hard negatives from nonwake samples based on model confidence and embedding similarity.
 
@@ -57,6 +59,9 @@ def mine_hard_negatives(
             computation and uses this stabilised prototype directly — this is the
             RPPL→mining feedback loop that makes confusable-negative targeting
             more accurate as training progresses.
+        feature_store: Optional :class:`~ww_trainer.feature_store.FeatureStore`
+            of the model's frozen featurizer; each negative is featurized once
+            for the whole run.
 
     Returns:
         (hard_negatives, easy_negatives, updated_hardness_cache)
@@ -90,15 +95,16 @@ def mine_hard_negatives(
         elif wake_cache:
             wakes_subset = random.sample(wake_cache, min(len(wake_cache), 500))
             wake_loader = DataLoader(
-                AudioDataset(wakes_subset, aug_prob=0, feature_cache=feature_cache),
+                AudioDataset(wakes_subset, aug_prob=0, feature_cache=feature_cache,
+                             feature_store=feature_store),
                 batch_size=128, shuffle=False,
                 collate_fn=lambda b: collate_fn(b, device),
             )
             wake_embeds = []
             model.eval()
             with torch.no_grad():
-                for wavs, *_ in wake_loader:
-                    wake_embeds.append(model.embed(wavs))
+                for batch in wake_loader:
+                    wake_embeds.append(batch_forward(model, batch, embed=True))
             if wake_embeds:
                 wake_proto = torch.cat(wake_embeds, dim=0).mean(0, keepdim=True)
 
@@ -106,7 +112,8 @@ def mine_hard_negatives(
     subset = random.sample(nonwakes, min(sample_size, len(nonwakes)))
 
     loader = DataLoader(
-        AudioDataset(subset, aug_prob=0.0, feature_cache=feature_cache),
+        AudioDataset(subset, aug_prob=0.0, feature_cache=feature_cache,
+                     feature_store=feature_store),
         batch_size=128, shuffle=False,
         collate_fn=lambda b: collate_fn(b, device),
     )
@@ -115,15 +122,16 @@ def mine_hard_negatives(
     emb_sims: Dict[str, float] = {}   # cosine similarity to wake prototype
     model.eval()
     with torch.no_grad():
-        for wavs, _, paths, *__ in tqdm(loader, desc="Mining negatives", leave=False):
-            logits = model(wavs)
+        for batch in tqdm(loader, desc="Mining negatives", leave=False):
+            _, _, paths, _ = batch
+            logits = batch_forward(model, batch)
             probs = torch.sigmoid(logits).cpu().numpy().flatten()
             for path, p in zip(paths, probs):
                 new_conf[path] = float(p)
 
             # Collect embedding similarities in the same forward pass
             if has_embed and wake_proto is not None:
-                emb = model.embed(wavs)
+                emb = batch_forward(model, batch, embed=True)
                 sim = torch.nn.functional.cosine_similarity(emb, wake_proto)
                 for path, s in zip(paths, sim.cpu().tolist()):
                     emb_sims[path] = float(s)

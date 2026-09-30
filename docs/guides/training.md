@@ -54,7 +54,7 @@ Use a TTS engine to generate phonetically diverse recordings of your wake phrase
 
 ### Sample rate
 
-All audio is expected at 16 000 Hz. `AudioDataset.__getitem__` (`dataset.py:315`) resamples automatically using `torchaudio.functional.resample` if the source differs, but resampling at load time is slower than pre-converting your dataset.
+All audio is expected at 16 000 Hz. `AudioDataset.__getitem__` (`dataset.py:325`) resamples automatically using `torchaudio.functional.resample` if the source differs, but resampling at load time is slower than pre-converting your dataset.
 
 ---
 
@@ -66,12 +66,15 @@ All audio is expected at 16 000 Hz. `AudioDataset.__getitem__` (`dataset.py:315`
 | `small` | MFCC (40 coeff) | GRU (128d) | ~200K | RPi, small SBC | Constrained device, better temporal modelling |
 | `medium` | HuBERT ONNX | FFN (128d) | ~90M feat + 200K head | RPi 4, laptop | High accuracy, extractor pre-exported |
 | `large` | HuBERT (PyTorch) | GRU bidir 2-layer (256d) | ~300M feat + 1M head | Server/workstation | Best accuracy, GPU available |
+| `wakehubert` | WakeHuBERT (pretrained ONNX, 128-d, 50 fps) | GRU (128d) | 0.64M feat + ~100K head | RPi 4, laptop CPU | Speech-aware front end on CPU; streams |
+| `wakehubert-bigru` | WakeHuBERT (pretrained ONNX, 128-d, 50 fps) | GRU bidir (128d) | 0.64M feat + ~200K head | RPi 4, laptop CPU | Whole-window scoring |
 
 **Rules of thumb:**
 - Start with `small` — it works offline, has temporal modeling, and is fast enough to iterate.
 - Use `medium` when you have a pre-exported HuBERT ONNX and need higher accuracy on constrained hardware.
 - Use `large` only when accuracy is the primary concern and you have a GPU.
 - Use `micro` only for truly constrained targets (MCUs, RPi Zero).
+- Use `wakehubert` when MFCC-based models miss too many real speakers; any other pretrained featurizer can be chosen by name (see *Pretrained featurizers* below).
 
 ```bash
 ww_trainer-train --list-tiers
@@ -138,13 +141,13 @@ ww_trainer-train \
 
 ## 4. Full CLI Reference
 
-All options for `ww_trainer-train` (`cli.py:194`):
+All options for `ww_trainer-train` (`cli.py:212`):
 
 ### Hardware tier preset
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--tier` | choice | `None` | Preset: `micro`, `small`, `medium`, `large`. Overrides `--arch` and `--featurizer-type`. |
+| `--tier` | choice | `None` | Preset: `micro`, `small`, `medium`, `large`, `wakehubert`, `wakehubert-bigru`. Overrides `--arch` and `--featurizer-type`. |
 | `--list-tiers` | flag | `False` | Print tier table and exit. |
 
 ### Dataset
@@ -171,9 +174,14 @@ All options for `ww_trainer-train` (`cli.py:194`):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--featurizer` | str | `None` | Path to extractor ONNX file |
+| `--featurizer` | str | `None` | Path to extractor ONNX file, or a pretrained featurizer name |
+| `--featurizer-type` | str | `"onnx"` | Built-in extractor (`mfcc`, `filterbank`, ...) or pretrained featurizer name (`wakehubert`, `wakehubert-mel-tcn-wide`, ...) |
+| `--featurizer-revision` | str | `None` | Hub revision (branch, tag or commit) of a pretrained featurizer |
 | `--feature-dim` | int | `None` | Feature dimension F (auto-detected from extractor if omitted) |
-| `--arch` | str | `"gru"` | Head architecture: `gru`, `cnn`, `ffn` |
+| `--arch` | str | `"gru"` | Head: `gru`, `bigru`, `ffn`, `cnn`, `crnn`, `tcresnet`, `dscnn`, `conformer`, `kwt`, `efficientnet`, `matchboxnet`, `mixconv`, `res15`, `bcresnet`, `phonmatch`, `ocsvm` |
+| `--hidden-dim` | int | head default | GRU units (`gru`, `bigru`) or FFN width (`ffn`, `ocsvm`) |
+| `--linear-dim` | int | `128` | Dense layer after the GRU (`gru`, `bigru`); the embedding size |
+| `--gru-n-layers` | int | `1` | Stacked GRU layers (`gru`, `bigru`) |
 | `--device` | choice | `"auto"` | `"auto"`, `"cpu"`, or `"cuda"` |
 | `--sample-rate` | int | `16000` | Audio sample rate |
 | `--export-onnx` | flag | `False` | Export classifier head to ONNX after each checkpoint save |
@@ -225,10 +233,16 @@ All options for `ww_trainer-train` (`cli.py:194`):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--feature-cache-dir` | str | `".feature_cache/"` | Directory for cached feature vectors (`.npy` files) |
-| `--no-feature-cache` | flag | `False` | Disable feature vectorization cache |
+| `--feature-cache-dir` | str | `".feature_cache/"` | Directory for cached features (`.npy` files) |
+| `--no-feature-cache` | flag | `False` | Disable the feature cache |
+| `--feature-cache` | flag | `False` | Compute a built-in parameter-free extractor's features (MFCC, filterbank, ...) once per clip too |
+| `--feature-cache-variants` | int | `0` | Augmented feature variants kept per clip with a feature store; `0` augments on the fly |
 
-`FeatureCache` (`cache.py`) stores un-augmented waveforms keyed by MD5(file content + extractor class + feature_dim + sample_rate). Cache is automatically invalidated when the extractor changes. Bypassed when augmentation is applied to a sample.
+An ONNX featurizer (a pretrained one) gets a `FeatureStore` (`feature_store.py`): its features are computed once per clip and reused by every epoch, mining pass and evaluation, and persist in `--feature-cache-dir` across runs. With `--feature-cache-variants K`, an augmented draw reuses one of `K` augmented variants of the clip, each computed on its first draw. Built-in extractors without parameters get a store only with `--feature-cache`; Mixup and RPPL's augmented view then work on features instead of audio. An extractor with parameters (SincNet, LEAF) never gets one, even frozen, and neither does any run with `--unfreeze-at-epoch`. Runs without a store use `FeatureCache` (`cache.py`), which stores un-augmented waveforms keyed by MD5(file content + extractor identity) and is bypassed when augmentation is applied to a sample.
+
+### Pretrained featurizers
+
+Every command and API that takes a featurizer takes a pretrained featurizer name: `--featurizer-type`, `--featurizer`, the `wakehubert` tiers, `ww_trainer-quickstart --featurizer`, and `featurizer_type` in the sweep and genetic search (whose full search space includes the commercially licensed pretrained featurizers as a gene). Exported heads name the featurizer and its revision in their metadata, so `OnnxWakeWordInferencer(None, head)` and `OnnxStreamingWakeWord.from_head(head)` rebuild it. The complete walkthrough, from training to streaming inference, is in [Use a pretrained WakeHuBERT featurizer](../reference/extractors.md#use-a-pretrained-wakehubert-featurizer).
 
 ### Layer Freezing (Transfer Learning)
 
@@ -334,7 +348,7 @@ Hard-negative mining identifies non-wake samples that the model confuses with th
 
 ## 7. Augmentation Options
 
-Augmentation is applied on-the-fly in `AudioDataset.get_augmented` (`dataset.py:242`). Each type has a fixed probability independent of `--aug-prob`:
+Augmentation is applied on-the-fly in `AudioDataset.get_augmented` (`dataset.py:252`). Each type has a fixed probability independent of `--aug-prob`:
 
 | Type | Probability | Config |
 |------|-------------|--------|

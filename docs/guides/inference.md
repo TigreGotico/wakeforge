@@ -43,6 +43,8 @@ This matters for deployment targets (RPi Zero, embedded Linux, Raspberry Pi) whe
 
 Pass `featurizer_path` first, `head_path` second — order is mandatory. Swapping the arguments raises a shape mismatch at runtime.
 
+A head trained on a pretrained featurizer (`wakehubert`, ...) needs only the head: pass `None` as the featurizer and it is rebuilt from the head's `pretrained_featurizer` and `featurizer_revision` metadata (`ww_trainer-infer --model best_f1.onnx --audio clip.wav` does the same).
+
 See [export.md](export.md) for how to produce these files.
 
 ---
@@ -73,7 +75,7 @@ prob = inferencer.infer(audio)
 
 ## 3. Single Inference
 
-`OnnxWakeWordInferencer.infer` — `inference.py:212`
+`OnnxWakeWordInferencer.infer` — `inference.py:242`
 
 ```python
 from ww_trainer.inference import OnnxWakeWordInferencer
@@ -99,7 +101,7 @@ if prob > 0.5:
     print("Wake word detected!")
 ```
 
-`infer` (`inference.py:212`–`231`):
+`infer` (`inference.py:242`–`261`):
 1. Adds a batch dimension: `audio[np.newaxis, :]` → `[1, T]`.
 2. Runs extractor ONNX session → `[1, T_frames, F]`.
 3. Runs head ONNX session → scalar logit.
@@ -109,7 +111,7 @@ if prob > 0.5:
 
 ## 4. Batch Inference
 
-`OnnxWakeWordInferencer.infer_batch` — `inference.py:246`
+`OnnxWakeWordInferencer.infer_batch` — `inference.py:276`
 
 For higher throughput when processing many clips at once.
 
@@ -132,7 +134,7 @@ Pads to equal length before passing to `infer_batch`. If your clips have differe
 
 ## 5. Streaming Inference
 
-`OnnxWakeWordInferencer.infer_streaming` — `inference.py:276`
+`OnnxWakeWordInferencer.infer_streaming` — `inference.py:306`
 
 Streaming inference processes audio in small chunks and maintains a rolling feature cache. This is the correct approach for live microphone input — you never have a full utterance, only small frames arriving in real time.
 
@@ -174,7 +176,7 @@ stream = [np.zeros(CHUNK_SIZE, dtype=np.float32) for _ in range(20)]
 process_audio_stream(stream)
 ```
 
-**Window size:** The default cache size is 50 frames. For a 10 ms hop (160 samples at 16 kHz), that covers 500 ms of audio — enough for a typical wake word. The window size is hardcoded in `infer_streaming` (`inference.py:276`). To change it, use the PyTorch path with `SlidingFeatureCacheTensor(window_size=N)`.
+**Window size:** The default cache size is 50 frames. For a 10 ms hop (160 samples at 16 kHz), that covers 500 ms of audio — enough for a typical wake word. The window size is hardcoded in `infer_streaming` (`inference.py:306`). To change it, use the PyTorch path with `SlidingFeatureCacheTensor(window_size=N)`.
 
 ---
 
@@ -220,8 +222,13 @@ for chunk in audio_chunks:          # e.g. 0.1 s of 16 kHz audio
     prob = sw.push(chunk)           # carries GRU state across calls
 ```
 
+Training writes `<stem>_streaming.onnx` beside each checkpoint of a streamable
+model, with `window` set to the median positive clip length in frames. For a head
+trained on a pretrained featurizer, `OnnxStreamingWakeWord.from_head("best_f1_streaming.onnx")`
+takes the featurizer, window and GRU size from its metadata.
+
 **Pick `window` ≈ the training clip length in frames** (16 kHz MFCC ≈ 100
-frames/s, so a ~1 s clip → `window=100`). The streaming inferencer also carries a
+frames/s, so a ~1 s clip → `window=100`; WakeHuBERT is 50 frames/s). The streaming inferencer also carries a
 short audio left-context so per-chunk MFCC frames are computed with proper
 context. Constraints: unidirectional (causal) GRU, `gru_n_layers=1`.
 
@@ -233,7 +240,7 @@ During development or testing you can use the PyTorch model directly without exp
 
 ### Single waveform
 
-`BaseWakeModel.infer` — `model.py:222`
+`BaseWakeModel.infer` — `model.py:325`
 
 ```python
 import numpy as np
@@ -253,7 +260,7 @@ print(f"Probability: {prob:.4f}")
 
 ### Streaming with `SlidingFeatureCacheTensor`
 
-`BaseWakeModel.forward_streaming` — `model.py:200`
+`BaseWakeModel.forward_streaming` — `model.py:303`
 
 ```python
 import torch
@@ -288,7 +295,7 @@ for i in range(20):
         print(f"Wake word detected at chunk {i}! prob={prob:.3f}")
 ```
 
-`SlidingFeatureCacheTensor` (`feats.py:31`) is updated **in-place** every call. Reset it by creating a new instance after a detection event.
+`SlidingFeatureCacheTensor` (`feats.py:38`) is updated **in-place** every call. Reset it by creating a new instance after a detection event.
 
 ---
 
@@ -347,7 +354,7 @@ Both paths maintain a rolling window of the most recent feature frames (default:
 
 ## ONNX Path (Production)
 
-`OnnxWakeWordInferencer.infer_streaming` -- `inference.py:276`
+`OnnxWakeWordInferencer.infer_streaming` -- `inference.py:306`
 
 No PyTorch dependency. Cache is a plain numpy array.
 
@@ -378,24 +385,24 @@ for chunk in audio_stream:  # float32 arrays, e.g. 4000 samples (250ms)
 
 ## PyTorch Path (Development)
 
-`BaseWakeModel.forward_streaming` -- `model.py:200`
+`BaseWakeModel.forward_streaming` -- `model.py:303`
 
-Uses `SlidingFeatureCacheTensor` (`feats.py:31`) -- an `nn.Module` with an in-place buffer.
+Uses `SlidingFeatureCacheTensor` (`feats.py:38`) -- an `nn.Module` with an in-place buffer.
 
 **Per-call flow:**
-1. Extract features: `self.feature_extractor([audio_chunk])` -> `[1, T_new, F]` (`model.py:122`)
+1. Extract features: `self.feature_extractor([audio_chunk])` -> `[1, T_new, F]` (`model.py:201`)
 2. Update cache: `cache(feats.squeeze(0))` -> `[T_window, F]` (`model.py:123`)
 3. Classify: `self.classifier.forward(cached.unsqueeze(0))` -> logit (`model.py:124`)
 4. Return `sigmoid(logit)` as float (`model.py:125`)
 
-### `SlidingFeatureCacheTensor` -- `feats.py:31`
+### `SlidingFeatureCacheTensor` -- `feats.py:38`
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `feature_dim` | 768 | Feature dimension F |
 | `window_size` | 50 | Max frames retained |
 
-Internal state: `feature_cache` buffer `[window_size, F]` and `current_len` counter. Updated in-place via `forward(new_feats)` (`feats.py:36`). When buffer overflows, old frames shift out (`feats.py:46`).
+Internal state: `feature_cache` buffer `[window_size, F]` and `current_len` counter. Updated in-place via `forward(new_feats)` (`feats.py:36`). When buffer overflows, old frames shift out (`feats.py:53`).
 
 ```python
 import torch

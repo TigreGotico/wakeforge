@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 from huggingface_hub import hf_hub_download
@@ -114,7 +115,9 @@ def resolve_pretrained(name: str, revision: Optional[str] = None) -> tuple[str, 
         revision: Revision to pin; defaults to the entry's own revision.
 
     Returns:
-        Local path of the ONNX file and the parsed ``config.json``.
+        Local path of the ONNX file and the parsed ``config.json``. The config
+        carries the commit it was downloaded at under ``"_revision"`` when the
+        file sits in a Hugging Face cache snapshot, else the requested revision.
     """
     if name not in PRETRAINED_FEATURIZERS:
         raise ValueError(
@@ -123,9 +126,11 @@ def resolve_pretrained(name: str, revision: Optional[str] = None) -> tuple[str, 
         )
     entry = PRETRAINED_FEATURIZERS[name]
     rev = revision or entry.revision
-    config_path = hf_hub_download(entry.repo_id, "config.json", revision=rev)
+    config_path = Path(hf_hub_download(entry.repo_id, "config.json", revision=rev))
     with open(config_path, encoding="utf-8") as f:
         config = json.load(f)
+    snapshot = config_path.parent
+    config["_revision"] = snapshot.name if snapshot.parent.name == "snapshots" else (rev or "")
     onnx_path = hf_hub_download(entry.repo_id, config["files"][entry.variant], revision=rev)
     return onnx_path, config
 
@@ -160,4 +165,25 @@ def load_pretrained_featurizer(name: str, revision: Optional[str] = None,
         context_samples=context or 0,
         streaming=bool(config.get("streaming", False)) and context is not None,
         license=licence,
+        pretrained_name=name,
+        revision=config["_revision"],
     )
+
+
+def featurizer_metadata(extractor) -> Dict[str, str]:
+    """ONNX metadata that identifies a pretrained featurizer, or ``{}`` for any other.
+
+    Exported heads carry ``pretrained_featurizer`` (registry name) and ``featurizer_revision`` so
+    :class:`~ww_trainer.inference.OnnxWakeWordInferencer` and
+    :class:`~ww_trainer.inference.OnnxStreamingWakeWord` rebuild the featurizer
+    from the registry, plus ``feature_dim``, ``hop_samples`` and ``frame_rate_hz``.
+    """
+    if not isinstance(extractor, OnnxFeatureExtractor) or not extractor.pretrained_name:
+        return {}
+    return {
+        "pretrained_featurizer": extractor.pretrained_name,
+        "featurizer_revision": extractor.revision,
+        "feature_dim": str(extractor.feature_dim),
+        "hop_samples": str(extractor.hop_samples),
+        "frame_rate_hz": str(extractor.frame_rate_hz),
+    }
