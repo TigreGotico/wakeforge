@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.4a1](https://github.com/TigreGotico/wakeforge/tree/0.4.4a1) (2026-09-30)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a5...0.4.4a1)
+
+**Merged pull requests:**
+
+- fix\(ci\): make the notebook compile and smoke checks pass [\#71](https://github.com/TigreGotico/wakeforge/pull/71) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.4.3a5](https://github.com/TigreGotico/wakeforge/tree/0.4.3a5) (2026-09-25)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a4...0.4.3a5)
