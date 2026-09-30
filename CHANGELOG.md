@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0a1](https://github.com/TigreGotico/wakeforge/tree/0.5.0a1) (2026-09-30)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.5a1...0.5.0a1)
+
+**Merged pull requests:**
+
+- feat\(research\): supervised word objective beside distillation \(MSWC word classes\) [\#69](https://github.com/TigreGotico/wakeforge/pull/69) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.4.5a1](https://github.com/TigreGotico/wakeforge/tree/0.4.5a1) (2026-09-30)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.4a1...0.4.5a1)
