@@ -138,7 +138,7 @@ ww_trainer-train \
 
 ## 4. Full CLI Reference
 
-All options for `ww_trainer-train` (`cli.py:188`):
+All options for `ww_trainer-train` (`cli.py:194`):
 
 ### Hardware tier preset
 

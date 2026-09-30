@@ -19,7 +19,7 @@ Defined in `HARDWARE_TIERS` -- `ww_trainer/tiers.py:26`.
 | `delta_micro` | Delta+MFCC (13x3) | FFN | 128 | ~55K | MCU, RPi Zero |
 | `gammatone_small` | Gammatone | GRU | 128 | ~200K | RPi, small SBC |
 
-Use `get_tier("micro")` (`tiers.py:201`) or `--tier micro` on CLI.
+Use `get_tier("micro")` (`tiers.py:210`) or `--tier micro` on CLI.
 
 ---
 

@@ -24,7 +24,7 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 """)
 # -------------------------- Hardware tier preset --------------------------
 @click.option("--tier", default=None,
-              type=click.Choice(["micro", "small", "medium", "large"]),
+              type=click.Choice(["micro", "small", "medium", "large", "wakehubert"]),
               help="Hardware tier preset. Overrides --arch and --featurizer-type if set. "
                    "Run with --list-tiers to see all options.")
 @click.option("--list-tiers", "show_tiers", is_flag=True, default=False,
@@ -48,11 +48,17 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--output-dir", default=None, help="Directory to store checkpoints, metrics, and visualizations.")
 @click.option("--save-best", is_flag=True, help="If set, saves separate checkpoints for best precision/recall/F1/loss.")
 # -------------------------- Architecture --------------------------
-@click.option("--featurizer", type=str, help="path feature extractor .onnx model")
+@click.option("--featurizer", type=str,
+              help="Path to a feature extractor .onnx model, or a pretrained "
+                   "featurizer name (e.g. 'wakehubert') downloaded from the Hub.")
 @click.option("--featurizer-type", "featurizer_type", default="onnx",
               help="Built-in featurizer ('onnx', 'mfcc', 'filterbank', 'sincnet', "
                    "'gammatone', 'leaf', 'plp', 'pncc', 'cqt', 'delta_mfcc', "
-                   "'delta_filterbank'). Overridden by --tier when a tier is set.")
+                   "'delta_filterbank') or pretrained featurizer ('wakehubert', "
+                   "'wakehubert-mel-tcn-wide', ...; each with an '-int8' variant, see "
+                   "docs/reference/extractors.md). Overridden by --tier when a tier is set.")
+@click.option("--featurizer-revision", default=None,
+              help="Hub revision (branch, tag or commit) of a pretrained featurizer.")
 @click.option("--feature-dim", type=int,  help="Number of output features from onnx featurizer.")
 @click.option("--arch", default="gru", help="Model architecture (e.g., gru, cnn, ffn).")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
@@ -308,7 +314,7 @@ def train(**opts: dict) -> None:
     if not no_feature_cache:
         from ww_trainer.cache import FeatureCache
         ext = trainer.model.feature_extractor
-        ext_hash = f"{ext.feature_dim}_{ext.sample_rate}"
+        ext_hash = ext.cache_key
         feature_cache_obj = FeatureCache(
             feature_cache_dir, type(ext).__name__, ext_hash
         )
