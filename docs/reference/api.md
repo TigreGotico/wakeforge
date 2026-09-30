@@ -965,7 +965,7 @@ Pulls positive pairs together (squared distance), pushes negative pairs beyond `
 
 ---
 
-### `LiftedStructureLoss` — `loss.py:200`
+### `LiftedStructureLoss` — `loss.py:202`
 
 Lifted Structured Embedding loss. Uses all positive and negative pairs via log-sum-exp.
 
@@ -977,7 +977,7 @@ def forward(self, embeds: Tensor, labels: Tensor) -> Tensor
 
 ---
 
-### `AngularLoss` — `loss.py:251`
+### `AngularLoss` — `loss.py:244`
 
 Cosine-based margin loss. Enforces `cos(A,P) > cos(A,N) + margin`.
 
@@ -991,7 +991,7 @@ Mines semi-hard triplets using Euclidean distance, then applies the angular (cos
 
 ---
 
-### `RobustProtoDiversityLoss` (RPPL) — `loss.py:311`
+### `RobustProtoDiversityLoss` (RPPL) — `loss.py:297`
 
 Composite loss: BCE + prototype contrastive + positive center loss + negative diversity + consistency.
 
@@ -1030,7 +1030,7 @@ When `aug_embeds` is provided, adds a consistency term `||z - z_aug||^2` (`loss.
 
 ---
 
-### `LossManager` — `loss.py:1137`
+### `LossManager` — `loss.py:1164`
 
 ```python
 class LossManager
@@ -1053,7 +1053,7 @@ Manages multiple weighted loss functions. `loss_configs` is a list of dicts:
 
 Supported names: `"bce"`, `"triplet"`, `"soft_triplet"`, `"pair"`, `"cn2pair"`, `"lse"`, `"contrastive"`, `"angular"`, `"rppl"`.
 
-#### `compute_loss` — `loss.py:1347`
+#### `compute_loss` — `loss.py:1391`
 
 ```python
 def compute_loss(

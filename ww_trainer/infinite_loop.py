@@ -246,14 +246,14 @@ def infinite_training_loop(
     model = trainer.model
     device = trainer.device
 
+    loss_manager = LossManager(trainer.losses_cfg or [{"name": "bce", "weight": 1.0}], device=device)
     optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
+        [p for p in model.parameters() if p.requires_grad] + loss_manager.parameters(),
         lr=lr, weight_decay=1e-4,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=20, T_mult=2, eta_min=lr * 0.01,
     )
-    loss_manager = LossManager(trainer.losses_cfg or [{"name": "bce", "weight": 1.0}])
 
     # Mining cache
     hardness_cache: Dict[str, float] = {}
@@ -443,7 +443,7 @@ def infinite_training_loop(
         total_loss = 0.0
         n_batches = 0
 
-        for wavs, labels, paths in loader:
+        for wavs, labels, paths, _ in loader:
             labels_f = labels.float()
             neg_mask = labels_f == 0
             pos_mask = labels_f == 1

@@ -155,8 +155,10 @@ class SoftTripletLoss(nn.Module):
 
 class ContrastiveLoss(nn.Module):
     """
-    Contrastive Loss implementation.
-    Pulls positive pairs together and pushes negative pairs apart with a margin.
+    Contrastive Loss (Hadsell et al., CVPR 2006).
+    Pulls wake/wake pairs together and pushes wake/not-wake pairs apart with a margin.
+    Not-wake/not-wake pairs are left alone: that class is open (speech, music, noise) and
+    has no reason to be compact.
     """
 
     def __init__(self, margin: float = 1.0):
@@ -172,10 +174,10 @@ class ContrastiveLoss(nn.Module):
         pdist = pairwise_distance(embeds)  # (B, B)
         B = embeds.size(0)
 
-        # Mask for positive pairs (same label, non-diagonal)
+        labels = labels.view(-1).to(embeds.device)
         labels_mat = labels.unsqueeze(0) == labels.unsqueeze(1)
-
-        pos_mask = labels_mat & (~torch.eye(B, dtype=torch.bool, device=embeds.device))
+        wake = labels == 1
+        pos_mask = labels_mat & wake.unsqueeze(1) & (~torch.eye(B, dtype=torch.bool, device=embeds.device))
 
         # Mask for negative pairs (different label)
         neg_mask = ~labels_mat
@@ -199,8 +201,15 @@ class ContrastiveLoss(nn.Module):
 
 class LiftedStructureLoss(nn.Module):
     """
-    Lifted Structured Embedding (LSE) Loss.
-    Uses all positive and negative pairs in the batch, combining them via log-sum-exp.
+    Lifted Structured Embedding (LSE) Loss (Song et al., CVPR 2016).
+
+    For every positive pair (i, j), with N_i the clips of the other class:
+
+        J_ij = log( sum_{k in N_i} exp(margin - D_ik) + sum_{l in N_j} exp(margin - D_jl) ) + D_ij
+        L    = 1 / (2 |P|) * sum_{(i, j) in P} max(0, J_ij)^2
+
+    Positive pairs are wake/wake pairs only: the not-wake class is open (speech, music, noise)
+    and is not pulled together.
     """
 
     def __init__(self, margin: float = 1.0):
@@ -215,37 +224,21 @@ class LiftedStructureLoss(nn.Module):
         """
         pdist = pairwise_distance(embeds)  # (B, B)
         B = embeds.size(0)
+        labels = labels.view(-1).to(embeds.device)
 
-        # 1. Masks
-        labels_mat = labels.unsqueeze(0) == labels.unsqueeze(1)
-        # Positive pairs (same label, non-diagonal)
-        pos_mask = labels_mat & (~torch.eye(B, dtype=torch.bool, device=embeds.device))
+        same = labels.unsqueeze(0) == labels.unsqueeze(1)
+        not_self = ~torch.eye(B, dtype=torch.bool, device=embeds.device)
+        pos_mask = same & not_self & (labels == 1).unsqueeze(1) & (labels == 1).unsqueeze(0)
+        neg_mask = ~same
+        if not pos_mask.any() or not neg_mask.any():
+            return torch.tensor(0.0, device=embeds.device, requires_grad=True)
 
-        # Handle case where no positive pairs exist
-        D_pos = pdist[pos_mask]
-        if D_pos.numel() == 0:
-            return torch.tensor(0.0, device=embeds.device)
-
-        # 2. Negative terms calculation (Log-Sum-Exp over all negatives)
-
-        # Distance matrix for all negative pairs: D_ik where l_i != l_k
-        D_neg = pdist.clone()
-        # Set D_neg for positive pairs (l_i == l_k) to inf so exp(M - inf) is 0
-        D_neg[pos_mask] = float('inf')
-
-        # Exponential term: exp(Margin - D_neg)
-        exp_neg = torch.exp(self.margin - D_neg)
-
-        # Since we only consider k where l_k != l_i, we can sum along dim=1 (for anchor i)
-        sum_exp_neg = torch.sum(exp_neg, dim=1)  # (B,)
-
-        log_term = torch.log(torch.clamp(sum_exp_neg, min=1e-6))
-
-        pos_i, pos_j = torch.nonzero(pos_mask, as_tuple=True)
-        D_ij = pdist[pos_i, pos_j]
-        L_ij = D_ij + log_term[pos_i] + log_term[pos_j] - self.margin
-        loss = torch.clamp(L_ij, min=0.0).mean()
-        return loss
+        # log-sum-exp over each anchor's negatives, as terms to combine per pair
+        neg_logits = (self.margin - pdist).masked_fill(~neg_mask, float("-inf"))  # (B, B)
+        pos_i, pos_j = torch.nonzero(torch.triu(pos_mask, diagonal=1), as_tuple=True)
+        both = torch.cat([neg_logits[pos_i], neg_logits[pos_j]], dim=1)  # (|P|/2, 2B)
+        J = torch.logsumexp(both, dim=1) + pdist[pos_i, pos_j]
+        return 0.5 * torch.clamp(J, min=0.0).pow(2).mean()
 
 
 class AngularLoss(nn.Module):
@@ -285,25 +278,18 @@ class AngularLoss(nn.Module):
         margin_for_mining = 0.5  # A fixed small margin for mining
         a_idx, p_idx, n_idx, _ = sample_semihard_triplets(labels, embeds, margin=margin_for_mining)
 
+        if a_idx is not None:
+            # the not-wake class is open (speech, music, noise): only wake clips anchor a triplet,
+            # as in sample_triplets, so negatives are never pulled towards each other
+            wake = labels.to(a_idx.device)[a_idx] == 1
+            a_idx, p_idx, n_idx = a_idx[wake], p_idx[wake], n_idx[wake]
         if a_idx is None or len(a_idx) == 0:
             return torch.tensor(0.0, device=embeds.device, requires_grad=True)
 
-        # Get the similarities for the mined triplets
-        # cos_AP: cosine(A, P)
         cos_ap = cos_sim[a_idx, p_idx]
-        # cos_AN: cosine(A, N)
         cos_an = cos_sim[a_idx, n_idx]
-
-        # Loss is defined as: max(0, cos(A,P) - cos(A,N) + margin)
-        # We want the positive similarity (cos_AP) to be greater than the negative similarity (cos_AN) by the margin.
-
-        # MarginRankingLoss: max(0, -target*(x1-x2)+margin)
-        # Let x1 = cos_AN, x2 = cos_AP, target = 1
-        # Loss = max(0, -1*(cos_AN - cos_AP) + margin)
-        # Loss = max(0, cos_AP - cos_AN + margin)
-
-        # Since we use a custom loss, we compute the hinge loss directly:
-        loss = torch.clamp(cos_ap - cos_an + self.margin, min=0.0)
+        # hinge on cos(A,N) - cos(A,P) + margin: zero once the positive is closer by the margin
+        loss = torch.clamp(cos_an - cos_ap + self.margin, min=0.0)
 
         return loss.mean()
 
@@ -547,7 +533,7 @@ class FocalLoss(nn.Module):
     ``FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)``
 
     Args:
-        alpha: Balancing factor for positive class (default 0.25).
+        alpha: Balancing factor for positive class (default 0.90).
         gamma: Focusing parameter — higher values focus more on hard examples.
         reduction: ``"mean"`` or ``"sum"``.
     """
@@ -660,11 +646,15 @@ class ArcFaceLoss(nn.Module):
         w = F.normalize(self.weight, p=2, dim=1)
         cosine = torch.matmul(embeds, w.t())  # [B, 2]
 
-        # Add angular margin to the target class
+        # cos(theta + m) for the target class. Where theta + m would pass pi the curve turns back
+        # up, so, as in the reference implementation, it continues as cos(theta) - m * sin(m):
+        # the most misclassified clips keep a gradient instead of being clamped flat at pi
         labels = labels.view(-1).long()
-        theta = torch.acos(cosine.clamp(-1 + 1e-7, 1 - 1e-7))
-        target_theta = theta[torch.arange(len(labels)), labels] + self.margin
-        target_cos = torch.cos(target_theta.clamp(0, torch.pi))
+        cos_t = cosine[torch.arange(len(labels)), labels]
+        sin_t = torch.sqrt((1.0 - cos_t.pow(2)).clamp(min=1e-7))
+        m = torch.tensor(self.margin)
+        phi = cos_t * torch.cos(m) - sin_t * torch.sin(m)
+        target_cos = torch.where(cos_t > torch.cos(torch.pi - m), phi, cos_t - self.margin * torch.sin(m))
 
         logits = cosine.clone()
         logits[torch.arange(len(labels)), labels] = target_cos
@@ -676,8 +666,9 @@ class ArcFaceLoss(nn.Module):
 class CenterLoss(nn.Module):
     """Center Loss (Wen et al., ECCV 2016).
 
-    Learns a center for each class and penalizes distance from embeddings
-    to their corresponding class center.  Reduces intra-class variation.
+    Learns a center for each keyword class and penalizes the distance from each keyword
+    embedding to its class center.  Reduces intra-class variation.  Class 0 (not-wake) is
+    open (speech, music, noise), so its clips are not pulled to a center.
 
     Args:
         embed_dim: Embedding dimension.
@@ -704,8 +695,11 @@ class CenterLoss(nn.Module):
             Scalar loss.
         """
         labels = labels.view(-1).long()
-        centers_batch = self.centers[labels]  # [B, D]
-        return ((embeds - centers_batch) ** 2).sum(dim=1).mean() / 2.0
+        # class 0 (not-wake) is open, so only keyword clips are pulled to their center
+        kw = labels != 0
+        if not kw.any():
+            return embeds.sum() * 0.0
+        return ((embeds[kw] - self.centers[labels[kw]]) ** 2).sum(dim=1).mean() / 2.0
 
 
 class NTXentLoss(nn.Module):
@@ -748,10 +742,14 @@ class NTXentLoss(nn.Module):
         # For each anchor, compute log-softmax over all others
         log_prob = sim - torch.logsumexp(sim, dim=1, keepdim=True)
 
-        # Mean of log-prob over positive pairs
+        # Mean of log-prob over positive pairs, for wake anchors only: the not-wake class is open
+        # (speech, music, noise) and its members are not pulled towards each other
         n_pos = pos_mask.sum(dim=1).clamp(min=1)
         loss = -(log_prob * pos_mask.float()).sum(dim=1) / n_pos
-        return loss.mean()
+        anchors = (labels == 1) & (pos_mask.sum(dim=1) > 0)
+        if anchors.any():
+            return loss[anchors].mean()
+        return torch.tensor(0.0, device=embeds.device, requires_grad=True)
 
 
 class SupConLoss(nn.Module):
@@ -795,8 +793,9 @@ class SupConLoss(nn.Module):
         n_pos = pos_mask.sum(dim=1).clamp(min=1).float()
         loss = -(log_prob * pos_mask.float()).sum(dim=1) / n_pos
 
-        # Only compute for anchors that have at least one positive
-        valid = pos_mask.sum(dim=1) > 0
+        # Only wake anchors with at least one positive: the not-wake class is open (speech,
+        # music, noise) and its members are not pulled towards each other
+        valid = (labels == 1) & (pos_mask.sum(dim=1) > 0)
         if valid.any():
             return loss[valid].mean()
         return torch.tensor(0.0, device=embeds.device, requires_grad=True)
@@ -851,22 +850,30 @@ class ProxyNCALoss(nn.Module):
 class MultiSimilarityLoss(nn.Module):
     """Multi-Similarity Loss (Wang et al., CVPR 2019).
 
-    Mines informative pairs using three similarities: self-similarity,
-    relative similarity (positive), and negative similarity.  More
-    effective pair mining than triplet or contrastive approaches.
+    For each wake anchor i, pairs are mined with margin ``epsilon`` (a positive is kept if it is
+    less similar than the most similar negative plus epsilon; a negative if it is more similar
+    than the least similar positive minus epsilon), then weighted by
+
+        1/alpha * log(1 + sum_P exp(-alpha * (S_ik - base)))
+      + 1/beta  * log(1 + sum_N exp( beta  * (S_ik - base)))
+
+    The ``1 +`` makes each term a soft hinge that goes to zero once the pairs are on the right
+    side of ``base``. Only wake clips anchor: the not-wake class is open and is not pulled together.
 
     Args:
         alpha: Positive pair weighting (default 2.0).
         beta: Negative pair weighting (default 50.0).
-        base: Margin base (default 0.5).
+        base: Similarity threshold lambda (default 0.5).
+        epsilon: Mining margin (default 0.1).
     """
 
     def __init__(self, alpha: float = 2.0, beta: float = 50.0,
-                 base: float = 0.5) -> None:
+                 base: float = 0.5, epsilon: float = 0.1) -> None:
         super().__init__()
         self.alpha = alpha
         self.beta = beta
         self.base = base
+        self.epsilon = epsilon
 
     def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute multi-similarity loss.
@@ -879,48 +886,29 @@ class MultiSimilarityLoss(nn.Module):
             Scalar loss.
         """
         embeds = F.normalize(embeds, p=2, dim=1)
-        B = embeds.size(0)
-        labels = labels.view(-1)
-
+        labels = labels.view(-1).to(embeds.device)
         sim = torch.matmul(embeds, embeds.t())  # [B, B]
-        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1))
-        pos_mask.fill_diagonal_(False)
-        neg_mask = ~(labels.unsqueeze(0) == labels.unsqueeze(1))
+        same = labels.unsqueeze(0) == labels.unsqueeze(1)
+        pos_mask = same & ~torch.eye(len(labels), dtype=torch.bool, device=embeds.device)
+        neg_mask = ~same
 
-        loss = torch.tensor(0.0, device=embeds.device, requires_grad=True)
-        n_valid = 0
+        def soft_hinge(x):  # log(1 + sum exp(x))
+            return torch.logsumexp(torch.cat([x.new_zeros(1), x]), dim=0)
 
-        for i in range(B):
-            pos_sim = sim[i][pos_mask[i]]
-            neg_sim = sim[i][neg_mask[i]]
-
+        terms = []
+        for i in torch.nonzero(labels == 1).flatten().tolist():
+            pos_sim, neg_sim = sim[i][pos_mask[i]], sim[i][neg_mask[i]]
             if pos_sim.numel() == 0 or neg_sim.numel() == 0:
                 continue
-
-            # Positive pair mining: harder than hardest negative + margin
-            pos_thresh = neg_sim.max() + self.base
-            hard_pos = pos_sim[pos_sim < pos_thresh]
-
-            # Negative pair mining: harder than easiest positive - margin
-            neg_thresh = pos_sim.min() - self.base
-            hard_neg = neg_sim[neg_sim > neg_thresh]
-
-            if hard_pos.numel() == 0 or hard_neg.numel() == 0:
+            hard_pos = pos_sim[pos_sim - self.epsilon < neg_sim.max()]
+            hard_neg = neg_sim[neg_sim + self.epsilon > pos_sim.min()]
+            if hard_pos.numel() == 0 and hard_neg.numel() == 0:
                 continue
-
-            pos_term = (1.0 / self.alpha) * torch.logsumexp(
-                -self.alpha * (hard_pos - self.base), dim=0
-            )
-            neg_term = (1.0 / self.beta) * torch.logsumexp(
-                self.beta * (hard_neg - self.base), dim=0
-            )
-
-            loss = loss + pos_term + neg_term
-            n_valid += 1
-
-        if n_valid > 0:
-            loss = loss / n_valid
-        return loss
+            terms.append(soft_hinge(-self.alpha * (hard_pos - self.base)) / self.alpha
+                         + soft_hinge(self.beta * (hard_neg - self.base)) / self.beta)
+        if not terms:
+            return torch.tensor(0.0, device=embeds.device, requires_grad=True)
+        return torch.stack(terms).mean()
 
 
 class HALOLoss(nn.Module):
@@ -998,6 +986,7 @@ class HALOLoss(nn.Module):
         Returns:
             Scalar loss (if ``reduction="mean"``) or ``[B]`` tensor.
         """
+        targets = targets.view(-1).long()
         B, D = embeddings.shape
         gamma = F.softplus(self.gamma_raw)
         c = self.centroids  # [K, D]
@@ -1043,12 +1032,51 @@ class HALOLoss(nn.Module):
         return loss_ce + reg
 
 
-class SizeAwareLoss(nn.Module):
-    """Wraps a base loss with L1 sparsity and parameter-count penalties.
+class OCSoftmaxLoss(nn.Module):
+    """One-class softmax (Zhang, Jiang, Duan, IEEE SPL 2021).
 
-    Encourages smaller models during training by adding:
-    - L1 norm of all parameters (sparsity pressure)
-    - Soft penalty proportional to param_count / param_budget
+    Built for a target class facing an open, unbounded other class: here the wake word
+    against all speech, music and noise. A single learned direction ``w`` represents the wake
+    word. Wake embeddings are pushed to cosine above ``m_wake`` with it and every other clip to
+    cosine below ``m_other``; clips of the other class are never pulled towards each other or
+    towards a center of their own.
+
+        L = (1/N) * sum( softplus( alpha * margin ) )   over all N clips in the batch,
+            margin = m_wake - cos for a wake clip, cos - m_other for every other clip
+
+    Args:
+        embed_dim: Embedding dimension.
+        m_wake: Cosine a wake clip must exceed (default 0.9).
+        m_other: Cosine every other clip must stay below (default 0.2).
+        alpha: Scale (default 20.0).
+    """
+
+    def __init__(self, embed_dim: int, m_wake: float = 0.9, m_other: float = 0.2, alpha: float = 20.0) -> None:
+        super().__init__()
+        if not -1.0 <= m_other < m_wake <= 1.0:
+            raise ValueError(f"need -1 <= m_other < m_wake <= 1, got {m_other}, {m_wake}")
+        self.center = nn.Parameter(torch.randn(embed_dim))
+        self.m_wake, self.m_other, self.alpha = m_wake, m_other, alpha
+
+    @property
+    def wake_prototype(self) -> torch.Tensor:
+        """Normalised wake direction (shape ``(D,)``)."""
+        return F.normalize(self.center.detach(), dim=0)
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        cos = F.normalize(embeds, dim=1) @ F.normalize(self.center, dim=0)
+        wake = labels.view(-1).to(embeds.device) == 1
+        margin = torch.where(wake, self.m_wake - cos, cos - self.m_other)
+        return F.softplus(self.alpha * margin).mean()
+
+
+class SizeAwareLoss(nn.Module):
+    """Wraps a base loss with an L1 sparsity penalty and a parameter-count term.
+
+    - L1 norm of all parameters: sparsity pressure, the only term with a gradient.
+    - ``size_weight * max(0, param_count / param_budget - 1)``: a constant for a given
+      architecture. It shifts the reported loss of an over-budget model but cannot shrink one;
+      choosing the architecture does that.
 
     Args:
         base_loss: The underlying loss module.
@@ -1150,8 +1178,8 @@ class LossManager:
             mining_type: Triplet mining strategy.
             device: The torch device ('cpu' or 'cuda') where losses should reside.
             neg_weight_schedule: Dynamic negative weight schedule — ``"linear"``,
-                ``"cosine"``, or ``None`` (disabled). When active, ``pos_weight``
-                is passed to BCE/focal/label_smoothing_bce losses.
+                ``"cosine"``, or ``None`` (disabled). When active, each not-wake clip's
+                BCE term is multiplied by the current negative weight.
             max_neg_weight: Maximum negative class weight (default 100.0).
 
         Raises:
@@ -1191,12 +1219,12 @@ class LossManager:
                 crit = AngularLoss(margin=cfg.get("margin", 0.5)).to(self.device)
             elif name == "focal":
                 crit = FocalLoss(
-                    alpha=cfg.get("alpha", 0.25),
+                    alpha=cfg.get("alpha", 0.90),
                     gamma=cfg.get("gamma", 2.0),
                 ).to(self.device)
             elif name == "label_smoothing_bce":
                 crit = LabelSmoothingBCE(
-                    smoothing=cfg.get("smoothing", 0.1),
+                    smoothing=cfg.get("smoothing", 0.03),
                 ).to(self.device)
             elif name == "arcface":
                 crit = ArcFaceLoss(
@@ -1228,6 +1256,7 @@ class LossManager:
                     alpha=cfg.get("alpha", 2.0),
                     beta=cfg.get("beta", 50.0),
                     base=cfg.get("base", 0.5),
+                    epsilon=cfg.get("epsilon", 0.1),
                 ).to(self.device)
             elif name == "rppl":
                 crit = RobustProtoDiversityLoss(
@@ -1253,6 +1282,13 @@ class LossManager:
                     label_smoothing=cfg.get("label_smoothing", 0.1),
                     reduction=cfg.get("reduction", "mean"),
                 ).to(self.device)
+            elif name == "oc_softmax":
+                crit = OCSoftmaxLoss(
+                    embed_dim=cfg.get("embed_dim", 128),
+                    m_wake=cfg.get("m_wake", 0.9),
+                    m_other=cfg.get("m_other", 0.2),
+                    alpha=cfg.get("alpha", 20.0),
+                ).to(self.device)
             elif name == "size_aware":
                 base = nn.BCEWithLogitsLoss().to(self.device)
                 crit = SizeAwareLoss(
@@ -1265,6 +1301,14 @@ class LossManager:
                 raise ValueError(f"Unknown loss: {name}")
 
             self.losses.append({"name": name, "weight": weight, "criterion": crit, "margin": cfg.get("margin", 1.0)})
+
+    def parameters(self) -> List[nn.Parameter]:
+        """Learnable parameters of the criteria: class centers, proxies, learned temperatures.
+
+        They belong in the optimizer beside the model's; without them the centers of ArcFace,
+        center, Proxy-NCA, HALO and OC-softmax never move from their random initial values.
+        """
+        return [p for e in self.losses for p in e["criterion"].parameters() if p.requires_grad]
 
     def update_neg_weight(self, step: int, total_steps: int) -> float:
         """Update the dynamic negative class weight for the current step.
@@ -1320,15 +1364,16 @@ class LossManager:
 
         1. ``RobustProtoDiversityLoss`` — EMA prototype (most stable; accumulates
            over the full training run)
-        2. ``ArcFaceLoss`` — learned angular class center for the wake class
-        3. ``CenterLoss`` — learned Euclidean class center for the wake class
-        4. ``ProxyNCALoss`` — learned proxy for the wake class
+        2. ``OCSoftmaxLoss`` — learned wake direction
+        3. ``ArcFaceLoss`` — learned angular class center for the wake class
+        4. ``CenterLoss`` — learned Euclidean class center for the wake class
+        5. ``ProxyNCALoss`` — learned proxy for the wake class
 
         Returns:
             Normalised ``(D,)`` tensor, or ``None`` if no suitable loss is active.
         """
         # Priority ordering: prefer the most stable representation first
-        _PRIORITY = ("rppl", "arcface", "center", "proxy_nca")
+        _PRIORITY = ("rppl", "oc_softmax", "arcface", "center", "proxy_nca")
         by_name = {
             entry["name"]: entry.get("criterion")
             for entry in self.losses
@@ -1398,9 +1443,11 @@ class LossManager:
             if name == "bce":
                 # Binary Cross-Entropy Loss — with optional dynamic neg weight
                 if self.neg_weight_schedule is not None and self._current_neg_weight > 1.0:
-                    pw = torch.tensor([self._current_neg_weight], device=self.device)
+                    # the schedule weights the not-wake clips (false activations);
+                    # pos_weight would weight the wake clips instead
+                    w = torch.where(labels_float > 0.5, 1.0, self._current_neg_weight)
                     loss_val = F.binary_cross_entropy_with_logits(
-                        logits.view_as(labels_float), labels_float, pos_weight=pw,
+                        logits.view_as(labels_float), labels_float, weight=w,
                     )
                 else:
                     loss_val = crit(logits.view_as(labels_float), labels_float)
@@ -1421,7 +1468,11 @@ class LossManager:
             elif name == "pair":
                 # Margin Ranking Loss (Pair Loss)
                 d_ap, d_an = get_hard_pair_distances(labels.view(-1).long(), embeds)
-                if d_ap is not None and d_an is not None:
+                # wake anchors only: a not-wake anchor's "hardest positive" is the farthest
+                # other not-wake clip, and pulling it in would compact the open class
+                wake = labels.view(-1).to(self.device) == 1
+                d_ap, d_an = d_ap[wake], d_an[wake]
+                if int(wake.sum()) >= 2 and not bool(wake.all()):
                     target = torch.ones_like(d_ap, device=self.device)
                     # Loss = max(0, -target*(x1-x2)+margin) where x1=D_an, x2=D_ap, target=1
                     # Goal: D_an - D_ap + margin > 0
@@ -1445,7 +1496,7 @@ class LossManager:
             elif name in ("focal", "label_smoothing_bce"):
                 loss_val = crit(logits.view(-1), labels.to(self.device).float().view(-1))
 
-            elif name in ("arcface", "center", "proxy_nca"):
+            elif name in ("arcface", "center", "proxy_nca", "oc_softmax"):
                 loss_val = crit(embeds, labels.to(self.device).view(-1))
 
             elif name in ("ntxent", "supcon", "multi_similarity"):

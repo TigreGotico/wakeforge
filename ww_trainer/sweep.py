@@ -264,7 +264,7 @@ def _evaluate_config(
     loss_name = config.get("loss", "bce")
     losses_cfg = [{"name": loss_name, "weight": 1.0}]
     # Losses that need embed_dim
-    if loss_name in ("arcface", "center", "proxy_nca"):
+    if loss_name in ("arcface", "center", "proxy_nca", "oc_softmax"):
         losses_cfg[0]["embed_dim"] = kwargs["hidden_dim"]
 
     arch = config.get("arch", "ffn")
