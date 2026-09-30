@@ -1,6 +1,8 @@
 """Tests for ww_trainer.datagen — synthetic data pipeline."""
 
 import csv
+import random
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,6 +12,7 @@ import pytest
 import torch
 import torchaudio
 
+from ww_trainer import datagen
 from ww_trainer.datagen import (
     DatagenConfig,
     DatagenResult,
@@ -345,3 +348,294 @@ class TestPipelineMockedEndToEnd:
         # All labels are 0 or 1
         for _, label in train + test:
             assert label in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# download_hf_audio_dataset decodes encoded bytes without torchcodec
+# ---------------------------------------------------------------------------
+
+def _fake_datasets_module(load_dataset=None):
+    """A stand-in `datasets` module: the test extra does not install it."""
+    import types
+
+    class Audio:
+        def __init__(self, decode: bool = True) -> None:
+            self.decode = decode
+
+    mod = types.ModuleType("datasets")
+    mod.Audio = Audio
+    mod.load_dataset = load_dataset
+    return mod
+
+
+class TestDownloadDecodesWithSoundfile:
+    def test_encoded_bytes_become_16k_wavs(self, tmp_path, monkeypatch) -> None:
+        import io
+        import sys
+        import numpy as np
+        import soundfile as sf
+        from ww_trainer import datagen
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
+
+        sr_in = 22050
+        tone = (0.2 * np.sin(2 * np.pi * 440 * np.arange(sr_in) / sr_in)).astype(np.float32)
+        buf = io.BytesIO()
+        sf.write(buf, tone, sr_in, format="WAV")
+        row = {"audio": {"bytes": buf.getvalue(), "path": "clip.wav"}}
+
+        class FakeDataset:
+            # Like datasets >= 4 without torchcodec: iterating an Audio column
+            # that still decodes raises, and only a decode=False cast yields
+            # the encoded bytes.
+            features = {"audio": hf_datasets.Audio()}
+
+            def __init__(self, decode: bool = True) -> None:
+                self.decode = decode
+
+            def cast_column(self, col, feature):
+                assert col == "audio"
+                return FakeDataset(decode=feature.decode)
+
+            def __iter__(self):
+                if self.decode:
+                    raise ImportError("To support decoding audio data, please install 'torchcodec'.")
+                return iter([row, row])
+
+        monkeypatch.setitem(sys.modules, "torchcodec", None)
+        # The folder-repo fast path probes the Hub before load_dataset runs.
+        # Stub it, or the test makes a real HfApi call against "org/fake".
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: [])
+        monkeypatch.setattr(hf_datasets, "load_dataset", lambda *a, **k: FakeDataset())
+
+        files = datagen.download_hf_audio_dataset("org/fake", tmp_path, max_samples=2, sr=16000)
+
+        assert [f.name for f in files] == ["000000.wav", "000001.wav"]
+        audio, sr = sf.read(files[0], dtype="float32")
+        assert sr == 16000
+        assert abs(len(audio) - 16000) <= 2
+
+
+class TestFolderReposBypassTheDatasetsBuilder:
+    def test_audio_files_are_fetched_one_by_one(self, tmp_path, monkeypatch) -> None:
+        import sys
+        import numpy as np
+        import soundfile as sf
+        from ww_trainer import datagen
+
+        src = tmp_path / "src"
+        src.mkdir()
+        for n in ("b.wav", "a.wav", "README.md"):
+            if n.endswith(".wav"):
+                sf.write(src / n, np.zeros(22050, dtype=np.float32), 22050)
+            else:
+                (src / n).write_text("card")
+        monkeypatch.setitem(sys.modules, "torchcodec", None)
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: ["a.wav", "b.wav"])
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                            lambda repo, name, repo_type=None: str(src / name))
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+
+        files = datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=1, sr=16000)
+
+        assert [f.name for f in files] == ["000000.wav"]
+        audio, sr = sf.read(files[0], dtype="float32")
+        assert sr == 16000 and abs(len(audio) - 16000) <= 2
+
+
+# ---------------------------------------------------------------------------
+# The pipeline refuses to finish with an empty class
+# ---------------------------------------------------------------------------
+
+class TestPipelineRefusesEmptyClasses:
+    def test_no_downloads_is_an_error_not_a_dataset(self, tmp_path, monkeypatch) -> None:
+        import pytest
+        from ww_trainer import datagen
+
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", lambda *a, **k: [])
+        monkeypatch.setattr(datagen, "find_positive_dataset", lambda ww: "org/positives")
+        cfg = datagen.DatagenConfig(wake_word="hey test", output_dir=tmp_path,
+                                    n_positive=10, download_augmentation=False, adversarial=False)
+        with pytest.raises(RuntimeError, match="0 positives and 0 negatives"):
+            datagen.run_datagen_pipeline(cfg)
+        assert not (tmp_path / "train" / "metadata.csv").exists()
+
+
+# ---------------------------------------------------------------------------
+# A capped download samples the whole repo
+# ---------------------------------------------------------------------------
+
+class TestCappedDownloadSamplesTheRepo:
+    """A cap must draw from the repo, not from its first directory."""
+
+    def test_cap_covers_more_than_one_class(self, monkeypatch, tmp_path) -> None:
+        # A repo that groups clips per class, as TigreGotico/NAR does: the
+        # sorted file list starts with every clip of the first class.
+        classes = [f"class{c:02d}" for c in range(42)]
+        listing = sorted(f"{c}/{c}_{i}.wav" for c in classes for i in range(20))
+        captured: list = []
+
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: captured.extend(files) or [],
+        )
+
+        random.seed(42)
+        datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=20)
+
+        assert len(captured) == 20
+        drawn = {f.split("/")[0] for f in captured}
+        # The old slice gave exactly one class. Any spread beats that; require
+        # a real one so a future regression to slicing fails here.
+        assert len(drawn) > 1, f"cap took {len(drawn)} class(es): {sorted(drawn)}"
+        assert listing[:20] != sorted(captured)
+
+    def test_the_draw_is_reproducible_under_the_seed(self, monkeypatch, tmp_path) -> None:
+        listing = sorted(f"c{c:02d}/f{i}.wav" for c in range(10) for i in range(10))
+        seen: list = []
+
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: seen.append(list(files)) or [],
+        )
+        for _ in range(2):
+            random.seed(7)
+            datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=5)
+        assert seen[0] == seen[1]
+
+    def test_a_cap_at_or_above_the_repo_size_takes_everything(self, monkeypatch, tmp_path) -> None:
+        listing = ["a/1.wav", "a/2.wav", "b/1.wav"]
+        captured: list = []
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(
+            datagen, "_download_audio_files",
+            lambda dataset_id, files, output_dir, sr: captured.extend(files) or [],
+        )
+        datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=99)
+        assert captured == listing
+
+
+# ---------------------------------------------------------------------------
+# Pipeline runs over fake folder repos
+# ---------------------------------------------------------------------------
+
+def _install_folder_repos(monkeypatch, tmp_path: Path, n_files: int = 30) -> None:
+    """Make every repo a folder of *n_files* WAVs served from local disk."""
+    import huggingface_hub
+
+    src = tmp_path / "hub"
+
+    def list_files(repo):
+        return [f"clips/{i:03d}.wav" for i in range(n_files)]
+
+    def hub_download(repo, name, repo_type=None):
+        path = src / repo.replace("/", "__") / name
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _make_wav(path, duration=0.3)
+        return str(path)
+
+    monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+    monkeypatch.setattr(datagen, "_list_repo_audio_files", list_files)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", hub_download)
+
+
+def _pipeline_config(out: Path, seed: int = 42) -> DatagenConfig:
+    return DatagenConfig(
+        wake_word="hey_mycroft", output_dir=out, n_positive=6, max_negative=6,
+        vad_trim=False, download_augmentation=False, adversarial=False, seed=seed,
+    )
+
+
+def _rows(csv_path: Path) -> list:
+    with open(csv_path) as f:
+        return [tuple(r) for r in csv.reader(f) if r]
+
+
+class TestSplitIsReproducibleWithCachedDownloads:
+    def test_rerun_with_cached_downloads_gives_the_same_split(self, tmp_path, monkeypatch) -> None:
+        _install_folder_repos(monkeypatch, tmp_path)
+        out = tmp_path / "ds"
+
+        first = run_datagen_pipeline(_pipeline_config(out))
+        first_split = (_rows(first.train_csv), _rows(first.test_csv))
+
+        # Every download directory now holds its WAVs, so the second run
+        # reads them from disk instead of drawing a sample.
+        second = run_datagen_pipeline(_pipeline_config(out))
+        assert (_rows(second.train_csv), _rows(second.test_csv)) == first_split
+
+
+class TestNegativesFromDifferentReposDoNotCollide:
+    def test_every_negative_survives_preprocessing(self, tmp_path, monkeypatch) -> None:
+        _install_folder_repos(monkeypatch, tmp_path)
+        monkeypatch.setattr(datagen, "NEGATIVE_DATASETS", {
+            "general": ["org/sounds", "org/alarms"], "speech": ["org/speech"],
+        })
+
+        result = run_datagen_pipeline(_pipeline_config(tmp_path / "ds"))
+
+        negatives = [p for p, label in _rows(result.train_csv) + _rows(result.test_csv) if label == "0"]
+        assert len(negatives) == 3 * 6
+        assert len(set(negatives)) == len(negatives)
+        assert all(Path(p).exists() for p in negatives)
+
+
+class TestUndecodableItemsAreSkipped:
+    def test_an_undecodable_row_is_skipped_not_fatal(self, tmp_path, monkeypatch) -> None:
+        import io
+        import soundfile as sf
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
+        buf = io.BytesIO()
+        sf.write(buf, np.zeros(16000, dtype=np.float32), 16000, format="WAV")
+        # An m4a payload: soundfile has no decoder for it.
+        rows = [
+            {"audio": {"bytes": b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00", "path": "clip.m4a"}},
+            {"audio": {"bytes": buf.getvalue(), "path": "clip.wav"}},
+        ]
+
+        class FakeDataset:
+            features = {"audio": hf_datasets.Audio()}
+
+            def cast_column(self, col, feature):
+                return self
+
+            def __iter__(self):
+                return iter(rows)
+
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: [])
+        monkeypatch.setattr(hf_datasets, "load_dataset", lambda *a, **k: FakeDataset())
+
+        files = datagen.download_hf_audio_dataset("org/parquet", tmp_path / "out", sr=16000)
+
+        assert len(files) == 1
+        assert files[0].exists()
+
+
+class TestNotebookForwardsMaxNegative:
+    def test_load_generated_passes_the_cap_to_datagen(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "notebooks"))
+        import nb_dataset
+
+        seen: dict = {}
+
+        def fake_pipeline(cfg):
+            seen["max_negative"] = cfg.max_negative
+            raise RuntimeError("stop after config")
+
+        monkeypatch.setattr(datagen, "run_datagen_pipeline", fake_pipeline)
+        with pytest.raises(RuntimeError, match="stop after config"):
+            nb_dataset.load_generated(
+                wake_word="hey_x", output_dir=str(tmp_path), n_positive=5, lang="en",
+                adversarial=False, download_augmentation=False, seed=1, max_negative=7,
+            )
+        assert seen["max_negative"] == 7

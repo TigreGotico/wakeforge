@@ -10,6 +10,7 @@ Entry point: ``ww_trainer-datagen`` (see :func:`cli_main`).
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import os
@@ -174,13 +175,55 @@ def preprocess_audio(
 # ---------------------------------------------------------------------------
 
 
+
+def _list_repo_audio_files(dataset_id: str) -> List[str]:
+    """Sorted audio file paths in a Hugging Face dataset repo, or [] when it is
+    not a plain folder of audio files (or the listing fails)."""
+    from huggingface_hub import HfApi
+
+    try:
+        files = HfApi().list_repo_files(dataset_id, repo_type="dataset")
+    except Exception as exc:
+        logger.warning("Could not list files of %s: %s", dataset_id, exc)
+        return []
+    return sorted(f for f in files if Path(f).suffix.lower() in AUDIO_EXTS)
+
+
+def _download_audio_files(dataset_id: str, files: List[str], output_dir: Path, sr: int) -> List[Path]:
+    """Download each audio file, decode it with soundfile and save 16-bit mono WAV at *sr*."""
+    from huggingface_hub import hf_hub_download
+
+    written: List[Path] = []
+    for i, name in enumerate(files):
+        try:
+            local = hf_hub_download(dataset_id, name, repo_type="dataset")
+            arr, orig_sr = sf.read(local, dtype="float32")
+        except Exception as exc:
+            logger.warning("Skipping %s/%s: %s", dataset_id, name, exc)
+            continue
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1)
+        if orig_sr != sr:
+            arr = torchaudio.functional.resample(torch.tensor(arr), orig_sr, sr).numpy()
+        fname = output_dir / f"{i:06d}.wav"
+        _save_audio(str(fname), torch.tensor(arr).unsqueeze(0).float(), sr)
+        written.append(fname)
+    logger.info("  Downloaded %d files from %s", len(written), dataset_id)
+    return written
+
+
 def download_hf_audio_dataset(
     dataset_id: str,
     output_dir: Path,
     max_samples: Optional[int] = None,
     sr: int = 16000,
+    seed: int = 0,
 ) -> List[Path]:
     """Download a HuggingFace audio dataset and save WAVs to *output_dir*.
+
+    A capped download from a folder repo draws its files with a generator
+    seeded by *seed* and *dataset_id*, so the draw is the same on every run and
+    never moves the global random state that the train/test split uses.
 
     Already-downloaded WAV files are reused without any network access.
     The HuggingFace Arrow cache (``~/.cache/huggingface/datasets``) is used on
@@ -190,7 +233,7 @@ def download_hf_audio_dataset(
 
     Returns list of written file paths.
     """
-    from datasets import load_dataset
+    from datasets import Audio, load_dataset
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,6 +245,25 @@ def download_hf_audio_dataset(
         return existing[:max_samples] if max_samples is not None else existing
 
     logger.info("Downloading %s → %s (max=%s)", dataset_id, output_dir, max_samples)
+
+    # ── Repos that are folders of audio files: fetch the files themselves ──
+    # This needs no `datasets` builder at all, so it works where torchcodec
+    # (which the Audio feature requires to encode or decode) cannot load.
+    audio_files = _list_repo_audio_files(dataset_id)
+    if audio_files:
+        if max_samples is not None and max_samples < len(audio_files):
+            # Sample, do not slice. _list_repo_audio_files returns a sorted
+            # path list, and a repo that groups its clips in per-class
+            # directories puts one class first: the first 20 of
+            # TigreGotico/NAR are 20 clips of one refrigerator alarm, out of
+            # 42 classes. A capped run is the normal path now that the smoke
+            # job sets MAX_NEGATIVE, so the cap has to draw from the whole
+            # repo. The generator is local: a draw from the global state would
+            # happen only when the files are not cached yet, and would shift
+            # the split of a re-run with the same seed.
+            rng = random.Random(f"{seed}:{dataset_id}")
+            audio_files = sorted(rng.sample(audio_files, max_samples))
+        return _download_audio_files(dataset_id, audio_files, output_dir, sr)
 
     # ── Prefer cached (non-streaming) download ──────────────────────────────
     # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
@@ -216,6 +278,13 @@ def download_hf_audio_dataset(
     for streaming in modes:
         try:
             ds = load_dataset(dataset_id, split="train", streaming=streaming)
+            # Read the encoded bytes and decode them with soundfile: the default
+            # decoder needs torchcodec, whose wheel links CUDA libraries and
+            # cannot load next to a ROCm or CPU-only torch.
+            for col in ("audio", "Audio", "sound", "file"):
+                if col in ds.features and isinstance(ds.features[col], Audio):
+                    ds = ds.cast_column(col, Audio(decode=False))
+                    break
             break
         except Exception as exc:
             if not streaming:
@@ -252,18 +321,23 @@ def download_hf_audio_dataset(
                 return written
 
         audio = example[audio_col]
-        if hasattr(audio, "get_all_samples"):
-            # datasets ≥ 3.x with torchcodec backend: AudioDecoder object
-            samples = audio.get_all_samples()
-            # samples.data shape: (channels, num_samples) — mix down to mono 1D
-            arr = samples.data.float().mean(dim=0).numpy().astype(np.float32)
-            orig_sr = int(samples.sample_rate)
-        elif isinstance(audio, dict):
-            # datasets < 3.x: {"array": np.ndarray, "sampling_rate": int}
-            arr = np.array(audio["array"], dtype=np.float32)
-            orig_sr = audio.get("sampling_rate", sr)
-        else:
+        try:
+            if isinstance(audio, dict) and audio.get("bytes") is not None:
+                # encoded file bytes (Audio(decode=False))
+                arr, orig_sr = sf.read(io.BytesIO(audio["bytes"]), dtype="float32")
+            elif isinstance(audio, dict) and audio.get("path"):
+                arr, orig_sr = sf.read(audio["path"], dtype="float32")
+            elif isinstance(audio, dict) and "array" in audio:
+                arr = np.array(audio["array"], dtype=np.float32)
+                orig_sr = audio.get("sampling_rate", sr)
+            else:
+                continue
+        except Exception as exc:
+            # soundfile has no decoder for some formats (m4a among them).
+            logger.warning("Skipping %s row %d: %s", dataset_id, i, exc)
             continue
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1)
 
         if orig_sr != sr:
             arr = torchaudio.functional.resample(
@@ -737,7 +811,8 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     if hf_dataset:
         logger.info("  Known wake word — downloading from %s", hf_dataset)
         pos_files = download_hf_audio_dataset(
-            hf_dataset, positives_dir, max_samples=config.n_positive, sr=config.sample_rate
+            hf_dataset, positives_dir, max_samples=config.n_positive,
+            sr=config.sample_rate, seed=config.seed,
         )
     else:
         logger.info("  Unknown wake word — synthesizing via TTS")
@@ -791,7 +866,7 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             else:
                 cap = config.max_negative
             files = download_hf_audio_dataset(
-                ds_id, ds_out, max_samples=cap, sr=config.sample_rate
+                ds_id, ds_out, max_samples=cap, sr=config.sample_rate, seed=config.seed
             )
             neg_files.extend(files)
 
@@ -844,11 +919,19 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     processed_negatives: List[Path] = []
     proc_neg_dir = negatives_dir / "processed"
     for f in neg_files:
-        dst = proc_neg_dir / f.name
+        # Each repo numbers its clips from 000000.wav; the source directory
+        # keeps two repos from writing the same processed file.
+        dst = proc_neg_dir / f"{f.parent.name}_{f.name}"
         if preprocess_audio(f, dst, sr=config.sample_rate, vad_trim=config.vad_trim):
             processed_negatives.append(dst)
 
     # ── Stage 5: Train/test split + metadata CSVs ───────────────────────
+    if not processed_positives or not processed_negatives:
+        raise RuntimeError(
+            f"datagen produced {len(processed_positives)} positives and "
+            f"{len(processed_negatives)} negatives; a training set needs both. "
+            "Check the download errors above (network, disk space, HF_HOME)."
+        )
     logger.info("Stage 5: Splitting into train/test sets")
 
     all_entries: List[tuple[str, int]] = []
