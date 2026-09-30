@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ww_trainer.dataset import AudioDataset
+from ww_trainer.model import BaseWakeModel
 from ww_trainer.utils import get_hard_pair_distances, sample_triplets, pairwise_distance, sample_semihard_triplets, \
     pairwise_cosine_similarity, timed
 
@@ -1192,6 +1193,7 @@ class LossManager:
         self.max_neg_weight = max_neg_weight
         self._current_neg_weight: float = 1.0
         self.spec_augment = None  # Set externally via set_spec_augment()
+        self._feature_masker = None
 
         for cfg in loss_configs:
             name = cfg["name"].lower()
@@ -1391,27 +1393,39 @@ class LossManager:
     @timed
     def compute_loss(self, model: nn.Module, wavs: torch.Tensor, labels: torch.Tensor,
                      dataset_ref: Optional[AudioDataset] = None,
-                     text_token_ids: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
+                     text_token_ids: Optional[torch.Tensor] = None,
+                     lengths: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Compute total loss and per-loss values based on the configured criteria.
 
         Args:
             model: The wake word model (must have ``embed`` for metric losses).
-            wavs: Input audio waveforms (list of tensors or padded tensor).
+            wavs: Input audio waveforms (list of tensors or padded tensor), or
+                stored ``[B, T, F]`` features for a :class:`BaseWakeModel`.
             labels: Ground truth labels ``(B,)``.
             dataset_ref: Optional dataset reference for augmentation-based losses.
             text_token_ids: Optional ``[B, seq_len]`` int64 keyword phoneme IDs.
                 When provided (multi-keyword training), passed to
                 ``model.forward`` and ``model.embed`` so the text extractor
                 runs per-batch.  ``None`` falls back to the precomputed cache.
+            lengths: Optional ``[B]`` real length of each padded row
+                (``Batch.lengths``); padded frames are then left out of pooling.
 
         Returns:
             ``(total_loss, {"loss_name": float, ...})``
         """
         results: Dict[str, float] = {}
         total = torch.tensor(0.0, device=self.device)
+        stored_features = isinstance(wavs, torch.Tensor) and wavs.dim() == 3
+        frame_lengths = None
 
         # Extract features once, optionally apply spectrogram augmentation
-        if self.spec_augment is not None and model.training:
+        if isinstance(model, BaseWakeModel):
+            feats, frame_lengths = model.features(wavs, lengths, text_token_ids)
+            if self.spec_augment is not None and model.training:
+                feats = self.spec_augment(feats, frame_lengths)
+            logits = model.classify(feats, frame_lengths, text_token_ids)
+            embeds = model.classify(feats, frame_lengths, text_token_ids, embed=True)
+        elif self.spec_augment is not None and model.training:
             from ww_trainer.feats import ensure_wav_list
             wavs_list = ensure_wav_list(wavs)
             feats = model.feature_extractor(wavs_list)
@@ -1523,7 +1537,7 @@ class LossManager:
                     )
 
             elif name == "halo":
-                loss_val = crit(embeds, labels.to(self.device).view(-1))
+                loss_val = crit(embeds, labels.to(self.device).view(-1).long())
 
             elif name == "size_aware":
                 # SizeAwareLoss needs the model reference
@@ -1535,7 +1549,18 @@ class LossManager:
                 # is what makes the model invariant to augmentation. Computing
                 # them under no_grad would silently zero the consistency gradient.
                 aug_embeds = None
-                if dataset_ref is not None and hasattr(dataset_ref, "get_augmented"):
+                if stored_features:
+                    # Stored features cannot be re-augmented as audio: the
+                    # augmented view is a SpecAugment-masked copy.
+                    if self.spec_augment is None and self._feature_masker is None:
+                        from ww_trainer.augment import SpectrogramAugment
+                        from ww_trainer.feats import frames_per_second
+                        self._feature_masker = SpectrogramAugment.for_features(
+                            feats.shape[-1], frames_per_second(model.feature_extractor))
+                    masker = self.spec_augment or self._feature_masker
+                    aug_embeds = model.classify(masker(feats, frame_lengths), frame_lengths,
+                                                text_token_ids, embed=True)
+                elif dataset_ref is not None and hasattr(dataset_ref, "get_augmented"):
                     aug_embeds_list = []
                     for i, w in enumerate(wavs):
                         aug_w = dataset_ref.get_augmented(w).to(self.device)

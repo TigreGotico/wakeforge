@@ -1,6 +1,6 @@
 # Feature Extractors
 
-All extractors inherit from `BaseExtractor` — `ww_trainer/feats.py:70` and output `[B, T, F]` tensors.
+All extractors inherit from `BaseExtractor` — `ww_trainer/feats.py:77` and output `[B, T, F]` tensors.
 
 ---
 
@@ -8,17 +8,17 @@ All extractors inherit from `BaseExtractor` — `ww_trainer/feats.py:70` and out
 
 | Extractor | Class | Line | Output Dim | ONNX Export | Learnable |
 |-----------|-------|------|------------|-------------|-----------|
-| MFCC | `MfccExtractor` | `feats.py:352` | `n_mfcc` (40) | Yes | No |
-| FilterBank | `FilterbankExtractor` | `feats.py:446` | `n_mels` (80) | Yes | No |
-| PLP | `PLPExtractor` | `feats.py:962` | `n_plp` (13) | Yes | No |
-| PNCC | `PNCCExtractor` | `feats.py:1083` | `n_pncc` (13) | Yes | No |
-| CQT | `CQTExtractor` | `feats.py:1203` | `n_bins * n_octaves` (84) | Yes | No |
-| SincNet | `SincNetExtractor` | `feats.py:518` | `n_filters` (80) | Yes | Yes (freq bounds) |
-| Gammatone | `GammatoneExtractor` | `feats.py:698` | `n_filters` (64) | Yes | No |
-| LEAF | `LEAFExtractor` | `feats.py:795` | `n_filters` (40) | Yes | Yes (full frontend) |
-| ONNX | `OnnxFeatureExtractor` | `feats.py:162` | Model-dependent | N/A (already ONNX) | No |
-| WakeHuBERT family (pretrained) | `load_pretrained_featurizer` | `pretrained.py:133` | 128 or 256 | N/A (already ONNX) | No |
-| Text (ONNX) | `OnnxTextExtractor` | `feats.py:2235` | Model-dependent | N/A (already ONNX) | No |
+| MFCC | `MfccExtractor` | `feats.py:366` | `n_mfcc` (40) | Yes | No |
+| FilterBank | `FilterbankExtractor` | `feats.py:460` | `n_mels` (80) | Yes | No |
+| PLP | `PLPExtractor` | `feats.py:976` | `n_plp` (13) | Yes | No |
+| PNCC | `PNCCExtractor` | `feats.py:1097` | `n_pncc` (13) | Yes | No |
+| CQT | `CQTExtractor` | `feats.py:1217` | `n_bins * n_octaves` (84) | Yes | No |
+| SincNet | `SincNetExtractor` | `feats.py:532` | `n_filters` (80) | Yes | Yes (freq bounds) |
+| Gammatone | `GammatoneExtractor` | `feats.py:712` | `n_filters` (64) | Yes | No |
+| LEAF | `LEAFExtractor` | `feats.py:809` | `n_filters` (40) | Yes | Yes (full frontend) |
+| ONNX | `OnnxFeatureExtractor` | `feats.py:169` | Model-dependent | N/A (already ONNX) | No |
+| WakeHuBERT family (pretrained) | `load_pretrained_featurizer` | `pretrained.py:138` | 128 or 256 | N/A (already ONNX) | No |
+| Text (ONNX) | `OnnxTextExtractor` | `feats.py:2249` | Model-dependent | N/A (already ONNX) | No |
 
 > **Removed in 0.2.0:** `HubertExtractor`, `Wav2Vec2Extractor`, and `Wav2Vec2BertExtractor` training wrappers are no longer in `feats.py`. Export those models once with the standalone scripts (`scripts/export_hubert.py`, `scripts/export_wav2vec2.py`, `scripts/export_w2vbert.py`), then load with `OnnxFeatureExtractor`.
 
@@ -28,14 +28,14 @@ Wrappers decorate a base extractor, adding extra feature channels.
 
 | Wrapper | Class | Line | Extra Dims | What It Adds |
 |---------|-------|------|------------|--------------|
-| Delta | `DeltaExtractor` | `feats.py:627` | `2 * base_dim` | First and second temporal derivatives |
-| SileroVAD | `SileroVadWrapper` | `feats.py:1310` | 1 | Silero VAD speech probability per frame |
-| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1445` | 4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
-| Pitch | `PitchExtractor` | `feats.py:1569` | 3 | Normalized F0, voicing probability, F0 delta |
-| MultiResolution | `MultiResolutionExtractor` | `feats.py:1706` | `coarse_dim` | Concatenates fine + coarse extractor outputs |
-| SNRAware | `SNRAwareExtractor` | `feats.py:1762` | 2 | Per-frame SNR estimate, noise floor estimate |
-| Markov | `MarkovTransitionExtractor` | `feats.py:1878` | `n_codes` | Transition probabilities from trained Markov chain |
-| HMM | `HMMStateExtractor` | `feats.py:2077` | `n_states` | Latent state posterior probabilities (Forward algorithm) |
+| Delta | `DeltaExtractor` | `feats.py:641` | `2 * base_dim` | First and second temporal derivatives |
+| SileroVAD | `SileroVadWrapper` | `feats.py:1324` | 1 | Silero VAD speech probability per frame |
+| VoiceActivity | `VoiceActivityExtractor` | `feats.py:1459` | 4 | Log RMS energy, ZCR, spectral flatness, VAD probability |
+| Pitch | `PitchExtractor` | `feats.py:1583` | 3 | Normalized F0, voicing probability, F0 delta |
+| MultiResolution | `MultiResolutionExtractor` | `feats.py:1720` | `coarse_dim` | Concatenates fine + coarse extractor outputs |
+| SNRAware | `SNRAwareExtractor` | `feats.py:1776` | 2 | Per-frame SNR estimate, noise floor estimate |
+| Markov | `MarkovTransitionExtractor` | `feats.py:1892` | `n_codes` | Transition probabilities from trained Markov chain |
+| HMM | `HMMStateExtractor` | `feats.py:2091` | `n_states` | Latent state posterior probabilities (Forward algorithm) |
 
 Note: Unlike other wrappers, Markov and HMM extractors **do** support direct ONNX export of the full pipeline (Base + Wrapper).
 
@@ -43,7 +43,7 @@ Note: Unlike other wrappers, Markov and HMM extractors **do** support direct ONN
 
 ## Detailed Descriptions
 
-### MfccExtractor — `feats.py:352`
+### MfccExtractor — `feats.py:366`
 
 Pure-PyTorch MFCC (Mel-Frequency Cepstral Coefficients — Davis & Mermelstein, IEEE TASSP 1980, <https://ieeexplore.ieee.org/document/1163420>). Computes STFT, mel filterbank, log, then DCT.
 
@@ -61,7 +61,7 @@ Pure-PyTorch MFCC (Mel-Frequency Cepstral Coefficients — Davis & Mermelstein, 
 
 ---
 
-### FilterbankExtractor — `feats.py:446`
+### FilterbankExtractor — `feats.py:460`
 
 Log-mel spectrogram (mel scale: Stevens, Volkmann & Newman, JASA 1937) without DCT. Same pipeline as MFCC minus the final DCT step.
 
@@ -79,7 +79,7 @@ Log-mel spectrogram (mel scale: Stevens, Volkmann & Newman, JASA 1937) without D
 
 ---
 
-### PLPExtractor — `feats.py:962`
+### PLPExtractor — `feats.py:976`
 
 Perceptual Linear Prediction (Hermansky, *Perceptual Linear Predictive (PLP) Analysis of Speech*, JASA 1990). Models human auditory perception via Bark-scale warping, equal-loudness pre-emphasis, and cube-root compression.
 
@@ -97,7 +97,7 @@ Perceptual Linear Prediction (Hermansky, *Perceptual Linear Predictive (PLP) Ana
 
 ---
 
-### PNCCExtractor — `feats.py:1083`
+### PNCCExtractor — `feats.py:1097`
 
 Power-Normalized Cepstral Coefficients (Kim & Stern, IEEE/ACM TASLP 2016, <https://ieeexplore.ieee.org/document/7439789>). Uses gammatone-like filterbank, medium-time power processing for asymmetric noise suppression, and 1/15-power nonlinearity instead of log.
 
@@ -115,7 +115,7 @@ Power-Normalized Cepstral Coefficients (Kim & Stern, IEEE/ACM TASLP 2016, <https
 
 ---
 
-### CQTExtractor — `feats.py:1203`
+### CQTExtractor — `feats.py:1217`
 
 Constant-Q Transform (Brown, *Calculation of a Constant Q Spectral Transform*, JASA 1991). Logarithmic frequency spacing gives, by construction, higher low-frequency resolution than a linear-frequency FFT.
 
@@ -133,7 +133,7 @@ Constant-Q Transform (Brown, *Calculation of a Constant Q Spectral Transform*, J
 
 ---
 
-### SincNetExtractor — `feats.py:518`
+### SincNetExtractor — `feats.py:532`
 
 Learnable sinc bandpass filters (Ravanelli & Bengio, *Speaker Recognition from Raw Waveform with SincNet*, SLT 2018). ArXiv <https://arxiv.org/abs/1808.00158>. Frequency boundaries are learned during training. Hamming window, log1p energy.
 
@@ -151,7 +151,7 @@ Learnable sinc bandpass filters (Ravanelli & Bengio, *Speaker Recognition from R
 
 ---
 
-### GammatoneExtractor — `feats.py:698`
+### GammatoneExtractor — `feats.py:712`
 
 Gammatone filterbank on ERB frequency scale (Patterson & Holdsworth, 1996 — an auditory model, not a keyword-spotting paper). Models the human auditory system's cochlear response.
 
@@ -169,7 +169,7 @@ Gammatone filterbank on ERB frequency scale (Patterson & Holdsworth, 1996 — an
 
 ---
 
-### LEAFExtractor — `feats.py:795`
+### LEAFExtractor — `feats.py:809`
 
 Learnable Audio Frontend (Zeghidour et al., *LEAF: A Learnable Frontend for Audio Classification*, ICLR 2021). ArXiv <https://arxiv.org/abs/2101.08596>. Replaces fixed filterbanks with: Gabor convolution (learnable center freq + bandwidth), squared modulus, Gaussian low-pass pooling, PCEN normalization. All components are differentiable.
 
@@ -187,9 +187,9 @@ Learnable Audio Frontend (Zeghidour et al., *LEAF: A Learnable Frontend for Audi
 
 ---
 
-### OnnxFeatureExtractor — `feats.py:162`
+### OnnxFeatureExtractor — `feats.py:169`
 
-Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:240`).
+Loads any ONNX feature extractor model. Used for inference after exporting a PyTorch extractor, or for loading pre-exported models (e.g., Whisper via `from_whisper` classmethod at `feats.py:254`).
 
 **Parameters:** `model_path` (ONNX file), `sample_rate` (16000).
 
@@ -243,35 +243,117 @@ Selecting a `wakexeus-*` extractor logs a warning, because its CC-BY-NC-SA-4.0
 licence forbids commercial use. Every extractor can be used for training and
 for whole-window scoring with `OnnxWakeWordInferencer`.
 
+#### Use a pretrained WakeHuBERT featurizer
+
+Every training path accepts a registry name wherever it accepts a built-in
+featurizer. A pretrained featurizer is frozen, so its features are computed
+once per clip and reused (see *Feature store* below).
+
+**Train.** Pick the featurizer by name and any head with `--arch`, or take a
+tier. `wakehubert` is a GRU head on `wakehubert-tiny`; `wakehubert-bigru` is a
+bidirectional GRU on the same featurizer, which scores whole windows.
+
 ```bash
 ww_trainer-train --wake-word alexa --metadata train.csv --test-metadata test.csv \
     --tier wakehubert --epochs 30 --save-best
-# or: --featurizer-type wakehubert-mel-tcn-wide --arch gru
-# or: --featurizer wakehubert
-# pin a revision with --featurizer-revision <commit>
+ww_trainer-train --wake-word alexa --metadata train.csv --test-metadata test.csv \
+    --featurizer-type wakehubert-mel-tcn-wide --arch bigru --hidden-dim 128 --linear-dim 64
+# --featurizer wakehubert works too; pin a revision with --featurizer-revision <commit>
 ```
 
 ```python
-from ww_trainer.feats import OnnxFeatureExtractor
-feat = OnnxFeatureExtractor.from_pretrained("wakehubert")        # or "wakehubert-int8"
-trainer = WakeWordTrainer(arch="gru", featurizer="", featurizer_type="wakehubert", hidden_dim=128,
+from ww_trainer.trainer import WakeWordTrainer
+trainer = WakeWordTrainer(arch="gru", featurizer=None, featurizer_type="wakehubert",
                           losses_cfg=[{"name": "bce", "weight": 1.0}])
+trainer.train(output_dir="out", train_data=train, test_data=test, epochs=30)
+```
+
+`--hidden-dim`, `--linear-dim` and `--gru-n-layers` size the GRU heads
+(`gru`, `bigru`); `--linear-dim` is also the embedding size that the metric
+losses (ArcFace, center, ProxyNCA, HALO) are sized to. Every head in
+`HEAD_REGISTRY` trains on 128- and 256-dimensional features at 50 frames per
+second; `phonmatch` also needs the keyword's phoneme IDs in each sample.
+
+**Quickstart.** `--featurizer` replaces the tier's extractor and keeps its head:
+
+```bash
+ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis --tier wakehubert
+ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis --tier small \
+    --featurizer wakehubert-mel-tcn-wide
+```
+
+**Grid, random and genetic search.** Pass a name as `featurizer_type`, or put
+names in the search space. The full search space (`full=True`) carries the
+float32 graph of every repository licensed for commercial use as values of its
+`featurizer_type` gene, and `bigru` in its `arch` gene. Candidates on the same
+featurizer share one feature store in a process; `feature_cache_dir` shares it
+with demes in other processes.
+
+```python
+from ww_trainer.sweep import run_genetic_search
+run_genetic_search("data.csv", population_size=12, generations=5, full=True,
+                   feature_cache_dir=".feature_cache")
+run_genetic_search("data.csv", search_space={
+    "featurizer_type": ["wakehubert", "wakehubert-mel-tcn-wide", "wakexeus-mel-tcn"],
+    "arch": ["gru", "bigru"], "hidden_dim": [64, 128], "lr": [5e-4, 1e-3]})
+```
+
+Multi-stage training (`--training-stages`), `infinite_training_loop`, hard
+negative mining, calibration (`--calibrate`), few-shot references and
+checkpoint averaging take the featurizer from the model and need nothing else.
+
+**Feature store.** Features of a frozen featurizer are kept per clip in a
+`FeatureStore` (`ww_trainer/feature_store.py`) and reused by every epoch,
+mining pass, evaluation and calibration, and by every head trained on the same
+featurizer file in the process. From the CLI they also persist under
+`--feature-cache-dir`, so later runs and other processes reuse them;
+`--no-feature-cache` featurizes every batch from audio. Waveform augmentation
+still applies: with `--feature-cache-variants K`, an augmented draw picks one
+of `K` augmented variants of the clip and computes it only the first time it
+is drawn. With `K = 0` (the default) augmented draws are featurized on the fly
+and not kept, which keeps augmentation continuous. Mixup blends the stored
+features, and SpecAugment masks them: by default up to 100 ms of frames and a
+tenth of the dimensions (5 frames and 13 dimensions for 128-d features at
+50 fps).
+
+**Padding.** Batches are padded with zeros to their longest clip, and each
+batch carries the real length of every row. The GRU heads, `ffn` and `ocsvm`
+pool over real frames only (a bidirectional GRU also starts its backward pass
+at each clip's last real frame), so a clip scores the same in any batch.
+
+**Export and inference.** Exported heads (`best_*.onnx`, `final_model.onnx`,
+and the streaming heads) record the featurizer in their ONNX metadata as
+`pretrained_featurizer` (the registry name) and `featurizer_revision` (the
+commit it was downloaded at). The featurizer ONNX is not copied beside them:
+inference rebuilds it from the registry. When the model streams (a
+unidirectional single-layer GRU head on a streaming featurizer), training also
+writes `<stem>_streaming.onnx`, with a window set to the median positive clip
+length in frames, and `<wake_word>_meta.json` records the featurizer, its
+revision, the tier and the streaming heads.
+
+```python
+from ww_trainer.inference import OnnxWakeWordInferencer, OnnxStreamingWakeWord
+model = OnnxWakeWordInferencer(None, "out/best_f1.onnx")     # featurizer from metadata
+score = model.infer(audio)
+sw = OnnxStreamingWakeWord.from_head("out/best_f1_streaming.onnx")
+prob = sw.push(chunk)
+```
+
+```bash
+ww_trainer-infer --model out/best_f1.onnx --audio clip.wav
 ```
 
 **Streaming.** The streaming column gives the past audio that determines one
 output frame; no frame depends on later audio. `OnnxStreamingWakeWord`
 re-featurizes that much past audio with each chunk, so every streamed frame
-equals its offline value. `OnnxStreamingWakeWord.from_extractor` takes the hop
-and context from the extractor. It refuses extractors that cannot be streamed
-this way: the bidirectional models, the recurrent models (whose frames depend
-on all earlier audio), and `wakehubert-mel-attn-int8`, whose frames also
-depend on later audio. Feed chunks whose length is a multiple of 320 samples.
-For `wakehubert`, one 0.1 s push costs a single featurizer call over 2.6 s of
-audio, a few milliseconds on one CPU thread.
-
-```python
-sw = OnnxStreamingWakeWord.from_extractor(feat, "head_streaming.onnx", window=75)
-```
+equals its offline value. `OnnxStreamingWakeWord.from_extractor` and
+`from_head` take the hop and context from the featurizer. They refuse
+featurizers that cannot be streamed this way: the bidirectional models, the
+recurrent models (whose frames depend on all earlier audio), and
+`wakehubert-mel-attn-int8`, whose frames also depend on later audio; those
+score whole windows with `OnnxWakeWordInferencer`. Feed chunks whose length is
+a multiple of 320 samples. For `wakehubert`, one 0.1 s push costs a single
+featurizer call over 2.6 s of audio, a few milliseconds on one CPU thread.
 
 **Measured result.** With `wakehubert`, a GRU head trained on 900 synthetic "alexa" clips (TTS
 with voice conversion and noise, babble, reverberation, speed and gain
@@ -289,7 +371,7 @@ low-power CPUs.
 
 ---
 
-### OnnxTextExtractor — `feats.py:2235`
+### OnnxTextExtractor — `feats.py:2249`
 
 Loads a pre-exported text encoder ONNX model and provides text-based feature embeddings as a `BaseExtractor`. Enables optional audio+text conditioning — the text features are concatenated to audio features, allowing the model to be conditioned on the target wake-word string at training time.
 
@@ -303,7 +385,7 @@ Loads a pre-exported text encoder ONNX model and provides text-based feature emb
 
 ---
 
-### DeltaExtractor — `feats.py:627`
+### DeltaExtractor — `feats.py:641`
 
 Appends first-order (delta) and second-order (delta-delta) temporal derivatives. Output dim = `3 * base_dim`. Uses +/-N frame regression formula. A standard technique in ASR feature pipelines generally, not specific to one cited paper.
 
@@ -315,7 +397,7 @@ Appends first-order (delta) and second-order (delta-delta) temporal derivatives.
 
 ---
 
-### VoiceActivityExtractor — `feats.py:1445`
+### VoiceActivityExtractor — `feats.py:1459`
 
 Appends 4 VAD features: log RMS energy, zero-crossing rate, spectral flatness, combined VAD probability.
 
@@ -325,7 +407,7 @@ Appends 4 VAD features: log RMS energy, zero-crossing rate, spectral flatness, c
 
 ---
 
-### PitchExtractor — `feats.py:1569`
+### PitchExtractor — `feats.py:1583`
 
 Appends 3 pitch features via autocorrelation: normalized F0, voicing probability, F0 delta.
 
@@ -335,7 +417,7 @@ Appends 3 pitch features via autocorrelation: normalized F0, voicing probability
 
 ---
 
-### MultiResolutionExtractor — `feats.py:1706`
+### MultiResolutionExtractor — `feats.py:1720`
 
 Concatenates outputs from two extractors at different time resolutions. Coarse features are interpolated to match fine extractor's time axis.
 
@@ -345,7 +427,7 @@ Concatenates outputs from two extractors at different time resolutions. Coarse f
 
 ---
 
-### SNRAwareExtractor — `feats.py:1762`
+### SNRAwareExtractor — `feats.py:1776`
 
 Appends 2 SNR features: per-frame SNR estimate and noise floor estimate (`feats.py:1659`). Uses percentile-based noise floor tracking.
 
@@ -355,7 +437,7 @@ Appends 2 SNR features: per-frame SNR estimate and noise floor estimate (`feats.
 
 ---
 
-### MarkovTransitionExtractor — `feats.py:1878`
+### MarkovTransitionExtractor — `feats.py:1892`
 
 Classical sequential modeling using a Markov chain on top of quantized features. Captures the probability of acoustic patterns following one another. A generic technique, not from one specific cited paper.
 
@@ -369,7 +451,7 @@ Classical sequential modeling using a Markov chain on top of quantized features.
 
 ---
 
-### HMMStateExtractor — `feats.py:2077`
+### HMMStateExtractor — `feats.py:2091`
 
 Hidden Markov Model state posterior extraction. Models the wake word as a sequence of latent acoustic units (like phonemes).
 
@@ -383,7 +465,7 @@ Hidden Markov Model state posterior extraction. Models the wake word as a sequen
 
 ---
 
-### SileroVadWrapper — `feats.py:1310`
+### SileroVadWrapper — `feats.py:1324`
 
 Neural VAD enrichment stream using the pre-trained `snakers4/silero-vad` (GitHub <https://github.com/snakers4/silero-vad>). Appends a speech probability channel to every frame.
 

@@ -24,7 +24,8 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 """)
 # -------------------------- Hardware tier preset --------------------------
 @click.option("--tier", default=None,
-              type=click.Choice(["micro", "small", "medium", "large", "wakehubert"]),
+              type=click.Choice(["micro", "small", "medium", "large", "wakehubert",
+                                 "wakehubert-bigru"]),
               help="Hardware tier preset. Overrides --arch and --featurizer-type if set. "
                    "Run with --list-tiers to see all options.")
 @click.option("--list-tiers", "show_tiers", is_flag=True, default=False,
@@ -60,7 +61,14 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--featurizer-revision", default=None,
               help="Hub revision (branch, tag or commit) of a pretrained featurizer.")
 @click.option("--feature-dim", type=int,  help="Number of output features from onnx featurizer.")
-@click.option("--arch", default="gru", help="Model architecture (e.g., gru, cnn, ffn).")
+@click.option("--arch", default="gru",
+              help="Classifier head: gru, bigru, ffn, cnn, crnn, tcresnet, dscnn, conformer, "
+                   "kwt, efficientnet, matchboxnet, mixconv, res15, bcresnet, phonmatch, ocsvm.")
+@click.option("--hidden-dim", type=int, default=None,
+              help="Hidden size of the head (GRU units for gru/bigru, FFN width for ffn/ocsvm).")
+@click.option("--linear-dim", type=int, default=None,
+              help="Width of the dense layer after the GRU (gru/bigru); also the embedding size.")
+@click.option("--gru-n-layers", type=int, default=None, help="Stacked GRU layers (gru/bigru).")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
               help="'cuda', 'cpu', or 'auto' (auto-selects CUDA if available).")
 @click.option("--sample-rate", type=int, default=16000, help="Audio sample rate used for training.")
@@ -149,14 +157,20 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--spec-augment", is_flag=True, default=False,
               help="Enable SpecAugment frequency+time masking on extracted features.")
 @click.option("--spec-n-time-masks", default=2, type=int, help="Number of time masks for SpecAugment.")
-@click.option("--spec-max-time-width", default=10, type=int, help="Max width of time masks (frames).")
+@click.option("--spec-max-time-width", default=None, type=int,
+              help="Max width of time masks in frames (default: 100 ms of frames).")
 @click.option("--spec-n-freq-masks", default=2, type=int, help="Number of frequency masks for SpecAugment.")
-@click.option("--spec-max-freq-width", default=4, type=int, help="Max width of frequency masks (bins).")
+@click.option("--spec-max-freq-width", default=None, type=int,
+              help="Max width of frequency masks in bins (default: a tenth of the feature size).")
 # -------------------------- Feature Cache --------------------------
 @click.option("--feature-cache-dir", default=".feature_cache/",
               help="Directory for cached feature vectors (default: .feature_cache/).")
 @click.option("--no-feature-cache", is_flag=True, default=False,
               help="Disable feature vectorization cache.")
+@click.option("--feature-cache-variants", default=0, type=int,
+              help="With a frozen featurizer (e.g. a pretrained one), keep this many augmented "
+                   "variants of each clip's features; augmented draws reuse them. 0 (default) "
+                   "augments on the fly.")
 # -------------------------- Layer Freezing --------------------------
 @click.option("--freeze-extractor", is_flag=True, default=False,
               help="Freeze the feature extractor for transfer learning.")
@@ -215,9 +229,9 @@ def train(**opts: dict) -> None:
     training_stages = opts.pop("training_stages", None)
     spec_augment = opts.pop("spec_augment", False)
     spec_n_time_masks = opts.pop("spec_n_time_masks", 2)
-    spec_max_time_width = opts.pop("spec_max_time_width", 10)
+    spec_max_time_width = opts.pop("spec_max_time_width", None)
     spec_n_freq_masks = opts.pop("spec_n_freq_masks", 2)
-    spec_max_freq_width = opts.pop("spec_max_freq_width", 4)
+    spec_max_freq_width = opts.pop("spec_max_freq_width", None)
     neg_weight_schedule = opts.pop("neg_weight_schedule", None)
     max_neg_weight = opts.pop("max_neg_weight", 100.0)
     target_fpr = opts.pop("target_fpr", None)
@@ -225,6 +239,10 @@ def train(**opts: dict) -> None:
 
     feature_cache_dir = opts.pop("feature_cache_dir", ".feature_cache/")
     no_feature_cache = opts.pop("no_feature_cache", False)
+    feature_cache_variants = opts.pop("feature_cache_variants", 0)
+    for head_opt in ("hidden_dim", "linear_dim", "gru_n_layers"):
+        if opts[head_opt] is None:
+            opts.pop(head_opt)
     freeze_extractor = opts.pop("freeze_extractor", False)
     freeze_layers = opts.pop("freeze_layers", 0)
     unfreeze_at_epoch = opts.pop("unfreeze_at_epoch", None)
@@ -237,9 +255,9 @@ def train(**opts: dict) -> None:
         tc = get_tier(tier)
         arch = tc.head_arch
         featurizer_type = tc.extractor_type   # tier overrides --featurizer-type
-        opts["hidden_dim"] = tc.hidden_dim
+        opts.setdefault("hidden_dim", tc.hidden_dim)
         opts["bidirectional"] = tc.bidirectional
-        opts["gru_n_layers"] = tc.gru_n_layers
+        opts.setdefault("gru_n_layers", tc.gru_n_layers)
         if tc.extractor_type == "mfcc":
             opts["n_mfcc"] = tc.n_mfcc
             feat_dim = None
@@ -310,15 +328,30 @@ def train(**opts: dict) -> None:
     # Build a FeatureCache and hand it to the training loop (which forwards it
     # to AudioDataset). It must NOT go into augment_opts — the loop already
     # passes feature_cache= explicitly, so duplicating it there collides.
+    # A frozen featurizer (pretrained ONNX, or any without trainable parameters)
+    # gets a FeatureStore: features computed once per clip. A trained one gets
+    # the waveform cache.
     feature_cache_obj = None
+    feature_store = None
     if not no_feature_cache:
-        from ww_trainer.cache import FeatureCache
+        from ww_trainer.feature_store import FeatureStore, is_frozen
         ext = trainer.model.feature_extractor
-        ext_hash = ext.cache_key
-        feature_cache_obj = FeatureCache(
-            feature_cache_dir, type(ext).__name__, ext_hash
-        )
-        click.secho(f"[FeatureCache] dir={feature_cache_dir}", fg="cyan")
+        if is_frozen(ext):
+            feature_store = FeatureStore.for_extractor(ext, feature_cache_dir)
+            click.secho(f"[FeatureStore] dir={feature_cache_dir} "
+                        f"variants={feature_cache_variants}", fg="cyan")
+        else:
+            from ww_trainer.cache import FeatureCache
+            feature_cache_obj = FeatureCache(
+                feature_cache_dir, type(ext).__name__, ext.cache_key
+            )
+            click.secho(f"[FeatureCache] dir={feature_cache_dir}", fg="cyan")
+    feature_kwargs = {
+        "feature_cache": feature_cache_obj,
+        "feature_store": feature_store,
+        "cache_features": not no_feature_cache,
+        "feature_cache_variants": feature_cache_variants,
+    }
 
     if training_stages:
         from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
@@ -334,6 +367,7 @@ def train(**opts: dict) -> None:
             metrics_log=opts["metrics_log"],
             neg_weight_schedule=neg_weight_schedule,
             max_neg_weight=max_neg_weight,
+            **feature_kwargs,
         )
     else:
         trainer.train(
@@ -378,7 +412,7 @@ def train(**opts: dict) -> None:
             balanced_replacement=balanced_replacement,
             fitness_checkpoint=fitness_checkpoint,
             fitness_param_budget=fitness_param_budget,
-            feature_cache=feature_cache_obj,
+            **feature_kwargs,
         )
 
     # Post-training: C header export
@@ -393,13 +427,32 @@ def train(**opts: dict) -> None:
     # Post-training: Platt calibration
     if calibrate:
         from ww_trainer.calibration import calibrate_model
-        params = calibrate_model(trainer.model, test_data, out_dir, device=opts["device"])
+        params = calibrate_model(trainer.model, test_data, out_dir, device=opts["device"],
+                                 feature_store=feature_store)
         click.secho(f"Calibration: coef={params['coef']:.4f}, intercept={params['intercept']:.4f}", fg="green")
 
+    from ww_trainer.pretrained import featurizer_metadata
+    record = {
+        **opts,
+        "wake_word": ww_name,
+        "arch": arch,
+        "tier": tier,
+        "featurizer": onnx_model,
+        "featurizer_type": featurizer_type,
+        "feature_dim": trainer.model.feature_extractor.feature_dim,
+    }
+    pretrained = featurizer_metadata(trainer.model.feature_extractor)
+    if pretrained:
+        record["pretrained_featurizer"] = pretrained["pretrained_featurizer"]
+        record["featurizer_revision"] = pretrained["featurizer_revision"]
+    streaming_heads = sorted(p.name for p in Path(out_dir).glob("*_streaming.onnx"))
+    if streaming_heads:
+        record["streaming_heads"] = streaming_heads
+        record["stream_window"] = trainer.stream_window
     meta = Path(out_dir) / f"{ww_name}_meta.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
     with open(meta, "w") as f:
-        json.dump(opts, f, indent=2)
+        json.dump(record, f, indent=2)
     click.echo(click.style(f"Training complete. Model and config saved to {out_dir}", fg="green", bold=True))
 
 

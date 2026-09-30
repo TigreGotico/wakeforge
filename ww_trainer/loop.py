@@ -21,6 +21,8 @@ from tqdm import tqdm
 from ww_trainer.checkpoint import save_intermediate_checkpoint
 from ww_trainer.mining import load_mining_cache, save_mining_cache
 from ww_trainer.dataset import AudioDataset, collate_fn
+from ww_trainer.feats import frames_per_second
+from ww_trainer.feature_store import FeatureStore, is_frozen
 from ww_trainer.evaluation import (
     evaluate_model,
     log_metrics_csv,
@@ -91,6 +93,37 @@ def _build_epoch_data(
     return epoch_data, len(selected_hard), len(selected_easy), len(selected_random)
 
 
+_EMBED_DIM_LOSSES = ("arcface", "center", "proxy_nca", "halo", "oc_softmax")
+
+
+def with_embed_dim(losses_cfg: List[Dict[str, Any]], model) -> List[Dict[str, Any]]:
+    """Copy of *losses_cfg* where losses with learned centres get the model's embedding size.
+
+    ArcFace, center, ProxyNCA, HALO and OC-softmax hold class centres the size of
+    ``model.embed``; an explicit ``embed_dim`` in a loss config is kept.
+    """
+    if not any(cfg["name"].lower() in _EMBED_DIM_LOSSES for cfg in losses_cfg):
+        return losses_cfg
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        feats = torch.zeros(1, 50, model.classifier.input_size, device=model.device)
+        dim = int(model.classify(feats, embed=True).shape[-1])
+    model.train(was_training)
+    return [{"embed_dim": dim, **cfg} if cfg["name"].lower() in _EMBED_DIM_LOSSES else cfg
+            for cfg in losses_cfg]
+
+
+def clip_frames(samples: List[Tuple[str, str]], frames_per_second: float,
+                max_files: int = 64) -> int:
+    """Median length of *samples* in feature frames (the streaming head's window)."""
+    import soundfile as sf
+    durations = sorted(sf.info(sample[0]).duration for sample in samples[:max_files])
+    if not durations:
+        return max(1, round(frames_per_second))
+    return max(1, round(durations[len(durations) // 2] * frames_per_second))
+
+
 def _run_batch_loop(
         model: torch.nn.Module,
         device: torch.device,
@@ -114,17 +147,19 @@ def _run_batch_loop(
 
     batch_bar = tqdm(loader, desc=f"  ep{ep+1} train", unit="batch", leave=False, position=1)
     for batch_idx, batch in enumerate(batch_bar):
-        wavs, labels, _, text_token_ids = batch if len(batch) == 4 else (*batch, None)
+        wavs, labels, _, text_token_ids = batch
+        lengths = batch.lengths
         global_step = ep * len(loader) + batch_idx
         loss_manager.update_neg_weight(global_step, total_steps)
 
         if use_mixup and len(wavs) > 1:
             from ww_trainer.augment import Mixup
-            wavs, labels = Mixup.mix_batch(wavs, labels, beta_param=mixup_alpha)
+            wavs, labels, lengths = Mixup.mix_padded(wavs, labels, lengths, beta_param=mixup_alpha)
 
         with torch.amp.autocast(device_type=device.type, enabled=effective_amp):
             loss, loss_dict = loss_manager.compute_loss(
-                model, wavs, labels, loader.dataset, text_token_ids=text_token_ids
+                model, wavs, labels, loader.dataset, text_token_ids=text_token_ids,
+                lengths=lengths,
             )
 
         loss_scaled = loss / max(1, accumulate_grad_batches)
@@ -171,6 +206,7 @@ def _update_best_checkpoints(
             trainer.model, trainer.wake_word, trainer.arch,
             ep, best_metrics, optimizer, ckpt,
             trainer.export_onnx, trainer.mlflow,
+            stream_window=trainer.stream_window,
         )
         logger.info("Saved checkpoint: %s", ckpt)
         return updated
@@ -188,6 +224,7 @@ def _update_best_checkpoints(
                 trainer.model, trainer.wake_word, trainer.arch,
                 ep, best_metrics, optimizer, output_dir / filename,
                 trainer.export_onnx, trainer.mlflow,
+                stream_window=trainer.stream_window,
             )
             updated.append(f"{key.capitalize()}={val:.4f}")
 
@@ -242,6 +279,10 @@ def training_loop(
         feature_cache=None,         # SharedWaveformCache or FeatureCache instance
         aug_prob: float = 0.7,      # waveform aug probability per sample (bg_noise/music/rir/pitch/speed)
         aug_warmup_epochs: int = 3, # ramp aug_prob from 0 → aug_prob linearly over this many epochs
+        feature_store: Optional[FeatureStore] = None,
+        cache_features: bool = True,
+        feature_cache_variants: int = 0,
+        feature_cache_dir: Optional[str] = None,
 ) -> float:
     """Run the full training loop for *trainer*.
 
@@ -292,6 +333,18 @@ def training_loop(
         balanced_replacement: Balance wake/non-wake when replacing.
         fitness_checkpoint: Save a ``best_fitness.pt`` checkpoint.
         fitness_param_budget: Parameter budget for fitness penalty.
+        feature_cache: Waveform cache for extractors that are trained.
+        feature_store: :class:`~ww_trainer.feature_store.FeatureStore` to read
+            and fill. When ``None`` and the extractor is frozen (a pretrained
+            featurizer, or any extractor without trainable parameters), the
+            store shared by every model on the same featurizer is used, so
+            features are computed once per clip for the whole run.
+        cache_features: Set ``False`` to featurize every batch from audio.
+        feature_cache_variants: Augmented variants kept per clip; augmented
+            draws reuse them. ``0`` augments on the fly (features of augmented
+            draws are not kept). Mixup then blends stored features.
+        feature_cache_dir: Directory where stored ONNX features persist across
+            runs and processes.
 
     Returns:
         Best F1 score achieved during training.
@@ -312,7 +365,8 @@ def training_loop(
             logger.info("[Mining] Loaded %d cached hardness scores", len(hardness_cache))
 
     loss_manager = LossManager(
-        loss_configs=trainer.losses_cfg, mining_type=mining_type, device=trainer.device,
+        loss_configs=with_embed_dim(trainer.losses_cfg, trainer.model),
+        mining_type=mining_type, device=trainer.device,
         neg_weight_schedule=neg_weight_schedule, max_neg_weight=max_neg_weight,
     )
 
@@ -358,12 +412,24 @@ def training_loop(
                 start_epoch + 1, epochs, resumed_metrics.get("f1", 0.0),
             )
 
+    extractor = trainer.model.feature_extractor
+    if feature_store is None and cache_features and is_frozen(extractor):
+        feature_store = FeatureStore.for_extractor(extractor, feature_cache_dir)
+    if feature_store is not None:
+        logger.info("[FeatureStore] features computed once per clip (%d augmented variants)",
+                    feature_cache_variants)
+    fps = frames_per_second(extractor)
     if spec_augment:
         from ww_trainer.augment import SpectrogramAugment
-        loss_manager.set_spec_augment(SpectrogramAugment(**(spec_augment_kwargs or {})))
+        spec = SpectrogramAugment.for_features(trainer.model.classifier.input_size, fps)
+        for k, v in (spec_augment_kwargs or {}).items():
+            if v is not None:
+                setattr(spec, k, v)
+        loss_manager.set_spec_augment(spec)
 
     wakes = [x for x in train_data if x[1] == "1" and os.path.isfile(x[0])]
     nonwakes = [x for x in train_data if x[1] == "0" and os.path.isfile(x[0])]
+    trainer.stream_window = clip_frames(wakes, fps)
     logger.info("Total wake-word samples: %d", len(wakes))
     logger.info("Total not-wake-word samples: %d", len(nonwakes))
 
@@ -433,7 +499,8 @@ def training_loop(
             _r_nonwakes = random.sample(nonwakes, min(200, len(nonwakes)))
             _readiness_data = _r_wakes + _r_nonwakes
             stats = log_embeddings_stats(trainer.model, _readiness_data, ep + 1,
-                                         trainer.device, 128, trainer.mlflow)
+                                         trainer.device, 128, trainer.mlflow,
+                                         feature_store=feature_store)
             readiness = compute_readiness(stats)
             ema_alpha = 0.3 if ep < epochs // 2 else 0.15
             readiness_ema = (1 - ema_alpha) * readiness_ema + ema_alpha * readiness
@@ -486,6 +553,8 @@ def training_loop(
             AudioDataset(epoch_data, device=trainer.device.type,
                          aug_prob=current_aug_prob,
                          feature_cache=feature_cache if current_aug_prob == 0.0 else None,
+                         feature_store=feature_store,
+                         feature_variants=feature_cache_variants,
                          **trainer.augment_opts),
             batch_size=batch_size, shuffle=True,
             collate_fn=lambda b: collate_fn(b, trainer.device),
@@ -508,7 +577,7 @@ def training_loop(
             evaluate_model(trainer.model, test_data, trainer.device,
                            batch_size=batch_size, threshold=current_threshold,
                            epoch=ep + 1, output_dir=output_dir, mlflow=trainer.mlflow,
-                           feature_cache=feature_cache)
+                           feature_cache=feature_cache, feature_store=feature_store)
         tqdm.write(
             f"  ep {ep+1:>3}/{epochs}  loss={avg_loss:.4f}  "
             f"F1={f1:.4f}  prec={prec:.3f}  rec={rec:.3f}  "
@@ -542,6 +611,7 @@ def training_loop(
                     {**best_metrics, "fitness": fitness}, optimizer,
                     output_dir / "best_fitness.pt",
                     trainer.export_onnx, trainer.mlflow,
+                    stream_window=trainer.stream_window,
                 )
                 logger.info("Updated best fitness: %.4f", fitness)
 
@@ -575,15 +645,18 @@ def training_loop(
         _embed_metrics_this_epoch: dict = {}
         if pca_every and (ep + 1) % pca_every == 0:
             _, _em = log_pca(trainer.model, test_data, output_dir / "viz" / "pca",
-                             ep + 1, trainer.device, mlflow=trainer.mlflow)
+                             ep + 1, trainer.device, mlflow=trainer.mlflow,
+                             feature_store=feature_store)
             _embed_metrics_this_epoch.update(_em)
         if tsne_every and (ep + 1) % tsne_every == 0:
             _, _em = log_tsne(trainer.model, test_data, output_dir / "viz" / "tsne",
-                              ep + 1, trainer.device, mlflow=trainer.mlflow)
+                             ep + 1, trainer.device, mlflow=trainer.mlflow,
+                             feature_store=feature_store)
             _embed_metrics_this_epoch.update(_em)
         if umap_every and (ep + 1) % umap_every == 0:
             _, _em = log_umap(trainer.model, test_data, output_dir / "viz" / "umap",
-                              ep + 1, trainer.device, mlflow=trainer.mlflow)
+                             ep + 1, trainer.device, mlflow=trainer.mlflow,
+                             feature_store=feature_store)
             _embed_metrics_this_epoch.update(_em)
 
         # Derived imbalance metrics
@@ -691,6 +764,7 @@ def training_loop(
             max_cache_size=3 * max(1, len(wakes)),
             wake_cache=getattr(trainer, "_wake_cache", []),
             feature_cache=feature_cache,
+            feature_store=feature_store,
         )
         if new_hards:
             max_samples = max(1, len(wakes)) * 3
@@ -715,11 +789,12 @@ def training_loop(
         try:
             logger.info("OCSVMHead detected — fitting OCSVM on training positives.")
             _ocsvm_loader = DataLoader(
-                AudioDataset(train_data, device=trainer.device.type, aug_prob=0.0),
+                AudioDataset(train_data, device=trainer.device.type, aug_prob=0.0,
+                             feature_store=feature_store),
                 batch_size=batch_size, shuffle=False,
                 collate_fn=lambda b: collate_fn(b, trainer.device),
             )
-            trainer.model.classifier.fit_ocsvm(_ocsvm_loader)
+            trainer.model.classifier.fit_ocsvm(_ocsvm_loader, model=trainer.model)
         except Exception as exc:
             logger.warning("fit_ocsvm() failed (skipping): %s", exc)
 
@@ -730,6 +805,7 @@ def training_loop(
             trainer.model, trainer.wake_word, trainer.arch,
             ep, best_metrics, optimizer, ckpt,
             trainer.export_onnx, trainer.mlflow,
+            stream_window=trainer.stream_window,
         )
         save_mining_cache(getattr(trainer, "hardness_cache", {}), str(output_dir / "hardneg_cache.pt"))
         logger.info("Training complete. Saved to %s", ckpt)

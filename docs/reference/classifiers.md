@@ -1,6 +1,6 @@
 # Classifier Heads
 
-All heads inherit from `ClassifierHead` — `ww_trainer/model.py:27`. Input: `[B, T, F]` features. Output: `[B]` logits (apply sigmoid for probability). All heads provide `embed()` for metric learning losses.
+All heads inherit from `ClassifierHead` — `ww_trainer/model.py:101`. Input: `[B, T, F]` features. Output: `[B]` logits (apply sigmoid for probability). All heads provide `embed()` for metric learning losses.
 
 ---
 
@@ -8,23 +8,23 @@ All heads inherit from `ClassifierHead` — `ww_trainer/model.py:27`. Input: `[B
 
 | Head | Class | Line | Architecture | Approx Params | Hardware Fit |
 |------|-------|------|-------------|---------------|-------------|
-| FFN | `FfnClassifierHead` | `model.py:246` | Mean pool + 2-layer MLP | ~10-35K | MCU |
-| OCSVM | `OCSVMHead` | `model.py:271` | FFN backbone + One-Class SVM | ~20-50K + SVs | RPi/laptop |
-| CNN | `CnnClassifierHead` | `model.py:451` | 2x Conv1d + pool + FC | ~70-200K | MCU/RPi |
-| GRU | `GruClassifierHead` | `model.py:483` | GRU + mean pool + FC | ~50-500K | RPi |
-| BCResNet | `BCResNetHead` | `model.py:776` | 2D broadcasted residual CNN | 6K-280K (tau) | MCU/RPi |
-| TCResNet | `TCResNetHead` | `model.py:957` | 1D temporal residual CNN | ~30-120K | MCU/RPi |
-| DSCNN | `DSCNNHead` | `model.py:1019` | Depthwise-separable 2D CNN | 20-250K (S/M/L) | MCU |
-| MatchboxNet | `MatchboxNetHead` | `model.py:1104` | 1D time-channel separable CNN | 25-90K | MCU/RPi |
-| Res15 | `Res15Head` | `model.py:1190` | 1D dilated residual (dil 1-32) | ~50K | RPi |
-| KWT | `KWTHead` | `model.py:1234` | Vision Transformer on patches | ~50-200K | RPi4/laptop |
-| Conformer | `ConformerHead` | `model.py:1349` | Conv-augmented transformer | ~100-500K | RPi4/laptop |
-| MixConv | `MixConvHead` | `model.py:1448` | Mixed depthwise convolutions | ~20-100K | MCU/RPi |
-| CRNN | `CRNNHead` | `model.py:1522` | 2D CNN + GRU | ~50-200K | RPi |
-| EfficientNet | `EfficientNetHead` | `model.py:1575` | EfficientNet-B0 on log-mel | ~4M (backbone) | Laptop/server |
-| ConvAttention | `ConvAttentionHead` | `model.py:1637` | 1D conv stack + self-attention + mean-pool | ~5-30K | MCU/RPi |
+| FFN | `FfnClassifierHead` | `model.py:382` | Mean pool + 2-layer MLP | ~10-35K | MCU |
+| OCSVM | `OCSVMHead` | `model.py:407` | FFN backbone + One-Class SVM | ~20-50K + SVs | RPi/laptop |
+| CNN | `CnnClassifierHead` | `model.py:608` | 2x Conv1d + pool + FC | ~70-200K | MCU/RPi |
+| GRU | `GruClassifierHead` | `model.py:637` | GRU + mean pool + FC | ~50-500K | RPi |
+| BCResNet | `BCResNetHead` | `model.py:965` | 2D broadcasted residual CNN | 6K-280K (tau) | MCU/RPi |
+| TCResNet | `TCResNetHead` | `model.py:1146` | 1D temporal residual CNN | ~30-120K | MCU/RPi |
+| DSCNN | `DSCNNHead` | `model.py:1203` | Depthwise-separable 2D CNN | 20-250K (S/M/L) | MCU |
+| MatchboxNet | `MatchboxNetHead` | `model.py:1288` | 1D time-channel separable CNN | 25-90K | MCU/RPi |
+| Res15 | `Res15Head` | `model.py:1365` | 1D dilated residual (dil 1-32) | ~50K | RPi |
+| KWT | `KWTHead` | `model.py:1402` | Vision Transformer on patches | ~50-200K | RPi4/laptop |
+| Conformer | `ConformerHead` | `model.py:1512` | Conv-augmented transformer | ~100-500K | RPi4/laptop |
+| MixConv | `MixConvHead` | `model.py:1611` | Mixed depthwise convolutions | ~20-100K | MCU/RPi |
+| CRNN | `CRNNHead` | `model.py:1680` | 2D CNN + GRU | ~50-200K | RPi |
+| EfficientNet | `EfficientNetHead` | `model.py:1728` | EfficientNet-B0 on log-mel | ~4M (backbone) | Laptop/server |
+| ConvAttention | `ConvAttentionHead` | `model.py:1790` | 1D conv stack + self-attention + mean-pool | ~5-30K | MCU/RPi |
 
-Supporting module: `AttentionPooling` — `model.py:910`. Used internally by `ConformerHead`.
+Supporting module: `AttentionPooling` — `model.py:1099`. Used internally by `ConformerHead`.
 
 `ConvAttentionHead` is ported from [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) (Apache-2.0). Their docs report "60x lower AUT and 100x fewer FPs/h vs openWakeWord" with this head over a frozen embedding front-end — LiveKit's own reported figure, not reproduced or measured by `wakeforge`; see the head's own section below. The port relaxes the original fixed `LayerNorm([D, T=16])` to `LayerNorm(D)` over the channel axis, so the head accepts any `T` and exports with a dynamic time axis like the rest of `wakeforge`.
 
@@ -32,7 +32,7 @@ Supporting module: `AttentionPooling` — `model.py:910`. Used internally by `Co
 
 ## Detailed Descriptions
 
-### FfnClassifierHead — `model.py:246`
+### FfnClassifierHead — `model.py:382`
 
 Mean-pool over time, then Linear(F, hidden) -> ReLU -> Dropout -> Linear(hidden, 1).
 
@@ -50,7 +50,7 @@ Mean-pool over time, then Linear(F, hidden) -> ReLU -> Dropout -> Linear(hidden,
 
 ---
 
-### CnnClassifierHead — `model.py:451`
+### CnnClassifierHead — `model.py:608`
 
 Two Conv1d layers (kernel_size=3) operating on `[B, F, T]`, AdaptiveAvgPool1d(1), then FC layers.
 
@@ -66,9 +66,9 @@ Two Conv1d layers (kernel_size=3) operating on `[B, F, T]`, AdaptiveAvgPool1d(1)
 
 ---
 
-### GruClassifierHead — `model.py:483`
+### GruClassifierHead — `model.py:637`
 
-GRU RNN with optional bidirectional mode, mean-pool, then FC layers. Auto-detects `[B, F, T]` vs `[B, T, F]` input shape — `GruClassifierHead._ensure_correct_shape` — `model.py:504`.
+GRU RNN with optional bidirectional mode, mean-pool, then FC layers. Auto-detects `[B, F, T]` vs `[B, T, F]` input shape — `GruClassifierHead._ensure_correct_shape` — `model.py:658`.
 
 **Source:** a generic RNN baseline (GRU is Cho et al., 2014, ArXiv <https://arxiv.org/abs/1406.1078> — a general sequence-modeling architecture, not proposed for keyword spotting specifically). No dedicated KWS paper to cite.
 
@@ -82,7 +82,7 @@ GRU RNN with optional bidirectional mode, mean-pool, then FC layers. Auto-detect
 
 ---
 
-### BCResNetHead — `model.py:776`
+### BCResNetHead — `model.py:965`
 
 BC-ResNet (Kim et al., *Broadcasted Residual Learning for Efficient Keyword Spotting*, Interspeech 2021, Qualcomm). ArXiv <https://arxiv.org/abs/2106.04140>. Broadcasted residual blocks with 2D pathway (frequency-temporal) and 1D pathway (temporally-pooled). Uses SubSpectralNorm.
 
@@ -109,7 +109,7 @@ BC-ResNet (Kim et al., *Broadcasted Residual Learning for Efficient Keyword Spot
 
 ---
 
-### TCResNetHead — `model.py:957`
+### TCResNetHead — `model.py:1146`
 
 TC-ResNet (Choi et al., *Temporal Convolution for Real-time Keyword Spotting on Mobile Devices*, Interspeech 2019). ArXiv <https://arxiv.org/abs/1904.03814>. Purely 1D temporal convolutions with residual connections.
 
@@ -128,7 +128,7 @@ TC-ResNet (Choi et al., *Temporal Convolution for Real-time Keyword Spotting on 
 
 ---
 
-### DSCNNHead — `model.py:1019`
+### DSCNNHead — `model.py:1203`
 
 DS-CNN (Zhang et al., *Hello Edge: Keyword Spotting on Microcontrollers*, 2017). ArXiv <https://arxiv.org/abs/1711.07128>. Depthwise-separable 2D CNN. An ARM/Google microcontroller-KWS benchmark reference.
 
@@ -150,7 +150,7 @@ DS-CNN (Zhang et al., *Hello Edge: Keyword Spotting on Microcontrollers*, 2017).
 
 ---
 
-### MatchboxNetHead — `model.py:1104`
+### MatchboxNetHead — `model.py:1288`
 
 MatchboxNet (Majumdar & Ginsburg, *MatchboxNet: 1D Time-Channel Separable Convolutional Neural Network Architecture for Speech Commands Recognition*, Interspeech 2020, NVIDIA). ArXiv <https://arxiv.org/abs/2004.08531>; full entry in [`../research/references.md`](../research/references.md). 1D time-channel separable convolutions with residual connections. Architecture: B blocks x R sub-blocks x C channels.
 
@@ -172,7 +172,7 @@ MatchboxNet (Majumdar & Ginsburg, *MatchboxNet: 1D Time-Channel Separable Convol
 
 ---
 
-### Res15Head — `model.py:1190`
+### Res15Head — `model.py:1365`
 
 Res15 (Tang & Lin, *Deep Residual Learning for Small-Footprint Keyword Spotting*, ICASSP 2018). ArXiv <https://arxiv.org/abs/1710.10361>. 1D residual blocks with exponentially increasing dilation: [1, 2, 4, 8, 16, 32]. Large receptive field in 6 blocks.
 
@@ -188,7 +188,7 @@ Res15 (Tang & Lin, *Deep Residual Learning for Small-Footprint Keyword Spotting*
 
 ---
 
-### KWTHead — `model.py:1234`
+### KWTHead — `model.py:1402`
 
 Keyword Transformer (Berg et al., *Keyword Transformer: A Self-Attention Model for Keyword Spotting*, Interspeech 2021). ArXiv <https://arxiv.org/abs/2104.00769>; full entry in [`../research/references.md`](../research/references.md). Vision Transformer adapted for spectrograms: patches along time, positional embedding, transformer encoder, CLS token classification.
 
@@ -204,9 +204,9 @@ Keyword Transformer (Berg et al., *Keyword Transformer: A Self-Attention Model f
 
 ---
 
-### ConformerHead — `model.py:1349`
+### ConformerHead — `model.py:1512`
 
-Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Speech Recognition*, Interspeech 2020). ArXiv <https://arxiv.org/abs/2005.08100>. Convolution-augmented transformer: FFN -> MHSA -> Conv -> FFN per block — `_ConformerBlock` — `model.py:1304`. Uses `AttentionPooling` — `model.py:910` — for time aggregation.
+Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Speech Recognition*, Interspeech 2020). ArXiv <https://arxiv.org/abs/2005.08100>. Convolution-augmented transformer: FFN -> MHSA -> Conv -> FFN per block — `_ConformerBlock` — `model.py:1467`. Uses `AttentionPooling` — `model.py:1467` — for time aggregation.
 
 **Status:** the source paper targets full-sentence speech recognition, not keyword spotting; this head is `wakeforge`'s own adaptation of the block design to a binary wake-word classifier, not a reproduction of a KWS result from the paper.
 
@@ -220,7 +220,7 @@ Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Spee
 
 ---
 
-### CRNNHead — `model.py:1522`
+### CRNNHead — `model.py:1680`
 
 2D CNN frontend (2 conv layers with MaxPool) followed by GRU. The CNN extracts local spectro-temporal patterns; the GRU models sequence dynamics.
 
@@ -236,7 +236,7 @@ Conformer (Gulati et al., *Conformer: Convolution-augmented Transformer for Spee
 
 ---
 
-### OCSVMHead — `model.py:271`
+### OCSVMHead — `model.py:407`
 
 Two-stage head: FFN backbone maps pooled frame features to a fixed-size embedding, then a One-Class SVM decision boundary classifies embeddings as inlier (wake-word) or outlier. Inspired by anomaly-detection framing of keyword spotting.
 
@@ -244,13 +244,13 @@ Two-stage head: FFN backbone maps pooled frame features to a fixed-size embeddin
 
 **Status:** the One-Class SVM decision rule is the cited paper's; the FFN backbone, the two-stage training procedure, and their application to wake-word embeddings are `wakeforge`'s own design, not from that paper or any other cited source.
 
-**Architecture:** `[B,T,F]` → mean-pool → Linear(F→hidden) → ReLU → Dropout → Linear(hidden→embed_dim) → kernel OCSVM → `[B]` score — `OCSVMHead.forward` — `model.py:365`.
+**Architecture:** `[B,T,F]` → mean-pool → Linear(F→hidden) → ReLU → Dropout → Linear(hidden→embed_dim) → kernel OCSVM → `[B]` score — `OCSVMHead.forward` — `model.py:510`.
 
 **Training stages:**
 1. Stage 1 — backbone trains via BCE/focal loss alongside all other heads (no OCSVM involved).
-2. Stage 2 — call `OCSVMHead.fit_ocsvm(dataloader)` — `model.py:392` — after training. Fits `sklearn.svm.OneClassSVM` on positive-class embeddings. Support vectors, dual coefficients, bias, and resolved kernel parameters are stored as torch buffers.
+2. Stage 2 — call `OCSVMHead.fit_ocsvm(dataloader)` — `model.py:540` — after training. Fits `sklearn.svm.OneClassSVM` on positive-class embeddings. Support vectors, dual coefficients, bias, and resolved kernel parameters are stored as torch buffers.
 
-**ONNX export:** All four kernels are implemented in pure PyTorch (`OCSVMHead._kernel_vals` — `model.py:343`); no sklearn at inference time. Always call `export_to_onnx` **after** `fit_ocsvm` — exporting before fitting bakes the all-zero sentinel buffers.
+**ONNX export:** All four kernels are implemented in pure PyTorch (`OCSVMHead._kernel_vals` — `model.py:488`); no sklearn at inference time. Always call `export_to_onnx` **after** `fit_ocsvm` — exporting before fitting bakes the all-zero sentinel buffers.
 
 **Parameters:**
 
@@ -282,7 +282,7 @@ head = OCSVMHead(input_size=40, nu=0.05, kernel="rbf")
 # ... Stage 1 training loop using BCE loss on head.forward() ...
 
 # Stage 2: fit OCSVM on positives
-head.fit_ocsvm(train_dataloader)  # model.py:392
+head.fit_ocsvm(train_dataloader)  # model.py:540
 
 # Export AFTER fitting
 head.export_to_onnx("best_f1.onnx")
@@ -296,7 +296,7 @@ head.export_to_onnx("best_f1.onnx")
 
 ---
 
-### MixConvHead — `model.py:1448`
+### MixConvHead — `model.py:1611`
 
 Mixed depthwise convolution head, using multiple kernel sizes per block after the mixed-kernel idea in Tan & Le, *MixConv: Mixed Depthwise Convolutional Kernels*, BMVC 2019 (ArXiv <https://arxiv.org/abs/1907.09595>), and following the block layout of the [micro-wake-word](https://github.com/kahrendt/microWakeWord) project's MixedNet. Each block splits channels into groups and applies different temporal kernel sizes per group (e.g., `[[3], [5,7], [9,13]]`), capturing multi-scale patterns without depth overhead.
 
@@ -314,13 +314,13 @@ Mixed depthwise convolution head, using multiple kernel sizes per block after th
 
 ---
 
-### EfficientNetHead — `model.py:1575`
+### EfficientNetHead — `model.py:1728`
 
 EfficientNet-B0 (Tan & Le, *EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks*, ICML 2019. ArXiv <https://arxiv.org/abs/1905.11946>) applied to log-mel spectrograms treated as single-channel 2D images (`[B,1,F,T]`). Trained from scratch (no pretrained weights). Requires `torchvision`.
 
 **Status:** the source paper targets ImageNet image classification, not audio or keyword spotting; treating a log-mel spectrogram as a 1-channel image and training from scratch is `wakeforge`'s own adaptation, not a reproduction of a result from the paper.
 
-**Architecture:** `[B,T,F]` → transpose → unsqueeze(1) → EfficientNet-B0 (1-ch input) → Dropout → Linear(1280, 1) → `[B]` logits — `EfficientNetHead.forward` — `model.py:1619`.
+**Architecture:** `[B,T,F]` → transpose → unsqueeze(1) → EfficientNet-B0 (1-ch input) → Dropout → Linear(1280, 1) → `[B]` logits — `EfficientNetHead.forward` — `model.py:1772`.
 
 **Parameters:** `dropout` (0.2), `input_size` (mel bins, e.g. 40 or 80).
 
@@ -336,7 +336,7 @@ EfficientNet-B0 (Tan & Le, *EfficientNet: Rethinking Model Scaling for Convoluti
 
 ---
 
-### ConvAttentionHead — `model.py:1637`
+### ConvAttentionHead — `model.py:1790`
 
 Ported from [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) (Apache-2.0). Their docs report "60x lower AUT and 100x fewer FPs/hour vs openWakeWord" using this head over a frozen embedding front-end.
 

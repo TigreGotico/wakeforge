@@ -290,11 +290,25 @@ class SpectrogramAugment:
         self.n_freq_masks = n_freq_masks
         self.max_freq_width = max_freq_width
 
-    def __call__(self, feats: "torch.Tensor") -> "torch.Tensor":
+    @classmethod
+    def for_features(cls, feature_dim: int, frame_rate_hz: float,
+                     n_time_masks: int = 2, n_freq_masks: int = 2) -> "SpectrogramAugment":
+        """Masks sized to the features: up to 100 ms of frames and a tenth of the dimensions.
+
+        40-d features at 100 frames/s get the defaults (10 frames, 4 bins);
+        128-d features at 50 frames/s get 5 frames and 13 dimensions.
+        """
+        return cls(n_time_masks, max(1, round(0.1 * frame_rate_hz)),
+                   n_freq_masks, max(1, round(0.1 * feature_dim)))
+
+    def __call__(self, feats: "torch.Tensor",
+                 lengths: "Optional[torch.Tensor]" = None) -> "torch.Tensor":
         """Apply time and frequency masking to feature tensor.
 
         Args:
             feats: Feature tensor of shape ``[B, T, F]`` or ``[T, F]``.
+            lengths: Optional ``[B]`` real frame count of each row; time masks
+                then fall inside each row's real frames, drawn per row.
 
         Returns:
             Masked feature tensor (same shape, zeroed mask regions).
@@ -309,10 +323,20 @@ class SpectrogramAugment:
         B, T, F = feats.shape
         result = feats.clone()
 
-        for _ in range(self.n_time_masks):
-            width = random.randint(1, min(self.max_time_width, T))
-            start = random.randint(0, max(0, T - width))
-            result[:, start:start + width, :] = 0.0
+        if lengths is None:
+            for _ in range(self.n_time_masks):
+                width = random.randint(1, min(self.max_time_width, T))
+                start = random.randint(0, max(0, T - width))
+                result[:, start:start + width, :] = 0.0
+        else:
+            real = lengths.to(feats.device).clamp(1, T)
+            steps = torch.arange(T, device=feats.device)[None, :]
+            for _ in range(self.n_time_masks):
+                width = (torch.rand(B, device=feats.device)
+                         * real.clamp(max=self.max_time_width)).long() + 1
+                start = (torch.rand(B, device=feats.device) * (real - width + 1)).long()
+                hit = (steps >= start[:, None]) & (steps < (start + width)[:, None])
+                result = result.masked_fill(hit[:, :, None], 0.0)
 
         for _ in range(self.n_freq_masks):
             width = random.randint(1, min(self.max_freq_width, F))
@@ -412,6 +436,31 @@ class Mixup(AudioTransform):
         mixed_wavs = alpha * wavs + (1.0 - alpha) * wavs[idx]
         mixed_labels = alpha * labels + (1.0 - alpha) * labels[idx]
         return mixed_wavs, mixed_labels
+
+    @staticmethod
+    def mix_padded(
+        batch: "torch.Tensor",
+        labels: "torch.Tensor",
+        lengths: "torch.Tensor",
+        beta_param: float = 1.0,
+        min_alpha: float = 0.1,
+    ) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+        """:meth:`mix_batch` for a padded batch of any shape, tracking real lengths.
+
+        Works on ``[B, samples]`` waveforms and on ``[B, T, D]`` stored features
+        (feature-space Mixup). Each mixed row is as long as the longer of its
+        two sources.
+
+        Returns:
+            Tuple of (mixed batch, mixed labels ``[B]``, mixed lengths ``[B]``).
+        """
+        import torch
+        idx = torch.randperm(batch.size(0), device=batch.device)
+        alpha = float(np.random.beta(beta_param, beta_param))
+        alpha = float(np.clip(alpha, min_alpha, 1.0 - min_alpha))
+        mixed = alpha * batch + (1.0 - alpha) * batch[idx]
+        mixed_labels = alpha * labels + (1.0 - alpha) * labels[idx]
+        return mixed, mixed_labels, torch.maximum(lengths, lengths[idx.to(lengths.device)])
 
 
 class AugmentationPipeline(AudioTransform):

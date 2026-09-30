@@ -118,6 +118,12 @@ class AudioDataset(Dataset):
         device: Device for voice conversion (legacy mode).
         feature_cache: Optional ``FeatureCache`` instance for caching un-augmented
             waveforms.  Bypassed when augmentation is applied to a sample.
+        feature_store: Optional :class:`~ww_trainer.feature_store.FeatureStore`
+            of a frozen featurizer. Items are then features ``[T, D]`` instead of
+            waveforms, computed once per clip and reused.
+        feature_variants: With a ``feature_store``, the number of augmented
+            variants kept per clip: an augmented draw picks one of them and
+            computes it only the first time. ``0`` augments on the fly.
     """
 
     def __init__(self, samples,
@@ -144,9 +150,13 @@ class AudioDataset(Dataset):
                  device="auto",
                  validate: bool = False,
                  feature_cache=None,
+                 feature_store=None,
+                 feature_variants: int = 0,
                  ):
         self.pipeline = pipeline
         self.feature_cache = feature_cache
+        self.feature_store = feature_store
+        self.feature_variants = feature_variants
         self.samples = samples
         self.sample_rate = sample_rate
         self.aug_prob = aug_prob
@@ -190,7 +200,7 @@ class AudioDataset(Dataset):
 
         # Validate files and log label distribution
         import os as _os
-        missing = [path for path, _ in self.data if not _os.path.isfile(path)]
+        missing = [s[0] for s in self.data if not _os.path.isfile(s[0])]
         if missing:
             logger.warning("AudioDataset: %d missing files (of %d total)", len(missing), len(self.data))
             for p in missing[:5]:
@@ -199,7 +209,7 @@ class AudioDataset(Dataset):
                 logger.warning("  ... and %d more", len(missing) - 5)
 
         if self.data:
-            labels = [label for _, label in self.data]
+            labels = [s[1] for s in self.data]
             unique = set(labels)
             dist = {lbl: labels.count(lbl) for lbl in sorted(unique)}
             logger.info("AudioDataset: %d samples, label distribution: %s", len(self.data), dist)
@@ -220,7 +230,7 @@ class AudioDataset(Dataset):
         if validate and self.data:
             import soundfile as sf
             bad_files = []
-            for path, label in self.data:
+            for path, *_ in self.data:
                 if not _os.path.isfile(path):
                     continue  # already reported above
                 try:
@@ -318,6 +328,11 @@ class AudioDataset(Dataset):
         keyword_ids = entry[2] if len(entry) > 2 else None
 
         will_augment = self.aug_prob > 0 and random.random() < self.aug_prob
+        use_vc = label == "1" and self.vc is not None and random.random() < self.vc_prob
+        use_wow = bool(self.wow_files) and label == "1" and random.random() < self.wow_prob
+
+        if self.feature_store is not None:
+            return self._features(idx, will_augment, use_vc, use_wow), int(label), path, keyword_ids
 
         # Check feature cache (only for un-augmented samples)
         if not will_augment and self.feature_cache is not None:
@@ -325,8 +340,35 @@ class AudioDataset(Dataset):
             if cached is not None:
                 return torch.from_numpy(cached).float(), int(label), path, keyword_ids
 
+        return self._waveform(idx, will_augment, use_vc, use_wow), int(label), path, keyword_ids
+
+    def _features(self, idx: int, will_augment: bool, use_vc: bool, use_wow: bool) -> torch.Tensor:
+        """Features ``[T, D]`` of sample *idx* from the feature store.
+
+        Un-augmented draws use variant 0. An augmented draw picks one of the
+        ``feature_variants`` variants and, the first time that variant is
+        drawn, computes it with this draw's augmentations; with
+        ``feature_variants`` 0 it is computed on the fly and not kept.
+        """
+        path = self.samples[idx][0]
+        variant = 0
+        if will_augment or use_vc or use_wow:
+            variant = random.randint(1, self.feature_variants) if self.feature_variants else None
+        if variant is not None:
+            feats = self.feature_store.get(path, variant)
+            if feats is not None:
+                return feats
+        feats = self.feature_store.featurize(self._waveform(idx, will_augment, use_vc, use_wow))
+        if variant is not None:
+            self.feature_store.put(path, variant, feats)
+        return feats
+
+    def _waveform(self, idx: int, will_augment: bool, use_vc: bool, use_wow: bool) -> torch.Tensor:
+        """Load sample *idx* as a mono waveform, applying the chosen augmentations."""
+        path, label = self.samples[idx][0], self.samples[idx][1]
+
         # 0. Apply Voice Conversion -> simulate a new speaker
-        if label == "1" and self.vc is not None and random.random() < self.vc_prob:
+        if use_vc:
             try:
                 wav, sr = self.revoice(idx)
             except Exception as exc:
@@ -349,12 +391,12 @@ class AudioDataset(Dataset):
         # Apply on-the-fly augmentation if enabled
         if will_augment:
             wav = self.get_augmented(wav)
-        elif self.feature_cache is not None:
+        elif self.feature_cache is not None and self.feature_store is None:
             # Cache un-augmented waveform for future hits
             self.feature_cache.put(path, wav.numpy() if isinstance(wav, torch.Tensor) else wav)
 
         # Wake-word-over-speech: mix positives under a speech background at moderate SNR.
-        if self.wow_files and label == "1" and random.random() < self.wow_prob:
+        if use_wow:
             donor_path = random.choice(self.wow_files)
             try:
                 speech_np = _load_audio_mono(str(donor_path), self.sample_rate)
@@ -365,7 +407,25 @@ class AudioDataset(Dataset):
             except Exception as exc:
                 logger.debug("WoW mixing failed for %s: %s", donor_path, exc)
 
-        return wav, int(label), path, keyword_ids
+        return wav
+
+
+class Batch(tuple):
+    """``(wavs, labels, paths, keyword_ids)`` from :func:`collate_fn`.
+
+    Unpacks like the plain 4-tuple; ``lengths`` holds the real length of each
+    padded row, in samples for waveform batches and in frames for batches of
+    stored features (``[B, T, D]``). Pass it to the model
+    (``model(wavs, lengths=batch.lengths)``) so padded frames are left out of
+    pooling.
+    """
+
+    lengths: torch.Tensor
+
+    def __new__(cls, items, lengths: torch.Tensor) -> "Batch":
+        batch = super().__new__(cls, items)
+        batch.lengths = lengths
+        return batch
 
 
 def collate_fn(batch, device="auto"):
@@ -376,8 +436,13 @@ def collate_fn(batch, device="auto"):
     per-sample lists are stacked into a padded ``[B, max_seq]`` int64 tensor;
     when absent (or all ``None``), ``None`` is returned as the fourth element.
 
+    Items may hold 1-D waveforms (padded to ``[B, samples]``) or ``[T, D]``
+    features from a :class:`~ww_trainer.feature_store.FeatureStore` (padded to
+    ``[B, T, D]``); padding is zeros either way.
+
     Returns:
-        ``(wavs, labels, paths, keyword_ids_tensor_or_None)``
+        :class:`Batch` ``(wavs, labels, paths, keyword_ids_tensor_or_None)``
+        with ``lengths`` set.
     """
     if device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -389,10 +454,10 @@ def collate_fn(batch, device="auto"):
         wavs, labels, paths = zip(*batch)
         kw_ids_list = None
 
-    max_len = max(w.shape[-1] for w in wavs)
-    padded = torch.zeros(len(wavs), max_len)
+    lengths = torch.tensor([w.shape[0] for w in wavs], dtype=torch.long)
+    padded = torch.zeros(len(wavs), int(lengths.max()), *wavs[0].shape[1:])
     for i, w in enumerate(wavs):
-        padded[i, :w.shape[-1]] = w
+        padded[i, :w.shape[0]] = w
 
     # Build padded keyword IDs tensor [B, max_seq] or None
     kw_tensor = None
@@ -404,9 +469,9 @@ def collate_fn(batch, device="auto"):
                 kw_arr[i, :len(k)] = torch.tensor(k, dtype=torch.long)
         kw_tensor = kw_arr
 
-    return (
+    return Batch((
         padded.to(device),
         torch.tensor(labels, dtype=torch.float32).to(device),
         paths,
         kw_tensor,
-    )
+    ), lengths)

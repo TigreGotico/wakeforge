@@ -8,19 +8,19 @@ Four search strategies in `ww_trainer/sweep.py`: Optuna (Bayesian), Grid, Random
 
 | Strategy | Function | Line | Trials | Best For |
 |----------|----------|------|--------|----------|
-| Optuna (Bayesian) | `run_sweep()` | `sweep.py:91` | User-specified | General purpose, adaptive |
-| Grid | `run_grid_search()` | `sweep.py:299` | All combos | Small spaces (<100 combos) |
-| Random | `run_random_search()` | `sweep.py:374` | User-specified | High-dimensional spaces |
-| Genetic | `run_genetic_search()` | `sweep.py:744` | pop_size × generations × n_demes | Complex spaces, island model |
-| Two-Stage Genetic | `run_two_stage_genetic_search()` | `sweep.py:1029` | (stage1 + stage2) × n_demes | Best quality, broad then focused |
+| Optuna (Bayesian) | `run_sweep()` | `sweep.py:93` | User-specified | General purpose, adaptive |
+| Grid | `run_grid_search()` | `sweep.py:320` | All combos | Small spaces (<100 combos) |
+| Random | `run_random_search()` | `sweep.py:398` | User-specified | High-dimensional spaces |
+| Genetic | `run_genetic_search()` | `sweep.py:777` | pop_size × generations × n_demes | Complex spaces, island model |
+| Two-Stage Genetic | `run_two_stage_genetic_search()` | `sweep.py:1067` | (stage1 + stage2) × n_demes | Best quality, broad then focused |
 
-All strategies share `_evaluate_config()` — `sweep.py:230` and `_build_search_space()` — `sweep.py:230`.
+All strategies share `_evaluate_config()` — `sweep.py:250` and `_build_search_space()` — `sweep.py:250`.
 
 ---
 
 ## Default Search Space
 
-Defined in `_build_search_space()` -- `sweep.py:184`:
+Defined in `_build_search_space()` -- `sweep.py:190`:
 
 | Parameter | Values |
 |-----------|--------|
@@ -38,7 +38,7 @@ All strategies use BCE loss with weight 1.0. Data is loaded once and split 80/20
 
 ## 1. Optuna (Bayesian Optimization)
 
-`run_sweep()` -- `sweep.py:91`
+`run_sweep()` -- `sweep.py:93`
 
 Uses Optuna's TPE (Tree-structured Parzen Estimator) sampler. Learns which regions of the search space are promising and allocates more trials there.
 
@@ -80,7 +80,7 @@ python -m ww_trainer.sweep \
 
 ## 2. Grid Search
 
-`run_grid_search()` -- `sweep.py:299`
+`run_grid_search()` -- `sweep.py:320`
 
 Exhaustive evaluation of every combination in the search space.
 
@@ -112,7 +112,7 @@ results = run_grid_search(
 
 ## 3. Random Search
 
-`run_random_search()` -- `sweep.py:374`
+`run_random_search()` -- `sweep.py:398`
 
 Samples configurations uniformly from the search space. Bergstra & Bengio (2012) showed random search finds good configs faster than grid search when not all hyperparameters matter equally.
 
@@ -138,7 +138,7 @@ results = run_random_search(
 
 ## 4. Genetic Search
 
-`run_genetic_search()` — `sweep.py:744`
+`run_genetic_search()` — `sweep.py:777`
 
 Evolves a population through selection, crossover, and mutation. Supports island-model parallelism, early stopping, and configurable selection pressure.
 
@@ -208,7 +208,7 @@ Total evaluations: `population_size * generations` (200 with defaults).
 
 ## 5. Two-Stage Genetic Search
 
-`run_two_stage_genetic_search()` — `sweep.py:1029`
+`run_two_stage_genetic_search()` — `sweep.py:1067`
 
 Stage 1 runs a broad GA to find promising regions. Stage 2 seeds a tighter GA with the top-K configs from stage 1 using lower mutation rate and higher elite fraction.
 
@@ -248,7 +248,7 @@ Each `history` entry carries a `stage` key (1 or 2) — `sweep.py:774-778`.
 
 ## 6. Fitness Transforms (`_apply_fitness_fn`)
 
-`_apply_fitness_fn(f1, fitness_fn)` — `sweep.py:73`
+`_apply_fitness_fn(f1, fitness_fn)` — `sweep.py:75`
 
 Internal helper; applied only for GA selection comparisons. **Reported `best_score` is always raw F1.**
 
@@ -259,7 +259,7 @@ Internal helper; applied only for GA selection comparisons. **Reported `best_sco
 | `"double_exp_f1"` | `exp(exp(f1) - 1)` | Extreme pressure near the optimum |
 
 Unknown `fitness_fn` values fall through to the identity branch (same as `"f1"`).
-`_validate_ga_params` raises `ValueError` for unknown values when called via the public API — `sweep.py:25`.
+`_validate_ga_params` raises `ValueError` for unknown values when called via the public API — `sweep.py:27`.
 
 ---
 
@@ -310,14 +310,14 @@ When to use each of the four hyperparameter search strategies in `ww_trainer/swe
 
 ```
 Do you need exhaustive coverage of a small space?
-  YES → Grid Search (run_grid_search, sweep.py:299)
+  YES → Grid Search (run_grid_search, sweep.py:320)
 
 Is Optuna installed and your budget is 20-100 trials?
-  YES → Optuna / Bayesian (run_sweep, sweep.py:91)
+  YES → Optuna / Bayesian (run_sweep, sweep.py:93)
 
 Is your search space large or multi-modal?
-  YES, budget >100 → Genetic Search (run_genetic_search, sweep.py:744)
-  YES, budget <100 → Random Search (run_random_search, sweep.py:374)
+  YES, budget >100 → Genetic Search (run_genetic_search, sweep.py:777)
+  YES, budget <100 → Random Search (run_random_search, sweep.py:398)
 
 No strong preference?
   → Optuna (default recommendation)
@@ -342,7 +342,7 @@ No strong preference?
 
 ## Default Search Space
 
-`_build_search_space(full=False)` -- `sweep.py:184`:
+`_build_search_space(full=False)` -- `sweep.py:190`:
 
 | Parameter | Values | Count |
 |-----------|--------|-------|
@@ -358,14 +358,14 @@ Total: 540 combinations. Too large for grid; use Optuna or Random.
 
 ## Full Architecture Search (`full=True`)
 
-`_build_search_space(full=True)` -- `sweep.py:184`:
+`_build_search_space(full=True)` -- `sweep.py:190`:
 
 Adds to the default space:
 
 | Parameter | Values | Count |
 |-----------|--------|-------|
-| `featurizer_type` | mfcc, filterbank, sincnet, gammatone | 4 |
-| `arch` | ffn, gru, cnn, bcresnet, tcresnet, dscnn, matchboxnet, res15, conformer, crnn | 10 |
+| `featurizer_type` | mfcc, filterbank, sincnet, gammatone, and the pretrained featurizers in `PRETRAINED_GENES` | 4 + 11 |
+| `arch` | ffn, gru, bigru, cnn, bcresnet, tcresnet, dscnn, matchboxnet, res15, conformer, crnn | 11 |
 | `loss` | bce, focal, label_smoothing_bce, supcon, arcface, ntxent | 6 |
 | `n_features` | 13, 40, 64, 80 | 4 |
 
@@ -384,7 +384,16 @@ results = run_genetic_search(
 )
 ```
 
-The evaluation function `_evaluate_config()` (`sweep.py:230`) maps each config to the correct `WakeWordTrainer` kwargs via `_FEAT_KWARGS` (`sweep.py:230-235`).
+`PRETRAINED_GENES` holds the float32 graph of every published pretrained featurizer whose licence allows commercial use (the `wakehubert-*` and `wakewav-*` repositories); `n_features` does not apply to them. A custom `search_space` can list any registry name, including the non-commercial `wakexeus-*` ones, and `featurizer_type` alone can name one pretrained featurizer for a search over heads and hyperparameters.
+
+Candidates on the same frozen featurizer share one `FeatureStore`, so each clip is featurized once for the whole search rather than once per candidate and epoch. Demes run in separate processes; pass `feature_cache_dir` to share the features between them through disk:
+
+```python
+run_genetic_search("dataset.csv", featurizer_type="wakehubert-mel-tcn-wide",
+                   n_demes=4, feature_cache_dir=".feature_cache")
+```
+
+The evaluation function `_evaluate_config()` (`sweep.py:250`) maps each config to the correct `WakeWordTrainer` kwargs via `_FEAT_KWARGS` (`sweep.py:250-255`).
 
 ---
 

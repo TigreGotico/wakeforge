@@ -37,6 +37,12 @@ class QuickstartConfig:
             dataset. ``None`` takes every clip.
         llm_url: Optional Ollama URL for LLM-based adversarial generation.
         tier: Hardware tier name (see ``ww_trainer-tiers``).
+        featurizer: Pretrained featurizer name (e.g. ``"wakehubert-mel-tcn-wide"``,
+            see :data:`~ww_trainer.pretrained.PRETRAINED_FEATURIZERS`) that
+            replaces the tier's extractor; the tier's head is kept.
+        featurizer_revision: Hub revision of the pretrained featurizer.
+        feature_cache_variants: Augmented feature variants kept per clip with
+            a frozen featurizer (``0`` augments on the fly).
         epochs: Training epochs.
         batch_size: Batch size.
         lr: Learning rate.
@@ -69,6 +75,9 @@ class QuickstartConfig:
     llm_url: Optional[str] = None
     # training knobs
     tier: str = "small"
+    featurizer: Optional[str] = None
+    featurizer_revision: Optional[str] = None
+    feature_cache_variants: int = 0
     epochs: int = 50
     batch_size: int = 16
     lr: float = 5e-4
@@ -202,9 +211,12 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
     tc = get_tier(cfg.tier)
 
     # ---- model kwargs from tier ----
+    featurizer_type = cfg.featurizer or tc.extractor_type
     model_kwargs: Dict[str, Any] = {"hidden_dim": tc.hidden_dim}
-    if tc.extractor_type == "mfcc":
+    if featurizer_type == "mfcc":
         model_kwargs["n_mfcc"] = tc.n_mfcc
+    if cfg.featurizer_revision:
+        model_kwargs["featurizer_revision"] = cfg.featurizer_revision
     if tc.head_arch == "gru":
         model_kwargs["bidirectional"] = tc.bidirectional
         model_kwargs["gru_n_layers"] = tc.gru_n_layers
@@ -234,7 +246,7 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
         arch=tc.head_arch,
         featurizer="",
         feature_dim=None,
-        featurizer_type=tc.extractor_type,
+        featurizer_type=featurizer_type,
         wake_word=cfg.wake_word,
         device=cfg.device,
         losses_cfg=losses,
@@ -254,6 +266,7 @@ def _train_from_datagen_result(cfg: QuickstartConfig, datagen_result: Any) -> Qu
         epochs=cfg.epochs,
         batch_size=cfg.batch_size,
         lr=cfg.lr,
+        feature_cache_variants=cfg.feature_cache_variants,
     )
 
     best_pt = model_dir / "best_f1.pt"
@@ -317,7 +330,16 @@ def cli_main() -> None:
     @click.command("ww_trainer-quickstart")
     @click.option("--wake-word", required=True, help="Wake-word phrase, e.g. 'hey jarvis'.")
     @click.option("--output-dir", required=True, type=click.Path(), help="Root output directory.")
-    @click.option("--tier", default="small", show_default=True, help="Hardware tier name.")
+    @click.option("--tier", default="small", show_default=True,
+                  help="Hardware tier name (e.g. small, wakehubert, wakehubert-bigru).")
+    @click.option("--featurizer", default=None,
+                  help="Pretrained featurizer name replacing the tier's extractor, e.g. "
+                       "'wakehubert-mel-tcn-wide' (see docs/reference/extractors.md).")
+    @click.option("--featurizer-revision", default=None,
+                  help="Hub revision (branch, tag or commit) of the pretrained featurizer.")
+    @click.option("--feature-cache-variants", default=0, show_default=True, type=int,
+                  help="Augmented feature variants kept per clip with a frozen featurizer "
+                       "(0 augments on the fly).")
     @click.option("--epochs", default=50, show_default=True, type=int, help="Training epochs.")
     @click.option("--batch-size", default=16, show_default=True, type=int, help="Batch size.")
     @click.option("--lr", default=5e-4, show_default=True, type=float, help="Learning rate.")
@@ -344,6 +366,9 @@ def cli_main() -> None:
         wake_word: str,
         output_dir: str,
         tier: str,
+        featurizer: Optional[str],
+        featurizer_revision: Optional[str],
+        feature_cache_variants: int,
         epochs: int,
         batch_size: int,
         lr: float,
@@ -362,6 +387,9 @@ def cli_main() -> None:
             wake_word=wake_word,
             output_dir=output_dir,
             tier=tier,
+            featurizer=featurizer,
+            featurizer_revision=featurizer_revision,
+            feature_cache_variants=feature_cache_variants,
             epochs=epochs,
             batch_size=batch_size,
             lr=lr,

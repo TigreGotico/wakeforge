@@ -97,6 +97,7 @@ def calibrate_model(
     output_dir: str,
     device: str = "cpu",
     batch_size: int = 32,
+    feature_store=None,
 ) -> dict:
     """End-to-end calibration: collect logits from val set, fit, save.
 
@@ -106,26 +107,31 @@ def calibrate_model(
         output_dir: Directory to save ``calibration.json``.
         device: Torch device.
         batch_size: Batch size for logit collection.
+        feature_store: Optional :class:`~ww_trainer.feature_store.FeatureStore`
+            of the model's frozen featurizer; stored features are reused.
 
     Returns:
         Calibration parameters dict.
     """
     import torch
-    from ww_trainer.dataset import AudioDataset
+    from ww_trainer.dataset import AudioDataset, collate_fn
+    from ww_trainer.model import batch_forward
     from torch.utils.data import DataLoader
 
-    dataset = AudioDataset(val_data, aug_prob=0.0)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=_collate)
+    dataset = AudioDataset(val_data, aug_prob=0.0, feature_store=feature_store)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
+                        collate_fn=lambda b: collate_fn(b, device))
 
     all_logits = []
     all_labels = []
 
     model.eval()
     with torch.no_grad():
-        for wavs, labels, *_ in loader:
-            logits = model(wavs)
+        for batch in loader:
+            _, labels, _, _ = batch
+            logits = batch_forward(model, batch)
             all_logits.extend(logits.cpu().numpy().ravel())
-            all_labels.extend(labels.numpy().ravel())
+            all_labels.extend(labels.cpu().numpy().ravel())
 
     params = fit_platt_scaling(np.array(all_logits), np.array(all_labels))
 
@@ -135,11 +141,3 @@ def calibrate_model(
 
     return params
 
-
-def _collate(batch: list) -> tuple:
-    """Collate function for calibration DataLoader."""
-    import torch
-    wavs = [item[0] for item in batch]
-    labels = torch.tensor([item[1] for item in batch], dtype=torch.float32)
-    paths = [item[2] for item in batch]
-    return wavs, labels, paths

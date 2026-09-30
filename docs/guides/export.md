@@ -13,7 +13,17 @@ Embedded keys include:
 - `arch`: Head architecture (GRU, CNN, etc.)
 - `epoch`: Training epoch
 - `featurizer`: Featurizer class name
+- `pretrained_featurizer`, `featurizer_revision`: the registry name of a pretrained featurizer and the commit it was downloaded at (heads trained on one)
+- `feature_dim`, `hop_samples`, `frame_rate_hz`: the pretrained featurizer's geometry
+- `stream_window`, `hidden_dim`: the window and GRU size of a streaming head
 - `metric_f1`: Best F1 score achieved
+
+A head trained on a pretrained featurizer is exported without a featurizer ONNX
+beside it: `OnnxWakeWordInferencer(None, head)` and
+`OnnxStreamingWakeWord.from_head(head)` read `pretrained_featurizer` and
+`featurizer_revision` and download that revision. Checkpoints of a streamable
+model (a unidirectional single-layer GRU head on a streaming featurizer) also
+get `<stem>_streaming.onnx`.
 
 To inspect metadata:
 ```python
@@ -25,8 +35,8 @@ for prop in model.metadata_props:
 
 Implementation details:
 - `embed_onnx_metadata` utility in `ww_trainer/utils.py`.
-- Integrated into `ClassifierHead.export_to_onnx` (`model.py:52`).
-- Integrated into `BaseExtractor.export_to_onnx` (`feats.py:107`).
+- Integrated into `ClassifierHead.export_to_onnx` (`model.py:104`).
+- Integrated into `BaseExtractor.export_to_onnx` (`feats.py:114`).
 
 ---
 
@@ -58,13 +68,13 @@ The design separates the extractor from the classifier head (`architecture.md`) 
 - Loaded independently at inference time.
 - Replaced or updated without re-exporting the other.
 
-After export, `OnnxWakeWordInferencer` (`inference.py:111`) runs inference with only `numpy` and `onnxruntime` — no PyTorch import anywhere.
+After export, `OnnxWakeWordInferencer` (`inference.py:137`) runs inference with only `numpy` and `onnxruntime` — no PyTorch import anywhere.
 
 ---
 
 ## 2. Exporting `MfccExtractor`
 
-`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:406`) specifically to remain ONNX-exportable.
+`MfccExtractor` is a pure-PyTorch module. Its `forward` method uses `return_complex=False` in `torch.stft` (`feats.py:420`) specifically to remain ONNX-exportable.
 
 ```python
 from ww_trainer.feats import MfccExtractor
@@ -73,7 +83,7 @@ extractor = MfccExtractor(sr=16000, n_mfcc=40, n_mels=40, n_fft=400, hop_length=
 extractor.export_to_onnx("mfcc.onnx")
 ```
 
-`BaseExtractor.export_to_onnx` (`feats.py:107`) uses `torch.onnx.export` with:
+`BaseExtractor.export_to_onnx` (`feats.py:114`) uses `torch.onnx.export` with:
 - Opset 18.
 - Dynamic axes: batch size (`batch_size`) and time (`time`) on both input and output.
 - `do_constant_folding=True`.
@@ -100,7 +110,7 @@ Large SSL models (HuBERT, Wav2Vec2, Wav2Vec2-BERT) are exported to ONNX once via
 .venv/bin/python scripts/export_w2vbert.py --out w2vbert.onnx
 ```
 
-After export, load with `OnnxFeatureExtractor` — `ww_trainer/feats.py:162`:
+After export, load with `OnnxFeatureExtractor` — `ww_trainer/feats.py:169`:
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
@@ -115,7 +125,7 @@ Then pass `featurizer_type="onnx"` to `WakeWordTrainer`.
 
 ## 4. Exporting a Classifier Head
 
-`ClassifierHead.export_to_onnx` (`model.py:52`) exports the head only.
+`ClassifierHead.export_to_onnx` (`model.py:104`) exports the head only.
 
 ```python
 from ww_trainer.model import GruClassifierHead
@@ -134,7 +144,7 @@ Expected ONNX shapes:
 
 ## 5. Exporting a Full Model
 
-`BaseWakeModel.export_to_onnx` (`model.py:231`) is a convenience method that exports the head, and optionally the extractor.
+`BaseWakeModel.export_to_onnx` (`model.py:323`) is a convenience method that exports the head, and optionally the extractor.
 
 ```python
 from ww_trainer.feats import MfccExtractor
@@ -163,7 +173,7 @@ When `--export-onnx` is passed to the CLI, `WakeWordTrainer.save_intermediate_ck
 
 Both export methods accept `quantize=True`.
 
-**`BaseExtractor.export_to_onnx(out, quantize=True)` — `feats.py:107`–`113`:**
+**`BaseExtractor.export_to_onnx(out, quantize=True)` — `feats.py:114`–`120`:**
 
 Writes two additional files:
 - `<stem>_int16.onnx` — `QInt16` via `onnxruntime.quantization.quantize_dynamic`.
@@ -171,7 +181,7 @@ Writes two additional files:
 
 Both quantize `MatMul` and `Gemm` operations.
 
-**`ClassifierHead.export_to_onnx(out, quantize=True)` — `model.py:52`–`57`:**
+**`ClassifierHead.export_to_onnx(out, quantize=True)` — `model.py:104`–`109`:**
 
 Writes one additional file:
 - `<stem>_int8.onnx` — `QInt8`.
@@ -260,7 +270,7 @@ Any model with `*** HIGH ***` on a row has MaxAE ≥ 1e-3 and is flagged before 
 
 ## 8. Loading in `OnnxFeatureExtractor`
 
-After exporting, load the ONNX extractor back into training with `OnnxFeatureExtractor` (`feats.py:162`):
+After exporting, load the ONNX extractor back into training with `OnnxFeatureExtractor` (`feats.py:169`):
 
 ```python
 from ww_trainer.feats import OnnxFeatureExtractor
