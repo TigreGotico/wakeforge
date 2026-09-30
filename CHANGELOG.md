@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5a1](https://github.com/TigreGotico/wakeforge/tree/0.4.5a1) (2026-09-30)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.4a1...0.4.5a1)
+
+**Merged pull requests:**
+
+- fix\(loss\): losses match their definitions, and their learned parameters train [\#65](https://github.com/TigreGotico/wakeforge/pull/65) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.4.4a1](https://github.com/TigreGotico/wakeforge/tree/0.4.4a1) (2026-09-30)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.3a5...0.4.4a1)
