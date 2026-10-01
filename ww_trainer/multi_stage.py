@@ -113,6 +113,12 @@ def run_multi_stage_training(
     Each stage resumes from the previous stage's best F1 checkpoint.
     After all stages, averages the top-K checkpoints by F1.
 
+    With ``calib_speech`` in *shared_kwargs*, each stage resumes from the
+    previous stage's ``best_calib.pt`` instead, and the final model is the
+    ``best_calib.pt`` with the best ``(calib_recall, -val_loss)`` across all
+    stages, unaveraged: it is loaded into ``trainer.model`` and saved (with
+    its ONNX export) as ``final_model.pt`` in *output_dir*.
+
     Args:
         trainer: A ``WakeWordTrainer`` instance.
         stages: List of stage configs. Each dict may contain:
@@ -130,6 +136,8 @@ def run_multi_stage_training(
     best_f1 = 0.0
     best_ckpt: Optional[Path] = None
     all_best_ckpts: List[Path] = []
+    calibrated = bool(shared_kwargs.get("calib_speech"))
+    best_calib: Optional[Tuple[Tuple[float, float], Path, int, dict]] = None
 
     for i, stage in enumerate(stages):
         stage_dir = output_dir / f"stage_{i}"
@@ -157,16 +165,33 @@ def run_multi_stage_training(
             **kwargs,
         )
 
+        if f1 > best_f1:
+            best_f1 = f1
+
+        if calibrated:
+            stage_calib = stage_dir / "best_calib.pt"
+            if stage_calib.exists():
+                state = torch.load(stage_calib.with_suffix(".ts"), map_location="cpu")
+                metrics = state["metrics"]
+                key = (metrics["calib_recall"], -metrics["calib_val_loss"])
+                if best_calib is None or key > best_calib[0]:
+                    best_calib = (key, stage_calib, state["epoch"], metrics)
+                best_ckpt = stage_calib
+            continue
+
         stage_best = stage_dir / "best_f1.pt"
         if stage_best.exists():
             all_best_ckpts.append(stage_best)
             best_ckpt = stage_best
 
-        if f1 > best_f1:
-            best_f1 = f1
-
+    if best_calib is not None:
+        _, path, epoch, metrics = best_calib
+        trainer.model.load_checkpoint(str(path))
+        trainer.save_intermediate_ckpt(output_dir / "final_model.pt", metrics=metrics, epoch=epoch)
+        logger.info("Final model is the best calibration checkpoint across stages: %s "
+                    "(calib_recall=%.4f)", path, metrics["calib_recall"])
     # Average top checkpoints
-    if len(all_best_ckpts) > 1:
+    elif len(all_best_ckpts) > 1:
         avg_state = average_checkpoints(all_best_ckpts)
         avg_path = output_dir / "averaged_model.pt"
         torch.save(avg_state, avg_path)

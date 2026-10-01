@@ -222,6 +222,7 @@ def log_metrics_csv(
     rec: float,
     f1: float,
     auc: float,
+    extra: Optional[dict] = None,
 ) -> None:
     """Append one row of per-epoch metrics to a CSV file.
 
@@ -236,10 +237,13 @@ def log_metrics_csv(
         rec: Recall.
         f1: F1 score.
         auc: ROC AUC.
+        extra: Further columns (name -> value) written after ``auc``, the
+            same names on every row of a file.
     """
+    extra = extra or {}
     new = not Path(path).exists()
     with open(path, "a", newline="") as f:
         writer = csv.writer(f)
         if new:
-            writer.writerow(["epoch", "loss", "accuracy", "precision", "recall", "f1", "auc"])
-        writer.writerow([epoch, loss, acc, prec, rec, f1, auc])
+            writer.writerow(["epoch", "loss", "accuracy", "precision", "recall", "f1", "auc", *extra])
+        writer.writerow([epoch, loss, acc, prec, rec, f1, auc, *extra.values()])

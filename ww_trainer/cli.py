@@ -206,6 +206,14 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="Save best_fitness.pt based on composite fitness score.")
 @click.option("--fitness-param-budget", default=100000, type=int,
               help="Parameter budget for fitness score size penalty (default: 100000).")
+# -------------------------- Calibration Checkpoint --------------------------
+@click.option("--calib-speech", default=None, type=click.Path(exists=True, file_okay=False),
+              help="Folder of held-out speech (LibriSpeech-style flac/wav, searched recursively). "
+                   "Each epoch scores validation wake clips mixed with babble and --bg-noise-folder "
+                   "noise against windows of this speech, keeps best_calib.pt on the best recall "
+                   "at zero false accepts, and makes it the final model.")
+@click.option("--calib-seconds", default=3600.0, type=float,
+              help="Seconds of calibration negatives, half speech and half babble (default: 3600).")
 # -------------------------- Performance --------------------------
 @click.option("--amp", "use_amp", is_flag=True, default=False,
               help="Enable mixed-precision training (requires CUDA).")
@@ -274,6 +282,8 @@ def train(**opts: dict) -> None:
     fitness_param_budget = opts.pop("fitness_param_budget", 100000)
     aug_prob = opts.pop("aug_prob", 0.8)
     aug_warmup_epochs = opts.pop("aug_warmup_epochs", 3)
+    calib_kwargs = {"calib_speech": opts.pop("calib_speech", None),
+                    "calib_seconds": opts.pop("calib_seconds", 3600.0)}
 
     if tier is not None:
         tc = get_tier(tier)
@@ -393,6 +403,7 @@ def train(**opts: dict) -> None:
             aug_prob=aug_prob,
             aug_warmup_epochs=aug_warmup_epochs,
             **feature_kwargs,
+            **calib_kwargs,
         )
     else:
         trainer.train(
@@ -440,6 +451,7 @@ def train(**opts: dict) -> None:
             aug_prob=aug_prob,
             aug_warmup_epochs=aug_warmup_epochs,
             **feature_kwargs,
+            **calib_kwargs,
         )
 
     # Post-training: C header export
@@ -470,6 +482,8 @@ def train(**opts: dict) -> None:
         "featurizer_type": featurizer_type,
         "feature_dim": trainer.model.feature_extractor.feature_dim,
     }
+    if calib_kwargs["calib_speech"]:
+        record.update(calib_kwargs)
     pretrained = featurizer_metadata(trainer.model.feature_extractor)
     if pretrained:
         record["pretrained_featurizer"] = pretrained["pretrained_featurizer"]
