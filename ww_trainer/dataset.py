@@ -71,6 +71,7 @@ from ww_trainer.augment import (
     _load_audio_mono,
     mix_background as _mix_background,
     apply_reverb as _apply_reverb,
+    DeviceResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,11 @@ class AudioDataset(Dataset):
         feature_variants: With a ``feature_store``, the number of augmented
             variants kept per clip: an augmented draw picks one of them and
             computes it only the first time. ``0`` augments on the fly.
+        device_aug: Probability that an augmented draw also goes through
+            :class:`~ww_trainer.augment.DeviceResponse`, applied last, with
+            ``bg_speech_folder`` as its speech after the word. ``0`` disables
+            it. The legacy reverb probability rises with it, from 0.3 at ``0``
+            to 0.6 at ``1``.
     """
 
     def __init__(self, samples,
@@ -152,6 +158,7 @@ class AudioDataset(Dataset):
                  feature_cache=None,
                  feature_store=None,
                  feature_variants: int = 0,
+                 device_aug: float = 0.0,
                  ):
         self.pipeline = pipeline
         self.feature_cache = feature_cache
@@ -161,6 +168,8 @@ class AudioDataset(Dataset):
         self.sample_rate = sample_rate
         self.aug_prob = aug_prob
         self.vc_prob = vc_prob
+        self.device_aug = device_aug
+        self.device_response = DeviceResponse(bg_speech_folder) if device_aug > 0 else None
 
         # Augmentation parameters
         self.snr_min = snr_min
@@ -284,7 +293,7 @@ class AudioDataset(Dataset):
             if self.bg_speech_files and random.random() < 0.5:
                 speech_np = _load_audio_mono(random.choice(self.bg_speech_files), self.sample_rate)
                 wav_np = _mix_background(wav_np, speech_np, random.uniform(10.0, 25.0))
-            if self.rir_files and random.random() < 0.3:
+            if self.rir_files and random.random() < 0.3 + 0.3 * self.device_aug:
                 rir_np = _load_audio_mono(random.choice(self.rir_files), self.sample_rate)
                 wav_np = _apply_reverb(wav_np, rir_np)
             if random.random() < 0.3:
@@ -306,6 +315,9 @@ class AudioDataset(Dataset):
             peak = np.max(np.abs(wav_np))
             if peak > 1e-9:
                 wav_np = wav_np / peak
+
+        if self.device_response is not None and random.random() < self.device_aug:
+            wav_np = self.device_response(wav_np, sr=self.sample_rate)
 
         wav_t = torch.from_numpy(wav_np).float()
         if input_device is not None:

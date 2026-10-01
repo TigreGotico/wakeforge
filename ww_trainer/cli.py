@@ -140,6 +140,11 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help='Folder with music clips.')
 @click.option('--bg-speech-folder', default=None,
               help='Folder with background speech clips.')
+@click.option('--device-aug', default=0.0, type=float,
+              help='Probability that an augmented training clip also gets the device response '
+                   '(microphone band and colour, level, compression, clipping, self-noise, and '
+                   'speech after the word from --bg-speech-folder), applied last. 0 disables it. '
+                   'The reverb probability rises with it, from 0.3 at 0 to 0.6 at 1.')
 @click.option('--rir-folder', default=None,
               help='Folder containing Room Impulse Responses (RIRs) for reverberation simulation.')
 @click.option('--vc-folder', default=None,
