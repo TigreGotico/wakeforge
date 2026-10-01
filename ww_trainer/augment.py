@@ -30,8 +30,9 @@ from __future__ import annotations
 import abc
 import logging
 import random
+from collections import OrderedDict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -60,8 +61,50 @@ def _collect_audio_files(base_folder: str) -> list[Path]:
     return sorted(files)
 
 
+#: Bytes of decoded augmentation audio kept in memory per process. A count would not bound memory: a
+#: 3-second noise clip is 192 KB and a two-minute speech file 7.7 MB.
+CLIP_CACHE_BYTES = 256 * 1024 ** 2
+
+_clips: "OrderedDict[Tuple[str, int], np.ndarray]" = OrderedDict()
+_clip_bytes = 0
+
+
+def _decode_clip(path: str, sr: int) -> np.ndarray:
+    import soundfile as sf
+
+    wav, orig_sr = sf.read(path)
+    if wav.ndim > 1:
+        wav = np.mean(wav, axis=1)
+    if orig_sr != sr:
+        import librosa
+        wav = librosa.resample(wav.astype(np.float32), orig_sr=orig_sr, target_sr=sr)
+    return wav.astype(np.float32)
+
+
+def _decoded_clip(path: str, sr: int) -> np.ndarray:
+    """One augmentation clip decoded, downmixed and resampled, from a cache bounded by bytes."""
+    global _clip_bytes
+    key = (path, sr)
+    wav = _clips.get(key)
+    if wav is not None:
+        _clips.move_to_end(key)
+        return wav
+    wav = _decode_clip(path, sr)
+    if wav.nbytes <= CLIP_CACHE_BYTES:
+        while _clips and _clip_bytes + wav.nbytes > CLIP_CACHE_BYTES:
+            _clip_bytes -= _clips.popitem(last=False)[1].nbytes
+        wav.setflags(write=False)
+        _clips[key] = wav
+        _clip_bytes += wav.nbytes
+    return wav
+
+
 def _load_audio_mono(path: str | Path, sr: int = 16000) -> np.ndarray:
     """Load audio file as mono float32 at target sample rate.
+
+    The same noise, speech and room-response clips are drawn thousands of times
+    in a training run, so decoded clips are kept in a cache of at most
+    :data:`CLIP_CACHE_BYTES`; every call gets its own copy.
 
     Args:
         path: Audio file path.
@@ -70,15 +113,7 @@ def _load_audio_mono(path: str | Path, sr: int = 16000) -> np.ndarray:
     Returns:
         1-D float32 numpy array.
     """
-    import soundfile as sf
-
-    wav, orig_sr = sf.read(str(path))
-    if wav.ndim > 1:
-        wav = np.mean(wav, axis=1)
-    if orig_sr != sr:
-        import librosa
-        wav = librosa.resample(wav.astype(np.float32), orig_sr=orig_sr, target_sr=sr)
-    return wav.astype(np.float32)
+    return _decoded_clip(str(path), sr).copy()
 
 
 class AudioTransform(abc.ABC):
@@ -533,7 +568,8 @@ def apply_reverb(wav: np.ndarray, rir: np.ndarray,
     Returns:
         Reverberated audio with matched RMS.
     """
-    out = np.convolve(wav, rir)[:len(wav)]
+    n = len(wav) + len(rir) - 1
+    out = np.fft.irfft(np.fft.rfft(wav, n) * np.fft.rfft(rir, n), n)[:len(wav)]
     rms_wav = np.sqrt(np.mean(wav ** 2) + 1e-9)
     rms_out = np.sqrt(np.mean(out ** 2) + 1e-9)
     out = out * (rms_wav / rms_out) * attenuation
