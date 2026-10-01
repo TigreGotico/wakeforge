@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1a1](https://github.com/TigreGotico/wakeforge/tree/0.7.1a1) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.0a1...0.7.1a1)
+
+**Merged pull requests:**
+
+- fix\(datagen\): split each label, so the test set is never one class [\#74](https://github.com/TigreGotico/wakeforge/pull/74) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.7.0a1](https://github.com/TigreGotico/wakeforge/tree/0.7.0a1) (2026-09-30)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.5.0a1...0.7.0a1)
