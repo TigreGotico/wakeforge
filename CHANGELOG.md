@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0a1](https://github.com/TigreGotico/wakeforge/tree/0.11.0a1) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.10.0a1...0.11.0a1)
+
+**Merged pull requests:**
+
+- feat: multi-speaker synthetic data and sound-alike negatives for the launch wake words [\#75](https://github.com/TigreGotico/wakeforge/pull/75) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.10.0a1](https://github.com/TigreGotico/wakeforge/tree/0.10.0a1) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.9.0a1...0.10.0a1)
