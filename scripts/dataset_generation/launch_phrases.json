@@ -1,0 +1,327 @@
+{
+ "hey_mycroft": {
+  "positive": [
+   "hey my-croft",
+   "Hey My-croft.",
+   "hey Mai croft",
+   "Hey, my-croft.",
+   "hey my croft!",
+   "Hey Mai-croft?"
+  ],
+  "negative": [
+   "hey microsoft",
+   "hey my craft",
+   "hey minecraft",
+   "hey my crops",
+   "hey my car",
+   "hey mike",
+   "hey my cross",
+   "high mycroft",
+   "hay my soft",
+   "hey my crow",
+   "hey microphone",
+   "a micro loft",
+   "they make loft",
+   "hey my kraft",
+   "hey Myra",
+   "hey my crafts",
+   "hey you",
+   "hey my cousin",
+   "hey micro",
+   "hey lyft",
+   "okay Mike",
+   "the aircraft"
+  ]
+ },
+ "computer": {
+  "positive": [
+   "computer",
+   "Computer.",
+   "computer!",
+   "Computer,",
+   "computer?"
+  ],
+  "negative": [
+   "commuter",
+   "compute",
+   "competitor",
+   "come pewter",
+   "complete her",
+   "commuter train",
+   "compost her",
+   "compete",
+   "commuter rail",
+   "can pewter",
+   "come to her",
+   "composer",
+   "commander",
+   "comfort her",
+   "computing",
+   "copy her",
+   "comet",
+   "cucumber"
+  ]
+ },
+ "hey_computer": {
+  "positive": [
+   "hey computer",
+   "Hey Computer.",
+   "hey computer!",
+   "Hey, computer.",
+   "hey computer?"
+  ],
+  "negative": [
+   "hey commuter",
+   "hey compute",
+   "hey competitor",
+   "hey composer",
+   "hey commander",
+   "hey cucumber",
+   "they computed",
+   "a computer",
+   "hey come to her",
+   "hey complete her",
+   "hey copy her",
+   "hey comfort her",
+   "hay commuter",
+   "hey compost",
+   "the computer",
+   "hey comet",
+   "hey Cooper",
+   "hey company"
+  ]
+ },
+ "jarvis": {
+  "positive": [
+   "jarvis",
+   "Jarvis.",
+   "Jarvis!",
+   "Jarvis,",
+   "jarvis?"
+  ],
+  "negative": [
+   "jar of this",
+   "jarless",
+   "service",
+   "Travis",
+   "Harvest",
+   "carvers",
+   "jarvey",
+   "Jervis",
+   "Davis",
+   "Marvis",
+   "jar visit",
+   "Garvey",
+   "nervous",
+   "Jarvi",
+   "jar vest",
+   "Chavez",
+   "car service",
+   "Javits",
+   "far this"
+  ]
+ },
+ "hey_jarvis": {
+  "positive": [
+   "hey jarvis",
+   "Hey Jarvis.",
+   "hey jarvis!",
+   "Hey, Jarvis.",
+   "hey jarvis?"
+  ],
+  "negative": [
+   "hey Travis",
+   "hey Davis",
+   "hey jar of this",
+   "hey service",
+   "hey Harvest",
+   "hey Jervis",
+   "hey Garvey",
+   "hey nervous",
+   "hey Marvis",
+   "hey Chavez",
+   "a Jarvis",
+   "they jar this",
+   "hey jar",
+   "hey Javits",
+   "hey car service",
+   "hey carvers",
+   "hey Mavis"
+  ]
+ },
+ "ok_nabu": {
+  "positive": [
+   "okay nabu",
+   "Okay Nabu.",
+   "ok nabu",
+   "Okay, Nabu.",
+   "okay nabu!",
+   "OK Nabu."
+  ],
+  "negative": [
+   "okay nabo",
+   "okay bamboo",
+   "okay Nabil",
+   "okay new",
+   "okay Naboo",
+   "okay nob",
+   "okay Nadu",
+   "okay Lebu",
+   "okay Abu",
+   "okay nah boo",
+   "okay now boo",
+   "okay navy",
+   "okay maybe",
+   "okay baby",
+   "okay Napoo",
+   "okay Nubu",
+   "okay Nobu",
+   "okay no blue",
+   "okay Kabul"
+  ]
+ },
+ "hello_nabu": {
+  "positive": [
+   "hello nabu",
+   "Hello Nabu.",
+   "hello nabu!",
+   "Hello, Nabu.",
+   "hello nabu?"
+  ],
+  "negative": [
+   "hello Naboo",
+   "hello bamboo",
+   "hello Nabil",
+   "hello new",
+   "hello nob",
+   "hello Nadu",
+   "hello Abu",
+   "hello now boo",
+   "hello navy",
+   "hello baby",
+   "hello Nobu",
+   "hello Kabul",
+   "yellow Nabu",
+   "hollow Nabu",
+   "hello neighbor",
+   "hello nah boo",
+   "fellow Nabu"
+  ]
+ },
+ "home_assistant": {
+  "positive": [
+   "home assistant",
+   "Home Assistant.",
+   "home assistant!",
+   "Home Assistant,",
+   "home assistant?"
+  ],
+  "negative": [
+   "home assistance",
+   "phone assistant",
+   "home resistant",
+   "home is distant",
+   "home insistent",
+   "home assist",
+   "whole assistant",
+   "foam assistant",
+   "home consistent",
+   "home a system",
+   "home is this tent",
+   "hold assistant",
+   "comb assistant",
+   "home insist",
+   "Rome assistant",
+   "home sister"
+  ]
+ },
+ "voice_assistant": {
+  "positive": [
+   "voice assistant",
+   "Voice Assistant.",
+   "voice assistant!",
+   "Voice Assistant,",
+   "voice assistant?"
+  ],
+  "negative": [
+   "voice assistance",
+   "choice assistant",
+   "voice resistant",
+   "noise assistant",
+   "voice is distant",
+   "voice insistent",
+   "boys assistant",
+   "voice assist",
+   "voice consistent",
+   "voice a system",
+   "joyce assistant",
+   "voice sister",
+   "the choice is distant",
+   "rejoice assistant",
+   "voice insist",
+   "noise is distant",
+   "Royce assistant",
+   "voice this tent"
+  ]
+ },
+ "alexa": {
+  "positive": [
+   "alexa",
+   "Alexa.",
+   "Alexa!",
+   "Alexa,",
+   "alexa?"
+  ],
+  "negative": [
+   "Alexis",
+   "a Lexus",
+   "elector",
+   "Electra",
+   "Alex",
+   "Alessa",
+   "Alicia",
+   "Alissa",
+   "alert her",
+   "a letter",
+   "Alaska",
+   "Aleksa",
+   "Rebecca",
+   "election",
+   "Elisa",
+   "Alexei",
+   "Felicia",
+   "a lecture",
+   "a lax"
+  ]
+ },
+ "wake_up": {
+  "positive": [
+   "wake up",
+   "Wake up.",
+   "wake up!",
+   "Wake up,",
+   "wake up?"
+  ],
+  "negative": [
+   "make up",
+   "break up",
+   "take up",
+   "wake",
+   "waking up",
+   "wait up",
+   "shake up",
+   "bake up",
+   "wake us",
+   "weight up",
+   "rake up",
+   "wade up",
+   "lake up",
+   "way cup",
+   "wipe up",
+   "wrap up",
+   "work up",
+   "wake her",
+   "web up"
+  ]
+ }
+}
