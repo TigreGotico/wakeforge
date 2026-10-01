@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1a3](https://github.com/TigreGotico/wakeforge/tree/0.7.1a3) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.1a2...0.7.1a3)
+
+**Merged pull requests:**
+
+- chore\(ci\): add the Renovate rebase config, keep a smoke-job diagnostic step [\#53](https://github.com/TigreGotico/wakeforge/pull/53) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.7.1a2](https://github.com/TigreGotico/wakeforge/tree/0.7.1a2) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.1a1...0.7.1a2)
