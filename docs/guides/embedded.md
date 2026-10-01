@@ -112,7 +112,7 @@ Use `get_tier("micro")` (`tiers.py:220`) or `--tier micro` on CLI.
 
 **Training strategy:**
 1. Train large model: HuBERT + Conformer
-2. Distill to `CnnLstmExtractor` via `KnowledgeDistillationTrainer` -- `ww_trainer/distill.py:143`
+2. Distill to `CnnLstmExtractor` via `KnowledgeDistillationTrainer` -- `ww_trainer/distill.py:183`
 3. Export student to ONNX, quantize
 4. Deploy student ONNX on target hardware
 
@@ -120,11 +120,11 @@ Use `get_tier("micro")` (`tiers.py:220`) or `--tier micro` on CLI.
 
 ## Knowledge Distillation Pipeline
 
-`CnnLstmExtractor` -- `distill.py:32`: 4-layer strided Conv1D (total stride 160) + 2-layer bidirectional LSTM + linear projection. 500K-2M params depending on config.
+`CnnLstmExtractor` -- `distill.py:72`: 4-layer strided Conv1D (total stride 160) + 2-layer bidirectional LSTM + linear projection. 500K-2M params depending on config.
 
-`KnowledgeDistillationTrainer` -- `distill.py:143`: Trains student to mimic teacher features (MSE loss) while also classifying wake words (BCE loss). Weight controlled by `alpha` (default 0.7 for distillation, 0.3 for task).
+`KnowledgeDistillationTrainer` -- `distill.py:183`: Trains student to mimic teacher features (MSE loss) while also classifying wake words (BCE loss). Weight controlled by `alpha` (default 0.7 for distillation, 0.3 for task).
 
-Convenience function: `distill_hubert_to_cnn_lstm()` -- `distill.py:463`.
+Convenience function: `distill_hubert_to_cnn_lstm()` -- `distill.py:524`.
 
 **Distillation workflow:**
 1. Export teacher (HuBERT) to ONNX

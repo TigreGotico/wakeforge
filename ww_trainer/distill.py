@@ -29,6 +29,46 @@ def _num_groups(conv_channels: int) -> int:
     return 1  # fallback: 1 group = LayerNorm-like
 
 
+def temporal_relation_loss(
+    student_feats: torch.Tensor,
+    teacher_feats: torch.Tensor,
+    steps: int = 24,
+    bidirectional: bool = False,
+) -> torch.Tensor:
+    """Causal temporal relation distillation (Zhang et al., Interspeech 2026).
+
+    Both sequences are average-pooled to ``steps`` frames and L2-normalised
+    per frame. Their frame-by-frame cosine matrices ``G = H H^T`` are then
+    matched instead of the features themselves, so the student needs no
+    projection to the teacher's dimension or scale. A lower-triangular mask
+    keeps only the entries between a frame and its past, which a causal
+    student can realise. ``bidirectional`` adds the full-matrix term
+    (the paper's "Ours-Bi" variant) on top of the masked one.
+
+    Paper: https://www.isca-archive.org/interspeech_2026/zhang26ia_interspeech.html
+
+    Args:
+        student_feats: ``[B, T_s, D_s]``.
+        teacher_feats: ``[B, T_t, D_t]``.
+        steps: Common temporal length ``L`` (paper: 24 for a 1 s window).
+        bidirectional: Add ``||G_s - G_t||_F^2 / L^2``.
+
+    Returns:
+        Scalar loss, averaged over the batch.
+    """
+    def relation(feats: torch.Tensor) -> torch.Tensor:
+        pooled = F.adaptive_avg_pool1d(feats.transpose(1, 2), steps).transpose(1, 2)
+        pooled = F.normalize(pooled, p=2, dim=-1, eps=1e-8)
+        return pooled @ pooled.transpose(1, 2)
+
+    diff_sq = (relation(student_feats) - relation(teacher_feats.detach())).pow(2)
+    mask = torch.tril(torch.ones(steps, steps, dtype=diff_sq.dtype, device=diff_sq.device))
+    loss = (diff_sq * mask).sum(dim=(1, 2)) / mask.sum()
+    if bidirectional:
+        loss = loss + diff_sq.sum(dim=(1, 2)) / steps ** 2
+    return loss.mean()
+
+
 class CnnLstmExtractor(BaseExtractor):
     """Compact CNN+LSTM feature extractor for knowledge distillation.
 
@@ -144,8 +184,11 @@ class KnowledgeDistillationTrainer:
     """Train a compact student extractor to mimic a large teacher extractor.
 
     Uses a combination of:
-    - Feature distillation loss: MSE between student and teacher feature sequences
-      (after optional linear projection if dims differ).
+    - Feature distillation loss, selected by ``feature_loss``:
+      ``"mse"`` regresses the teacher's feature sequence (after a linear
+      projection if dims differ); ``"relation"`` and ``"relation_bi"`` match
+      the teacher's frame-to-frame similarity structure with
+      :func:`temporal_relation_loss` and need no projection.
     - Task loss: BCE on wake word classification using student features.
 
     The teacher is kept frozen. The student learns both to reproduce teacher
@@ -162,7 +205,10 @@ class KnowledgeDistillationTrainer:
         alpha: Weight for distillation loss (default 0.7).
                Task loss weight = 1 - alpha.
         temperature: Softening temperature for distillation (default 1.0).
+            Applies to ``"mse"`` only.
         device: Training device ('cpu', 'cuda', or 'auto').
+        feature_loss: ``"mse"`` (default), ``"relation"`` or ``"relation_bi"``.
+        relation_steps: Common temporal length for the relation losses.
 
     Usage::
 
@@ -185,7 +231,11 @@ class KnowledgeDistillationTrainer:
         alpha: float = 0.7,
         temperature: float = 1.0,
         device: str = "auto",
+        feature_loss: str = "mse",
+        relation_steps: int = 24,
     ) -> None:
+        if feature_loss not in ("mse", "relation", "relation_bi"):
+            raise ValueError(f"Unknown feature_loss: {feature_loss}")
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
@@ -195,12 +245,14 @@ class KnowledgeDistillationTrainer:
         self.classifier = classifier_head.to(self.device)
         self.alpha = alpha
         self.temperature = temperature
+        self.feature_loss = feature_loss
+        self.relation_steps = relation_steps
 
-        # If teacher and student have different feature dims, add a projection
-        # so we can compute MSE loss in the same space.
+        # MSE compares features directly, so it needs a projection when the
+        # dims differ; the relation losses compare similarity matrices.
         t_dim = teacher.feature_dim
         s_dim = student.feature_dim
-        if t_dim != s_dim:
+        if feature_loss == "mse" and t_dim != s_dim:
             self.student_proj: nn.Linear | None = nn.Linear(s_dim, t_dim).to(self.device)
         else:
             self.student_proj = None
@@ -210,17 +262,26 @@ class KnowledgeDistillationTrainer:
         student_feats: torch.Tensor,
         teacher_feats: torch.Tensor,
     ) -> torch.Tensor:
-        """MSE between student and teacher feature sequences.
+        """Feature distillation loss between student and teacher sequences.
 
-        Handles length mismatch by truncating or interpolating to the shorter sequence.
+        For ``"mse"``, handles length mismatch by truncating or interpolating
+        to the shorter sequence.
 
         Args:
             student_feats: [B, T_s, D_s]
             teacher_feats: [B, T_t, D_t]
 
         Returns:
-            Scalar MSE loss.
+            Scalar loss.
         """
+        if self.feature_loss != "mse":
+            return temporal_relation_loss(
+                student_feats,
+                teacher_feats,
+                steps=self.relation_steps,
+                bidirectional=self.feature_loss == "relation_bi",
+            )
+
         if self.student_proj is not None:
             student_feats = self.student_proj(student_feats)
 
@@ -474,6 +535,7 @@ def distill_hubert_to_cnn_lstm(
     batch_size: int = 32,
     lr: float = 1e-3,
     device: str = "auto",
+    feature_loss: str = "mse",
 ) -> KnowledgeDistillationTrainer:
     """Convenience function: distill a HuBERT ONNX teacher into a CnnLstmExtractor student.
 
@@ -491,6 +553,8 @@ def distill_hubert_to_cnn_lstm(
         batch_size: Batch size.
         lr: Learning rate.
         device: Training device.
+        feature_loss: ``"mse"``, ``"relation"`` or ``"relation_bi"``; see
+            :class:`KnowledgeDistillationTrainer`.
 
     Returns:
         Trained KnowledgeDistillationTrainer (student is exported to output_dir/).
@@ -524,6 +588,7 @@ def distill_hubert_to_cnn_lstm(
         classifier_head=head,
         alpha=alpha,
         device=device,
+        feature_loss=feature_loss,
     )
     trainer.train(
         train_data=train_data,
