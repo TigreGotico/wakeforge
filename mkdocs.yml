@@ -1,0 +1,94 @@
+site_name: wakeforge
+site_url: https://tigregotico.github.io/wakeforge/
+repo_name: TigreGotico/wakeforge
+repo_url: https://github.com/TigreGotico/wakeforge
+edit_uri: edit/dev/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.path
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: grey
+      accent: red
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: grey
+      accent: red
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - abbr
+  - attr_list
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: TigreGotico
+      repo: wakeforge
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - What "good" looks like: guides/expectations.md
+  - Learning path: learning_path.md
+  - Get started:
+      - Quickstart: getting_started/quickstart.md
+      - Resource requirements: getting_started/requirements.md
+      - Kaggle / Colab quickstart: quickstart-kaggle.md
+      - FAQ: faq.md
+  - Guides:
+      - Datasets: guides/datasets.md
+      - Training: guides/training.md
+      - Evaluation (latency & RTF): guides/evaluation.md
+      - Inference: guides/inference.md
+      - Export: guides/export.md
+      - Embedded / ESP32: guides/embedded.md
+      - Hyperparameter search: guides/search.md
+      - Distillation: guides/distillation.md
+      - Recipes: guides/recipes.md
+      - Notebooks: guides/notebooks.md
+  - Reference:
+      - Feature extractors: reference/extractors.md
+      - Classifier heads: reference/classifiers.md
+      - Loss functions: reference/losses.md
+      - Enrichment wrappers: reference/enrichment.md
+      - PhonMatchNet: reference/phonmatch.md
+      - API reference: reference/api.md
+  - Research:
+      - Bibliography: research/references.md
+      - RPPL: research/rppl.md
+      - TinyHuBERT: research/tinyhubert.md
+  - Internals:
+      - Architecture: internals/architecture.md
+      - Known issues: internals/known_issues.md

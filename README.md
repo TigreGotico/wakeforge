@@ -1,0 +1,157 @@
+# wakeforge
+
+wakeforge is a research framework for **wake-word detection**. It implements
+architectures, losses, and featurizers from the published wake-word
+literature, so you can reproduce a paper's result or compare methods
+side by side. Some included architectures exist to reproduce a published
+result, not because they are the best default — the per-architecture pages
+under `docs/reference/` say which is which. Train, evaluate, and export
+lightweight on-device detectors that run anywhere from an ESP32 to a GPU
+server. Every component exports to ONNX; production inference requires only
+`onnxruntime` and `numpy` — no PyTorch at runtime.
+
+An easy training run is not the same thing as a good detector. Loss going
+down and a quickstart command exiting 0 prove the pipeline works, not that
+the result is safe to ship — see
+[`docs/guides/expectations.md`](docs/guides/expectations.md) for what a
+deployable wake word actually looks like in false-accept and false-reject
+numbers, and how much data each tier needs to get there.
+
+The first measured numbers show why. The first two models that wakeforge
+trained scored between 2397 and 5120 false accepts per hour on speech, noise
+and music at threshold 0.5, against a bar of 1. They accepted 70 % of the
+near-miss phrases, against a bar of 5 %. The training negatives were the cause.
+The rows, the commands and the cause are in
+[`docs/guides/expectations.md`](docs/guides/expectations.md#the-measured-baseline-two-rejected-models).
+
+## What is a wake word?
+
+A short phrase ("hey jarvis", "computer", "alexa") that a device listens for
+continuously. When detected, downstream STT/NLU runs. A useful detector must
+run on tiny hardware (sub-100 KB, <10 % CPU, no internet), tolerate noise and
+distance, almost never false-fire, and trigger reliably when spoken. wakeforge
+is the toolchain that builds such a detector from a single phrase —
+synthesise data, train, evaluate, export, deploy. What counts as "almost
+never" and "reliably" in numbers is in
+[`docs/guides/expectations.md`](docs/guides/expectations.md), not repeated
+here.
+
+## Who is this for?
+
+| You are… | Start here |
+|---|---|
+| **Hobbyist** waking a Pi with your own phrase | [`docs/getting_started/quickstart.md`](docs/getting_started/quickstart.md) — ONNX in 5 minutes |
+| **Embedded engineer** shipping to ESP32 / MCU | [`docs/guides/embedded.md`](docs/guides/embedded.md) |
+| **Voice-assistant integrator** (OVOS, Rhasspy, …) | [`docs/guides/inference.md`](docs/guides/inference.md) |
+| **ML researcher** comparing architectures / losses | [`docs/guides/search.md`](docs/guides/search.md), [`docs/reference/losses.md`](docs/reference/losses.md), [`docs/research/rppl.md`](docs/research/rppl.md) |
+| **New to ML** entirely | [`docs/quickstart-kaggle.md`](docs/quickstart-kaggle.md) — step-by-step guide; runs free on Kaggle / Colab |
+
+## Highlights
+
+- **Single-string-to-ONNX** quickstart — `train_from_wakeword("hey jarvis", out)` produces a deployable model.
+- **11 built-in featurizers (+ enrichment wrappers) × 15 classifier heads × 15 losses** — a real research surface.
+- **Pretrained WakeHuBERT featurizer** — a 0.64M-parameter streaming extractor distilled from HuBERT-base (128-d at 50 fps, float32 and int8), downloaded from [`TigreGotico/wakehubert-tiny`](https://huggingface.co/TigreGotico/wakehubert-tiny) with `--tier wakehubert` or `--featurizer-type wakehubert`. A GRU head trained on 900 synthetic "alexa" clips detected 95% (95% interval 92–97) of the real speakers in the Picovoice benchmark at a threshold set for 0.5 false activations per hour (0.31 measured on 6.5 h of held-out streams), and 94 / 85 / 56% in babble at 10 / 5 / 0 dB, in a single run. Other published extractors (other architectures, 256-d outputs, WavLM and XEUS teachers) can be selected by name for comparison. Every training path takes a featurizer name — every head (`--arch gru`, `bigru`, `cnn`, ...), the `wakehubert` and `wakehubert-bigru` tiers, the quickstart, grid and genetic search, multi-stage and infinite training — and computes its features once per clip. Exported heads name the featurizer and its revision, so inference needs only the head. See [Use a pretrained WakeHuBERT featurizer](docs/reference/extractors.md#use-a-pretrained-wakehubert-featurizer) and `notebooks/nb12_wakehubert.ipynb`.
+- **Genetic + Bayesian HP search** with island-model parallelism, adaptive mutation, two-stage refinement.
+- **Synthetic datagen** — TTS + pure-ONNX voice conversion ([voiceclonnx](https://github.com/TigreGotico/voiceclonnx)) to bootstrap a dataset from zero recordings.
+- **Hard-negative mining** and **infinite training** for industrial-scale negative pools.
+- **ONNX-first**: featurizer and head export cleanly; no CUDA-only kernels.
+- **Hardware tiers** from `esp32_nano` (sub-1 KB int8) to `hubert_medium`.
+
+### Honest trade-offs
+
+- CPU training works for small tiers; a mid-range GPU is the best UX for larger ones.
+- Synthetic data is great for smoke-testing — production still needs real far-field recordings.
+- ONNX-export is mandatory; non-traceable components (custom CUDA kernels, dynamic control flow) are out of scope. See [`docs/internals/known_issues.md`](docs/internals/known_issues.md).
+- SSL featurizers (HuBERT, Wav2Vec2-BERT) are used as pre-exported ONNX and held frozen during downstream training — guarantees train/inference parity but limits adaptation.
+
+## Install
+
+```bash
+# Published package (import name stays ww_trainer):
+pip install --pre "wakeforge[datagen,torchcodec]"
+```
+
+For development, clone the repo and install it editable instead:
+
+```bash
+# Core library + tests
+uv pip install -e ".[dev]"
+
+# Quickstart / datagen needs TTS plugins + HF datasets + an audio codec:
+uv pip install -e ".[dev,datagen,torchcodec]"
+```
+
+Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,
+`viz`, `markov`, `ocsvm`, `torchcodec`) — see
+[`docs/faq.md`](docs/faq.md#2-install).
+
+A default quickstart run needs **≈ 6–8 GB disk** and **~5 GB download**
+(or ~1.5 GB with `--no-augmentation-data`). Voice cloning via `--vc-refs`
+adds the per-engine ONNX weights downloaded on first use from the
+HuggingFace Hub (size varies by `voiceclonnx` engine). Full per-dataset
+budget: [`docs/getting_started/requirements.md`](docs/getting_started/requirements.md).
+## 60-second quickstart
+
+```bash
+ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis
+```
+
+Or in Python:
+
+```python
+from ww_trainer.quickstart import train_from_wakeword
+result = train_from_wakeword("hey jarvis", "./hey_jarvis",
+                             tier="small", epochs=50)
+print(result.best_onnx_path, result.metrics)
+```
+
+Output: `best_f1_featurizer.onnx` + `best_f1.onnx` under
+`./hey_jarvis/model/`. Load both with `OnnxWakeWordInferencer` —
+[`docs/guides/inference.md`](docs/guides/inference.md).
+
+## Documentation
+
+Everything lives in [`docs/`](docs/index.md). Start with:
+
+- [docs/learning_path.md](docs/learning_path.md) — **zero-to-hero curriculum** with literature anchors
+- [docs/faq.md](docs/faq.md) — topic-ordered Q&A in 15 sections
+- [docs/index.md](docs/index.md) — full documentation index
+- [examples/README.md](examples/README.md) — 43 runnable examples
+
+## Contributing
+
+Issues and pull requests welcome on the `dev` branch. Tests live in `test/`;
+run with `uv run pytest`.
+
+## Citation
+
+```bibtex
+@software{wakeforge,
+  title  = {wakeforge: a research framework for on-device wake-word detection},
+  author = {TigreGotico contributors},
+  year   = {2026},
+  url    = {https://github.com/TigreGotico/wakeforge},
+  note   = {Funded by NGI0 Commons Fund / NLnet, grant 101135429}
+}
+```
+
+---
+
+## Credits
+
+Developed by [TigreGótico](https://tigregotico.pt) for
+[OpenVoiceOS](https://openvoiceos.org).
+
+[![NGI0 Commons Fund](./ngi.png)](https://nlnet.nl/project/OpenVoiceOS)
+
+This project was funded through the [NGI0 Commons Fund](https://nlnet.nl/commonsfund),
+a fund established by [NLnet](https://nlnet.nl) with financial support from the
+European Commission's [Next Generation Internet](https://ngi.eu) programme, under
+the aegis of [DG Communications Networks, Content and Technology](https://commission.europa.eu/about-european-commission/departments-and-executive-agencies/communications-networks-content-and-technology_en)
+under grant agreement No [101135429](https://cordis.europa.eu/project/id/101135429).
+
+---
+
+## License
+
+Apache 2.0

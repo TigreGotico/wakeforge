@@ -1,0 +1,126 @@
+name: Notebook Smoke Test
+
+on:
+  push:
+    branches: [main, master, dev]
+    paths:
+      - "notebooks/**"
+      - "ww_trainer/**"
+      - ".github/workflows/notebook-smoke.yml"
+  pull_request:
+    branches: [main, master, dev]
+    paths:
+      - "notebooks/**"
+      - "ww_trainer/**"
+      - ".github/workflows/notebook-smoke.yml"
+
+jobs:
+  # Cheap coverage for ALL notebooks: validate each is well-formed and that
+  # every code cell compiles (catches syntax errors / obvious breakage without
+  # downloading the multi-GB datasets the heavier notebooks need to execute).
+  compile-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Compile every notebook's code cells
+        run: |
+          python - <<'PY'
+          import json, glob, sys
+
+          def py_lines(src):
+              """Drop IPython magics / shell escapes (incl. backslash-continued)."""
+              out, skip_cont = [], False
+              for line in src.splitlines():
+                  if skip_cont:
+                      skip_cont = line.rstrip().endswith("\\")
+                      continue
+                  if line.lstrip().startswith(("!", "%")):
+                      skip_cont = line.rstrip().endswith("\\")
+                      continue
+                  out.append(line)
+              return "\n".join(out)
+
+          failures, n_cells = [], 0
+          nbs = sorted(glob.glob("notebooks/**/*.ipynb", recursive=True))
+          for nb in nbs:
+              doc = json.load(open(nb))
+              for i, c in enumerate(doc.get("cells", [])):
+                  if c.get("cell_type") != "code":
+                      continue
+                  src = "".join(c.get("source", []))
+                  # Whole-cell magics (e.g. %%bash, %%capture) → not Python.
+                  if src.lstrip().startswith("%%"):
+                      continue
+                  n_cells += 1
+                  try:
+                      compile(py_lines(src), f"{nb}[cell {i}]", "exec")
+                  except SyntaxError as exc:
+                      failures.append(f"{nb}[cell {i}]: {exc}")
+          print(f"Checked {len(nbs)} notebooks, {n_cells} code cells")
+          if failures:
+              print("\n".join(failures)); sys.exit(1)
+          PY
+
+  smoke:
+    runs-on: ubuntu-latest
+    # The datagen cell downloads negatives from Hugging Face. A stalled
+    # download must fail the job, not hold the runner for the 6 h default.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install package + notebook deps
+        run: uv pip install --system -e ".[notebooks]"
+
+      - name: Execute genetic_search notebook (minimal settings)
+        env:
+          # A known wake word takes its positives from the Hugging Face
+          # dataset. An unknown one goes through edge-tts, and Microsoft's
+          # service refuses the runner: 0 positives, silently.
+          WAKE_WORD: "hey mycroft"
+          OUTPUT_DIR: "/tmp/ww_smoke"
+          N_POSITIVE: "20"
+          MAX_NEGATIVE: "20"
+          ADVERSARIAL: "false"
+          DOWNLOAD_AUGMENT: "false"
+          POPULATION: "3"
+          GENERATIONS: "2"
+          EPOCHS_PER_TRIAL: "1"
+          TIERS_TO_TRAIN: "micro"
+          FINAL_EPOCHS: "2"
+          EXPORT_ONNX: "false"
+          DEVICE: "cpu"
+        run: |
+          jupyter nbconvert \
+            --to notebook \
+            --execute notebooks/genetic_search.ipynb \
+            --ExecutePreprocessor.timeout=1500 \
+            --output /tmp/executed.ipynb
+
+      - name: Verify key outputs exist
+        run: |
+          test -f /tmp/ww_smoke/evolution.png
+          test -f /tmp/ww_smoke/tier_comparison.png
+          # Name the checkpoint itself. `ls` on a directory that exists and is
+          # empty exits 0, so it passed a run that trained no model. The step
+          # sets EXPORT_ONNX=false, so best_f1.onnx is never written here and
+          # best_f1.pt is the artifact to assert.
+          test -f /tmp/ww_smoke/model_micro/model/best_f1.pt
+
+      - name: Upload executed notebook on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: executed-notebook
+          path: /tmp/executed.ipynb

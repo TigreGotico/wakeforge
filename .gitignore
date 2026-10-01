@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+
+# Secrets
+.env
+
+# IDE
+.idea/
+
+# Test/coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# ML artifacts
+mlruns/
+*.pt
+*.onnx
+!ww_trainer/*.onnx
+
+# Experiment outputs (datasets, checkpoints, audio)
+experiments/
+notebooks/outputs/
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# OS
+.DS_Store

@@ -1,0 +1,463 @@
+"""CLI entry point for wake-word model training.
+
+Provides the ``train`` click command that wires up data loading, loss
+configuration, and invokes ``WakeWordTrainer``.
+"""
+import json
+import os
+import random
+from pathlib import Path
+from typing import List, Tuple
+
+import click
+import torch
+
+from ww_trainer.tiers import get_tier, list_tiers
+from ww_trainer.trainer import WakeWordTrainer
+
+
+@click.command(help="""
+Train a wake-word detection model using the WakeWordTrainer.
+
+This command handles full training — data loading, loss setup, adaptive sampling,
+hard-negative mining, and evaluation — with optional MLflow tracking and ONNX export.
+""")
+# -------------------------- Hardware tier preset --------------------------
+@click.option("--tier", default=None,
+              type=click.Choice(["micro", "small", "medium", "large", "wakehubert",
+                                 "wakehubert-bigru"]),
+              help="Hardware tier preset. Overrides --arch and --featurizer-type if set. "
+                   "Run with --list-tiers to see all options.")
+@click.option("--list-tiers", "show_tiers", is_flag=True, default=False,
+              help="Print hardware tier table and exit.")
+# -------------------------- Dataset --------------------------
+@click.option("--wake-word", required=True,
+              help="Name of the wake word (used in model naming and metadata).")
+@click.option("--metadata", required=True,
+              help="Path to CSV file containing training samples as 'path,label'.")
+@click.option("--test-metadata", default=None,
+              help="Optional CSV with test data (same format). If not provided, dataset is split.")
+@click.option("--split", default=0.8, type=float,
+              help="Train/test split ratio if --test-metadata is not provided (default: 0.8).")
+# -------------------------- Training --------------------------
+@click.option("--epochs", default=50, type=int, help="Number of training epochs.")
+@click.option("--batch-size", default=16, type=int, help="Mini-batch size.")
+@click.option("--lr", default=5e-4, type=float, help="Initial learning rate.")
+@click.option("--resume", default=None,  help="Resume training from an existing checkpoint (.pt).")
+@click.option("--seed", default=42, type=int,
+              help="Random seed for the train/test split and training (default: 42).")
+@click.option("--output-dir", default=None, help="Directory to store checkpoints, metrics, and visualizations.")
+@click.option("--save-best", is_flag=True, help="If set, saves separate checkpoints for best precision/recall/F1/loss.")
+# -------------------------- Architecture --------------------------
+@click.option("--featurizer", type=str,
+              help="Path to a feature extractor .onnx model, or a pretrained "
+                   "featurizer name (e.g. 'wakehubert') downloaded from the Hub.")
+@click.option("--featurizer-type", "featurizer_type", default="onnx",
+              help="Built-in featurizer ('onnx', 'mfcc', 'filterbank', 'sincnet', "
+                   "'gammatone', 'leaf', 'plp', 'pncc', 'cqt', 'delta_mfcc', "
+                   "'delta_filterbank') or pretrained featurizer ('wakehubert', "
+                   "'wakehubert-mel-tcn-wide', ...; each with an '-int8' variant, see "
+                   "docs/reference/extractors.md). Overridden by --tier when a tier is set.")
+@click.option("--featurizer-revision", default=None,
+              help="Hub revision (branch, tag or commit) of a pretrained featurizer.")
+@click.option("--feature-dim", type=int,  help="Number of output features from onnx featurizer.")
+@click.option("--arch", default="gru",
+              help="Classifier head: gru, bigru, ffn, cnn, crnn, tcresnet, dscnn, conformer, "
+                   "kwt, efficientnet, matchboxnet, mixconv, res15, bcresnet, phonmatch, ocsvm.")
+@click.option("--hidden-dim", type=int, default=None,
+              help="Hidden size of the head (GRU units for gru/bigru, FFN width for ffn/ocsvm).")
+@click.option("--linear-dim", type=int, default=None,
+              help="Width of the dense layer after the GRU (gru/bigru); also the embedding size.")
+@click.option("--gru-n-layers", type=int, default=None, help="Stacked GRU layers (gru/bigru).")
+@click.option("--device", type=click.Choice(["cpu", "cuda", "auto"]), default="auto",
+              help="'cuda', 'cpu', or 'auto' (auto-selects CUDA if available).")
+@click.option("--sample-rate", type=int, default=16000, help="Audio sample rate used for training.")
+@click.option("--export-onnx", is_flag=True,  help="If set, export checkpoints to ONNX format.")
+@click.option("--export-c", "export_c_path", type=click.Path(), default=None,
+              help="Export final FFN model as C header for ESP32 (e.g. model.h).")
+@click.option("--calibrate", is_flag=True, help="Fit Platt scaling on validation set after training.")
+# -------------------------- Enrichment --------------------------
+@click.option("--use-vad", is_flag=True, help="Enable heuristic energy-based VAD enrichment.")
+@click.option("--use-neural-vad", is_flag=True, help="Enable pre-trained neural VAD (Silero) enrichment.")
+@click.option("--vad-onnx", "vad_onnx_path", type=click.Path(exists=True), 
+              help="Path to pre-trained Silero VAD ONNX model (requirement for --use-neural-vad).")
+@click.option("--use-pitch", is_flag=True, help="Enable pitch-tracking enrichment.")
+@click.option("--use-snr", is_flag=True, help="Enable per-frame SNR estimation enrichment.")
+# -------------------------- Loss Configuration --------------------------
+@click.option("--loss-type", default="bce",
+              help="Loss type(s): 'bce', 'triplet', 'pair', 'cn2pair', 'rppl', or comma-separated combination.")
+@click.option("--loss-weight", default="1.0",
+              help="Comma-separated weights for multiple losses, e.g. '0.5,0.5'.")
+@click.option("--triplet-margin", default=1.0, type=float, help="Margin used for triplet-based losses.")
+@click.option("--mining-type", "mining_type",
+              type=click.Choice(['semihard', 'hard', 'random']), default="semihard",
+              help="Triplet mining strategy (only used with triplet-style losses).")
+# -------------------------- Hard-Negative Mining --------------------------
+@click.option("--neg-threshold", default=0.5, type=float,
+              help="Model confidence below which predictions are considered non-wake.")
+@click.option("--mine-sample", default=0.2, type=float,
+              help="Fraction of the non-wake dataset to sample for mining.")
+@click.option("--patience", default=2, type=int,
+              help="Number of epochs with no new hard negatives before early stopping.")
+@click.option("--base-hard", default=0.5, type=float,
+              help="Initial ratio of hard negatives per wake sample (early training).")
+@click.option("--max-hard", default=5.0, type=float,
+              help="Maximum ratio of hard negatives near the end of training.")
+@click.option("--base-easy", default=1.5, type=float,
+              help="Initial ratio of easy negatives to stabilize early learning.")
+@click.option("--min-easy", default=0.2, type=float,
+              help="Minimum ratio of easy negatives in late training.")
+@click.option("--base-random", default=0.1, type=float,
+              help="Baseline ratio of random negatives maintained for diversity.")
+@click.option("--total-ratio", default=5.0, type=float,
+              help="Overall target number of negatives per wake sample.")
+@click.option("--blend-ratio", default=0.7, type=float,
+              help="Blend factor between progress-based and LR-based adaptation (0-1).")
+# -------------------------- Ambient Validation --------------------------
+@click.option("--ambient-dir", default=None, type=click.Path(exists=True),
+              help="Folder of long-form non-wake audio for FP/hour estimation.")
+# -------------------------- Negative Weight Scheduling --------------------------
+@click.option("--neg-weight-schedule", default=None,
+              type=click.Choice(["linear", "cosine"]),
+              help="Dynamic negative weight schedule (ramps from 1x to max over training).")
+@click.option("--max-neg-weight", default=100.0, type=float,
+              help="Maximum negative class weight for BCE/focal losses (default: 100).")
+@click.option("--target-fpr", default=None, type=float,
+              help="Target false positive rate. If exceeded, max_neg_weight doubles per epoch.")
+@click.option("--target-fp-per-hour", default=None, type=float,
+              help="Target FP/hour on ambient audio. Requires --ambient-dir. "
+                   "If exceeded, max_neg_weight doubles per epoch (livekit-wakeword-style).")
+# -------------------------- Augmentation --------------------------
+@click.option('--aug-prob', default=0.8, type=float,
+              help='Probability of applying any augmentation to each training sample.')
+@click.option('--vc-prob', default=0.1, type=float,
+              help='Probability of applying voice-cloning augmentation.')
+@click.option('--bg-noise-folder', default=None,
+              help='Folder with random noise samples for augmentation.')
+@click.option('--mic-noise-folder', default=None,
+              help='Folder with microphone or silence background clips.')
+@click.option('--music-folder', default=None,
+              help='Folder with music clips.')
+@click.option('--bg-speech-folder', default=None,
+              help='Folder with background speech clips.')
+@click.option('--rir-folder', default=None,
+              help='Folder containing Room Impulse Responses (RIRs) for reverberation simulation.')
+@click.option('--vc-folder', default=None,
+              help='Folder with multiple voices for random voice cloning.')
+@click.option('--snr-min', default=0.0, type=float, help='Minimum SNR for noise mixing.')
+@click.option('--snr-max', default=20.0, type=float, help='Maximum SNR for noise mixing.')
+@click.option('--pitch-min', default=-1.0, type=float, help='Minimum pitch shift in semitones.')
+@click.option('--pitch-max', default=1.0, type=float, help='Maximum pitch shift in semitones.')
+@click.option('--speed-min', default=0.95, type=float, help='Minimum speed perturbation factor.')
+@click.option('--speed-max', default=1.05, type=float, help='Maximum speed perturbation factor.')
+# -------------------------- Multi-Stage Training --------------------------
+@click.option("--training-stages", default=None, type=str,
+              help="Multi-stage training spec: 'epochs:lr,epochs:lr,...' (e.g. '30:1e-4,5:1e-5,5:1e-6').")
+# -------------------------- Spectrogram Augmentation --------------------------
+@click.option("--spec-augment", is_flag=True, default=False,
+              help="Enable SpecAugment frequency+time masking on extracted features.")
+@click.option("--spec-n-time-masks", default=2, type=int, help="Number of time masks for SpecAugment.")
+@click.option("--spec-max-time-width", default=None, type=int,
+              help="Max width of time masks in frames (default: 100 ms of frames).")
+@click.option("--spec-n-freq-masks", default=2, type=int, help="Number of frequency masks for SpecAugment.")
+@click.option("--spec-max-freq-width", default=None, type=int,
+              help="Max width of frequency masks in bins (default: a tenth of the feature size).")
+# -------------------------- Feature Cache --------------------------
+@click.option("--feature-cache-dir", default=".feature_cache/",
+              help="Directory for cached feature vectors (default: .feature_cache/).")
+@click.option("--no-feature-cache", is_flag=True, default=False,
+              help="Disable feature vectorization cache.")
+@click.option("--feature-cache", is_flag=True, default=False,
+              help="Compute the features of a built-in extractor without parameters (MFCC, "
+                   "filterbank, ...) once per clip, as pretrained featurizers always do. "
+                   "Mixup and RPPL's augmented view then work on features instead of audio.")
+@click.option("--feature-cache-variants", default=0, type=int,
+              help="With a frozen featurizer (e.g. a pretrained one), keep this many augmented "
+                   "variants of each clip's features; augmented draws reuse them. 0 (default) "
+                   "augments on the fly.")
+# -------------------------- Layer Freezing --------------------------
+@click.option("--freeze-extractor", is_flag=True, default=False,
+              help="Freeze the feature extractor for transfer learning.")
+@click.option("--freeze-layers", default=0, type=int,
+              help="Freeze first N classifier layer parameters.")
+@click.option("--unfreeze-at-epoch", default=None, type=int,
+              help="Unfreeze all layers at this epoch (progressive unfreezing).")
+# -------------------------- Data Replacement --------------------------
+@click.option("--replacement-ratio", default=0.0, type=float,
+              help="Fraction of training data to resample each epoch (0 = disabled).")
+@click.option("--balanced-replacement", is_flag=True, default=False,
+              help="Ensure equal pos/neg in resampled portion.")
+# -------------------------- Fitness Checkpoint --------------------------
+@click.option("--fitness-checkpoint", is_flag=True, default=False,
+              help="Save best_fitness.pt based on composite fitness score.")
+@click.option("--fitness-param-budget", default=100000, type=int,
+              help="Parameter budget for fitness score size penalty (default: 100000).")
+# -------------------------- Performance --------------------------
+@click.option("--amp", "use_amp", is_flag=True, default=False,
+              help="Enable mixed-precision training (requires CUDA).")
+@click.option("--accumulate-grad-batches", default=1, type=int,
+              help="Accumulate gradients over N batches before optimizer step (default: 1).")
+# -------------------------- Logging --------------------------
+@click.option("--metrics-log", default="metrics_log.csv",
+              help="Path to CSV file where per-epoch metrics will be appended.")
+@click.option("--mlflow-uri", default=None,
+              help="Optional MLflow tracking URI.")
+# -------------------------- Visualization --------------------------
+@click.option("--pca-every", default=1, type=int,
+              help="Run PCA visualization every N epochs (0 disables).")
+@click.option("--tsne-every", default=0, type=int,
+              help="Run t-SNE embedding visualization every N epochs (0 disables).")
+@click.option("--umap-every", default=0, type=int,
+              help="Run UMAP embedding visualization every N epochs (0 disables).")
+def train(**opts: dict) -> None:
+    """Train a wake word model using WakeWordTrainer with optional ONNX export."""
+    show_tiers = opts.pop("show_tiers", False)
+    if show_tiers:
+        click.echo(list_tiers())
+        return
+
+    tier = opts.pop("tier", None)
+
+    metadata = opts.pop("metadata")
+    test_metadata = opts.pop("test_metadata")
+    ww_name = opts.pop("wake_word")
+    mlflow_uri = opts.pop("mlflow_uri")
+    arch = opts.pop("arch")
+    out_dir = opts.pop("output_dir") or f"trained_models/{arch}/{ww_name}"
+    onnx_model = opts.pop("featurizer")
+    featurizer_type = opts.pop("featurizer_type", "onnx")
+    feat_dim = opts.pop("feature_dim")
+    use_amp = opts.pop("use_amp", False)
+    accumulate_grad_batches = opts.pop("accumulate_grad_batches", 1)
+    ambient_dir = opts.pop("ambient_dir", None)
+    training_stages = opts.pop("training_stages", None)
+    spec_augment = opts.pop("spec_augment", False)
+    spec_n_time_masks = opts.pop("spec_n_time_masks", 2)
+    spec_max_time_width = opts.pop("spec_max_time_width", None)
+    spec_n_freq_masks = opts.pop("spec_n_freq_masks", 2)
+    spec_max_freq_width = opts.pop("spec_max_freq_width", None)
+    neg_weight_schedule = opts.pop("neg_weight_schedule", None)
+    max_neg_weight = opts.pop("max_neg_weight", 100.0)
+    target_fpr = opts.pop("target_fpr", None)
+    target_fp_per_hour = opts.pop("target_fp_per_hour", None)
+
+    feature_cache_dir = opts.pop("feature_cache_dir", ".feature_cache/")
+    no_feature_cache = opts.pop("no_feature_cache", False)
+    feature_cache = opts.pop("feature_cache", False)
+    feature_cache_variants = opts.pop("feature_cache_variants", 0)
+    for head_opt in ("hidden_dim", "linear_dim", "gru_n_layers"):
+        if opts[head_opt] is None:
+            opts.pop(head_opt)
+    freeze_extractor = opts.pop("freeze_extractor", False)
+    freeze_layers = opts.pop("freeze_layers", 0)
+    unfreeze_at_epoch = opts.pop("unfreeze_at_epoch", None)
+    replacement_ratio = opts.pop("replacement_ratio", 0.0)
+    balanced_replacement = opts.pop("balanced_replacement", False)
+    fitness_checkpoint = opts.pop("fitness_checkpoint", False)
+    fitness_param_budget = opts.pop("fitness_param_budget", 100000)
+
+    if tier is not None:
+        tc = get_tier(tier)
+        arch = tc.head_arch
+        featurizer_type = tc.extractor_type   # tier overrides --featurizer-type
+        opts.setdefault("hidden_dim", tc.hidden_dim)
+        opts["bidirectional"] = tc.bidirectional
+        opts.setdefault("gru_n_layers", tc.gru_n_layers)
+        if tc.extractor_type == "mfcc":
+            opts["n_mfcc"] = tc.n_mfcc
+            feat_dim = None
+        click.secho(f"[Tier] Using preset '{tier}': {tc.description}", fg="cyan")
+
+    if opts["device"] == "auto":
+        opts["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+    click.secho(f"Device: {opts['device']}", fg="green", bold=True)
+
+    if opts["mine_sample"] == 0:
+        click.secho("Hard-negative mining disabled", fg="yellow", bold=True)
+    else:
+        click.secho("Hard-negative mining enabled", fg="green", bold=True)
+
+    loss_types = [x.strip().lower() for x in opts.pop("loss_type").split(",")]
+    loss_weights = [float(x.strip()) for x in str(opts.pop("loss_weight")).split(",")]
+    if len(loss_weights) == 1 and len(loss_types) > 1:
+        loss_weights = [loss_weights[0]] * len(loss_types)
+    if len(loss_weights) != len(loss_types):
+        raise click.BadParameter("Number of loss weights must match number of loss types")
+
+    losses_cfg: List[dict] = []
+    for name, w in zip(loss_types, loss_weights):
+        cfg: dict = {"name": name, "weight": w}
+        if name in ("triplet", "pair", "cn2pair"):
+            cfg["margin"] = opts.get("triplet_margin", 1.0)
+        losses_cfg.append(cfg)
+
+    # Seed the global RNG *before* the shuffle so the train/test split is
+    # reproducible for a given --seed (the trainer seeds itself later, which is
+    # too late to make the split deterministic).
+    from ww_trainer.reproducibility import set_seed
+    seed = opts.pop("seed", 42)
+    set_seed(seed)
+
+    with open(metadata, "r", encoding="utf-8") as f:
+        entries: List[Tuple[str, str]] = [tuple(line.strip().split(",", 1))
+                                          for line in f if line.strip()]
+    # Filter to existing files *before* splitting so missing files don't skew
+    # the train/test ratio away from --split.
+    entries = [e for e in entries if os.path.isfile(e[0])]
+    random.shuffle(entries)
+
+    if test_metadata:
+        with open(test_metadata, "r", encoding="utf-8") as f:
+            test_data = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
+        test_data = [f for f in test_data if os.path.isfile(f[0])]
+        train_data = entries
+    else:
+        split_idx = int(len(entries) * opts["split"])
+        train_data, test_data = entries[:split_idx], entries[split_idx:]
+
+    click.secho(f"Training {arch} on {len(train_data)} samples", fg="blue", bold=True)
+
+    export_c_path = opts.pop("export_c_path", None)
+    calibrate = opts.pop("calibrate", False)
+
+    resume = opts.get("resume")
+    trainer = WakeWordTrainer(arch=arch, featurizer=onnx_model, feature_dim=feat_dim,
+                              featurizer_type=featurizer_type,
+                              wake_word=ww_name, seed=seed,
+                              mlflow_uri=mlflow_uri, losses_cfg=losses_cfg,
+                              use_amp=use_amp,
+                              freeze_extractor=freeze_extractor,
+                              freeze_layers=freeze_layers,
+                              unfreeze_at_epoch=unfreeze_at_epoch,
+                              **opts)
+    # Build a FeatureCache and hand it to the training loop (which forwards it
+    # to AudioDataset). It must NOT go into augment_opts — the loop already
+    # passes feature_cache= explicitly, so duplicating it there collides.
+    # An ONNX featurizer (a pretrained one), or any extractor without
+    # parameters with --feature-cache, gets a FeatureStore: features computed
+    # once per clip. Any other gets the waveform cache.
+    from ww_trainer.feature_store import store_for
+    feature_cache_obj = None
+    requested = False if no_feature_cache else (True if feature_cache else None)
+    feature_store = store_for(trainer.model.feature_extractor, requested, feature_cache_dir,
+                              unfreeze_at_epoch)
+    if feature_store is not None:
+        click.secho(f"[FeatureStore] dir={feature_cache_dir} "
+                    f"variants={feature_cache_variants}", fg="cyan")
+    elif not no_feature_cache:
+        from ww_trainer.cache import FeatureCache
+        ext = trainer.model.feature_extractor
+        feature_cache_obj = FeatureCache(feature_cache_dir, type(ext).__name__, ext.cache_key)
+        click.secho(f"[FeatureCache] dir={feature_cache_dir}", fg="cyan")
+    feature_kwargs = {
+        "feature_cache": feature_cache_obj,
+        "feature_store": feature_store,
+        "cache_features": requested,
+        "feature_cache_variants": feature_cache_variants,
+    }
+
+    if training_stages:
+        from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
+        stages = parse_stage_spec(training_stages)
+        run_multi_stage_training(
+            trainer, stages, train_data, test_data, out_dir,
+            batch_size=opts["batch_size"],
+            neg_threshold=opts["neg_threshold"],
+            mine_fraction=opts["mine_sample"],
+            mining_type=opts["mining_type"],
+            patience=opts["patience"],
+            save_best=opts["save_best"],
+            metrics_log=opts["metrics_log"],
+            neg_weight_schedule=neg_weight_schedule,
+            max_neg_weight=max_neg_weight,
+            **feature_kwargs,
+        )
+    else:
+        trainer.train(
+            train_data=train_data,
+            test_data=test_data,
+            epochs=opts["epochs"],
+            batch_size=opts["batch_size"],
+            lr=opts["lr"],
+            neg_threshold=opts["neg_threshold"],
+            mine_fraction=opts["mine_sample"],
+            mining_type=opts["mining_type"],
+            patience=opts["patience"],
+            save_best=opts["save_best"],
+            metrics_log=opts["metrics_log"],
+            tsne_every=opts["tsne_every"],
+            pca_every=opts["pca_every"],
+            umap_every=opts["umap_every"],
+            output_dir=out_dir,
+            base_hard=opts["base_hard"],
+            max_hard=opts["max_hard"],
+            base_easy=opts["base_easy"],
+            min_easy=opts["min_easy"],
+            base_random=opts["base_random"],
+            total_ratio=opts["total_ratio"],
+            blend_ratio=opts["blend_ratio"],
+            use_amp=use_amp,
+            accumulate_grad_batches=accumulate_grad_batches,
+            resume=resume,
+            neg_weight_schedule=neg_weight_schedule,
+            max_neg_weight=max_neg_weight,
+            target_fpr=target_fpr,
+            target_fp_per_hour=target_fp_per_hour,
+            ambient_dir=ambient_dir,
+            spec_augment=spec_augment,
+            spec_augment_kwargs={
+                "n_time_masks": spec_n_time_masks,
+                "max_time_width": spec_max_time_width,
+                "n_freq_masks": spec_n_freq_masks,
+                "max_freq_width": spec_max_freq_width,
+            } if spec_augment else None,
+            replacement_ratio=replacement_ratio,
+            balanced_replacement=balanced_replacement,
+            fitness_checkpoint=fitness_checkpoint,
+            fitness_param_budget=fitness_param_budget,
+            **feature_kwargs,
+        )
+
+    # Post-training: C header export
+    if export_c_path:
+        from ww_trainer.export_c import export_to_c_header
+        try:
+            export_to_c_header(trainer.model, export_c_path, wake_word=ww_name or "wake_word")
+            click.secho(f"C header exported to {export_c_path}", fg="green")
+        except TypeError as exc:
+            click.secho(f"C export failed (FFN only): {exc}", fg="red")
+
+    # Post-training: Platt calibration
+    if calibrate:
+        from ww_trainer.calibration import calibrate_model
+        params = calibrate_model(trainer.model, test_data, out_dir, device=opts["device"],
+                                 feature_store=feature_store)
+        click.secho(f"Calibration: coef={params['coef']:.4f}, intercept={params['intercept']:.4f}", fg="green")
+
+    from ww_trainer.pretrained import featurizer_metadata
+    record = {
+        **opts,
+        "wake_word": ww_name,
+        "arch": arch,
+        "tier": tier,
+        "featurizer": onnx_model,
+        "featurizer_type": featurizer_type,
+        "feature_dim": trainer.model.feature_extractor.feature_dim,
+    }
+    pretrained = featurizer_metadata(trainer.model.feature_extractor)
+    if pretrained:
+        record["pretrained_featurizer"] = pretrained["pretrained_featurizer"]
+        record["featurizer_revision"] = pretrained["featurizer_revision"]
+    streaming_heads = sorted(p.name for p in Path(out_dir).glob("*_streaming.onnx"))
+    if streaming_heads:
+        record["streaming_heads"] = streaming_heads
+        record["stream_window"] = trainer.stream_window
+    meta = Path(out_dir) / f"{ww_name}_meta.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    with open(meta, "w") as f:
+        json.dump(record, f, indent=2)
+    click.echo(click.style(f"Training complete. Model and config saved to {out_dir}", fg="green", bold=True))
+
+
+if __name__ == "__main__":
+    train()

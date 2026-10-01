@@ -1,0 +1,143 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wakeforge"
+dynamic = ["version"]
+description = "Full training and research suite for wake words — MFCC to HuBERT, all exported to ONNX"
+license = {text = "Apache-2.0"}
+authors = [{name = "JarbasAi", email = "jarbasai@mailfence.com"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
+    "numpy",
+    "soundfile",
+    "click",
+    "tqdm",
+    "scikit-learn",
+    "matplotlib",
+    "librosa",
+    "huggingface_hub>=0.20.0",
+]
+
+[project.optional-dependencies]
+
+# ── Development & testing ──────────────────────────────────────────────────
+# Optional-feature deps are included here so their tests actually RUN in CI
+# instead of being silently skipped (importorskip hides real breakage).
+dev = [
+    "pytest",
+    "pytest-cov",
+    "onnxscript",
+    "markovonnx",      # Markov / HMM extractor tests
+    "umap-learn",      # visualisation tests
+    "optuna",          # sweep tests
+    "voiceclonnx",     # VC delegation tests
+    "torchvision",     # EfficientNet head tests
+]
+
+# Alias used by CI (build-tests.yml installs [test])
+test = [
+    "pytest",
+    "pytest-cov",
+    "onnxscript",
+    "markovonnx",
+    "umap-learn",
+    "optuna",
+    "voiceclonnx",
+    "torchvision",
+]
+
+# ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
+torchcodec = [
+    "torchcodec",
+]
+
+# ── Experiment tracking ────────────────────────────────────────────────────
+mlflow = [
+    "mlflow",
+]
+
+# ── Hyperparameter search ──────────────────────────────────────────────────
+sweep = [
+    "optuna",
+]
+
+# ── One-Class SVM head ─────────────────────────────────────────────────────
+# Required only for OCSVMHead.fit_ocsvm() — not needed at inference time
+ocsvm = [
+    "scikit-learn>=1.3",
+]
+
+# ── Feature extractors ─────────────────────────────────────────────────────
+# HuBERT / Wav2Vec2 / Wav2Vec2-BERT extractors
+transformers = [
+    "transformers",
+]
+
+# Markov / HMM extractor training (Baum-Welch EM)
+markov = [
+    "markovonnx",
+]
+
+# ── Voice conversion ───────────────────────────────────────────────────────
+# Voice conversion is provided exclusively by the pure-ONNX `voiceclonnx`
+# library (14 engines incl. knnvc/facodec/freevc/linacodec/chatterbox), zero
+# PyTorch at runtime. ``vc-onnx`` is kept as a back-compat alias.
+vc = [
+    "voiceclonnx",
+]
+vc-onnx = [
+    "voiceclonnx",
+]
+
+# ── Dataset generation ─────────────────────────────────────────────────────
+datagen = [
+    "datasets>=4",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",    # default TTS; alternatives (piper, google-tx) auto-discovered via OPM
+    "vadonnx>=0.1.0",  # pure-ONNX VAD (silence trimming)
+]
+
+# ── Live microphone testing ────────────────────────────────────────────────
+mic = [
+    "sounddevice",
+]
+
+# ── Visualisation (UMAP embedding plots) ──────────────────────────────────
+viz = [
+    "umap-learn",
+]
+
+# ── Notebooks ─────────────────────────────────────────────────────────────
+notebooks = [
+    "jupyter",
+    "nbconvert",
+    "ipykernel",
+    "datasets>=4",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",
+    "vadonnx>=0.1.0",
+]
+
+[project.scripts]
+ww_trainer-train = "ww_trainer.cli:train"
+ww_trainer-quickstart = "ww_trainer.quickstart:cli_main"
+ww_trainer-datagen = "ww_trainer.datagen:cli_main"
+ww_trainer-benchmark = "ww_trainer.benchmark:main"
+ww_trainer-infer = "ww_trainer.inference:cli_main"
+
+[project.urls]
+Homepage = "https://github.com/TigreGotico/ww_trainer"
+
+[tool.setuptools.dynamic]
+version = {attr = "ww_trainer.version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ww_trainer*"]
