@@ -934,17 +934,51 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
         )
     logger.info("Stage 5: Splitting into train/test sets")
 
-    all_entries: List[tuple[str, int]] = []
-    for p in processed_positives:
-        all_entries.append((str(p), 1))
-    for p in processed_negatives:
-        all_entries.append((str(p), 0))
+    # Split each label separately. A single shuffled cut puts one class in the
+    # test set whenever the set is small: with one positive and one negative it
+    # does so every time, and the guard above then reports the dataset as
+    # complete. Partitioning first means both files hold both labels whenever
+    # the input does.
+    positive_entries: List[tuple[str, int]] = [(str(p), 1) for p in processed_positives]
+    negative_entries: List[tuple[str, int]] = [(str(p), 0) for p in processed_negatives]
 
-    random.shuffle(all_entries)
+    random.shuffle(positive_entries)
+    random.shuffle(negative_entries)
 
-    n_test = max(1, int(len(all_entries) * config.test_split))
-    test_entries = all_entries[:n_test]
-    train_entries = all_entries[n_test:]
+    def _split(
+        entries: List[tuple[str, int]],
+    ) -> tuple[List[tuple[str, int]], List[tuple[str, int]]]:
+        """Take the test share of one label, leaving at least one for train."""
+        if len(entries) < 2:
+            # One clip of this label cannot be in both files. Training needs it
+            # more than the test set does.
+            return entries, []
+        n_test = min(len(entries) - 1, max(1, int(len(entries) * config.test_split)))
+        return entries[n_test:], entries[:n_test]
+
+    train_positive, test_positive = _split(positive_entries)
+    train_negative, test_negative = _split(negative_entries)
+
+    train_entries = train_positive + train_negative
+    test_entries = test_positive + test_negative
+    random.shuffle(train_entries)
+    random.shuffle(test_entries)
+
+    if not train_positive or not train_negative:
+        raise RuntimeError(
+            f"the train split holds {len(train_positive)} positives and "
+            f"{len(train_negative)} negatives; a model cannot be trained on one "
+            "class. Raise n_positive or max_negative."
+        )
+    if not test_positive or not test_negative:
+        raise RuntimeError(
+            f"the test split holds {len(test_positive)} positives and "
+            f"{len(test_negative)} negatives; a single-class test set makes "
+            "every reported score meaningless, so this is refused rather than "
+            "written. Each label needs at least 2 clips: this run had "
+            f"{len(positive_entries)} positives and {len(negative_entries)} "
+            "negatives. Raise n_positive or max_negative."
+        )
 
     train_csv = train_dir / "metadata.csv"
     test_csv = test_dir / "metadata.csv"

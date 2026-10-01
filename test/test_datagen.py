@@ -639,3 +639,48 @@ class TestNotebookForwardsMaxNegative:
                 adversarial=False, download_augmentation=False, seed=1, max_negative=7,
             )
         assert seen["max_negative"] == 7
+
+
+# ---------------------------------------------------------------------------
+# the split keeps both labels in both files
+# ---------------------------------------------------------------------------
+
+class TestSplitKeepsBothLabelsInBothFiles:
+    """The split must not hand back a single-class test set."""
+
+    @staticmethod
+    def _labels(csv_path: Path) -> set:
+        with open(csv_path) as f:
+            return {row[1] for row in csv.reader(f) if row}
+
+    @staticmethod
+    def _fake_download(dataset_id, output_dir, **kwargs):
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        n = kwargs.get("max_samples") or 5
+        return [_make_wav(output_dir / f"{i:04d}.wav") for i in range(n)]
+
+    @pytest.mark.parametrize("size", [2, 3, 5, 10])
+    def test_both_splits_hold_both_labels(self, size, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", self._fake_download)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds",
+            n_positive=size, max_negative=size, vad_trim=False,
+            download_augmentation=False, seed=42,
+        )
+        result = datagen.run_datagen_pipeline(cfg)
+        assert self._labels(result.train_csv) == {"0", "1"}
+        assert self._labels(result.test_csv) == {"0", "1"}
+
+    def test_a_dataset_too_small_to_split_is_refused(self, tmp_path, monkeypatch) -> None:
+        # One clip of each label cannot give both labels to both files. The old
+        # code wrote a single-class test set and the completeness guard called
+        # it fine; now it raises.
+        monkeypatch.setattr(datagen, "download_hf_audio_dataset", self._fake_download)
+        cfg = DatagenConfig(
+            wake_word="hey_mycroft", output_dir=tmp_path / "ds",
+            n_positive=1, max_negative=1, vad_trim=False,
+            download_augmentation=False, seed=42,
+        )
+        with pytest.raises(RuntimeError, match="single-class test set"):
+            datagen.run_datagen_pipeline(cfg)
