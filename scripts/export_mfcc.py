@@ -97,7 +97,9 @@ if __name__ == "__main__":
     import numpy as np
     import matplotlib.pyplot as plt
 
-    print(OnnxFeatureExtractor("/home/miro/PycharmProjects/wakeHuBert/wakehubert/distillhubert_int8.onnx", device="cpu").feature_dim)
+    import sys
+    featurizer = sys.argv[1] if len(sys.argv) > 1 else "scripts/distillhubert_int8.onnx"
+    print(OnnxFeatureExtractor(featurizer, device="cpu").feature_dim)
     combos = [
         dict(sr=16000, mfcc=13, mels=40, fft=400, hop=160),
         dict(sr=16000, mfcc=20, mels=64, fft=400, hop=160),
