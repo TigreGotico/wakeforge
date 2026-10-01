@@ -322,6 +322,23 @@ target, `max_neg_weight` is doubled for the next epoch. Requires
 `--neg-weight-schedule {linear|cosine}` and `--ambient-dir`. Doubling site in
 `ww_trainer/loop.py` after `estimate_fp_per_hour`.
 
+**Q: How do I report FRR at 1 false activation per hour?**
+
+Score each long negative recording with `ww_trainer.metrics.stream_scores`,
+then call `frr_at_fa_per_hour(positive_scores, negative_streams,
+negative_hours, target_fa_per_hour=1.0)` on the validation set. It returns an
+`OperatingPoint` with the lowest threshold that keeps event-level false
+activations within the budget, and the FRR of the positives at that
+threshold. Apply the same threshold, unchanged, to the test set.
+
+Event level means that a run of consecutive windows above the threshold is
+one activation, followed by a dead time (`refractory_sec`, default 0.5 s).
+`estimate_fp_per_hour` counts every window above the threshold by default,
+as `ww-benchmarks` does, so one trigger that spans two overlapping windows
+counts twice; pass `refractory_sec` to count events instead. The protocol is
+from Zhang et al., Interspeech 2026
+(<https://www.isca-archive.org/interspeech_2026/zhang26ha_interspeech.html>).
+
 **Q: How do I calibrate probabilities?**
 
 `ww_trainer.calibration.calibrate_model(model, val_data, output_dir)` after
