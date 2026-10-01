@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1a2](https://github.com/TigreGotico/wakeforge/tree/0.7.1a2) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.1a1...0.7.1a2)
+
+**Merged pull requests:**
+
+- chore\(scripts\): drop the internal host from four scripts [\#55](https://github.com/TigreGotico/wakeforge/pull/55) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.7.1a1](https://github.com/TigreGotico/wakeforge/tree/0.7.1a1) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.0a1...0.7.1a1)
