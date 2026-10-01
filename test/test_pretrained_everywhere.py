@@ -218,6 +218,24 @@ def test_store_is_shared_across_heads_and_persists_to_disk(fake_hub, clips, tmp_
     assert featurized["clips"] <= 1
 
 
+def test_training_prefills_the_store_before_the_first_epoch(fake_hub, clips, tmp_path, monkeypatch):
+    from ww_trainer import feature_store
+    calls = []
+    real = feature_store.prefill
+
+    def spy(store, items, variants, workers, *a, **k):
+        calls.append((sorted(p for p, _ in items), variants, workers))
+        return real(store, items, variants, workers, *a, **k)
+
+    monkeypatch.setattr(feature_store, "prefill", spy)
+    cache = tmp_path / "features"
+    _trainer().train(output_dir=tmp_path / "out", train_data=clips, test_data=clips, feature_cache_dir=str(cache),
+                     feature_cache_variants=1, feature_cache_workers=1, **TRAIN_KW)
+    paths = sorted(p for p, _ in clips)
+    assert calls == [(paths, 1, 1), (paths, 0, 1)]
+    assert len(list(cache.glob("*.npy"))) >= len(clips)
+
+
 def test_collate_pads_stored_features_with_frame_lengths():
     batch = collate_fn([(torch.ones(10, 128), 1, "a"), (torch.ones(25, 128), 0, "b")], "cpu")
     feats, labels, paths, kw = batch
@@ -550,7 +568,7 @@ def test_builtin_extractor_store_on_request():
     assert store_for(model.feature_extractor, requested=True) is not None
 
 
-FEATS_BYTES = 50 * 128 * 4
+FEATS_BYTES = 50 * 128 * 2  # features are held in float16
 
 
 def _store(fake_hub_name):

@@ -175,6 +175,13 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="With a frozen featurizer (e.g. a pretrained one), keep this many augmented "
                    "variants of each clip's features; augmented draws reuse them. 0 (default) "
                    "augments on the fly.")
+@click.option("--feature-cache-workers", default=0, type=int,
+              help="Before the first epoch, compute every clip's features and its augmented variants "
+                   "in this many CPU worker processes, writing them to --feature-cache-dir. 0 (default) "
+                   "computes each variant the first time it is drawn.")
+@click.option("--feature-cache-max-gb", default=4.0, type=float,
+              help="Memory for cached features, in GB (float16). Features beyond it are read from "
+                   "--feature-cache-dir.")
 # -------------------------- Layer Freezing --------------------------
 @click.option("--freeze-extractor", is_flag=True, default=False,
               help="Freeze the feature extractor for transfer learning.")
@@ -245,6 +252,9 @@ def train(**opts: dict) -> None:
     no_feature_cache = opts.pop("no_feature_cache", False)
     feature_cache = opts.pop("feature_cache", False)
     feature_cache_variants = opts.pop("feature_cache_variants", 0)
+    feature_cache_workers = opts.pop("feature_cache_workers", 0)
+    from ww_trainer.feature_store import FeatureStore
+    FeatureStore.max_bytes = int(opts.pop("feature_cache_max_gb", 4.0) * 1024 ** 3)
     for head_opt in ("hidden_dim", "linear_dim", "gru_n_layers"):
         if opts[head_opt] is None:
             opts.pop(head_opt)
@@ -354,6 +364,7 @@ def train(**opts: dict) -> None:
         "feature_store": feature_store,
         "cache_features": requested,
         "feature_cache_variants": feature_cache_variants,
+        "feature_cache_workers": feature_cache_workers,
     }
 
     if training_stages:
