@@ -26,16 +26,23 @@ blocks a later one. :meth:`FeatureStore.close` frees a store and
 featurizers do, since built-in extractors (MFCC, filterbank, ...) are cheap
 and training on them keeps waveform-domain augmentation (waveform Mixup,
 RPPL's waveform-augmented view); those use a store only when asked.
+
+Features are held in float16, in memory and in ``cache_dir``, and handed out as
+float32: a wakehubert window is 75 x 128 values, and float16 halves what a
+dataset with several augmented variants per clip needs. :func:`prefill` fills
+every clip's variants in parallel worker processes before the first epoch, so
+training reads features instead of augmenting one clip at a time.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import itertools
+import multiprocessing
 import os
 import weakref
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -104,12 +111,15 @@ class FeatureStore:
     """
 
     max_bytes: int = 4 * 1024 ** 3
+    dtype = torch.float16
     _shared: Dict[Tuple[str, Optional[str]], "FeatureStore"] = {}
     _live: "weakref.WeakSet[FeatureStore]" = weakref.WeakSet()
     _clock = itertools.count()
 
-    def __init__(self, extractor: BaseExtractor, cache_dir: Optional[str] = None) -> None:
+    def __init__(self, extractor: BaseExtractor, cache_dir: Optional[str] = None,
+                 keep_in_memory: bool = True) -> None:
         self.extractor = extractor
+        self.keep_in_memory = keep_in_memory
         self.identity = extractor_identity(extractor)
         self.cache_dir = Path(cache_dir) if cache_dir and self.identity else None
         if self.cache_dir is not None:
@@ -173,21 +183,25 @@ class FeatureStore:
                     logger.warning("Corrupt feature cache entry %s — removing", disk)
                     disk.unlink(missing_ok=True)
                 else:
-                    self._remember(path, variant, feats)
+                    feats = self._remember(path, variant, feats)
         if feats is None:
             self.misses += 1
-        else:
-            self.hits += 1
-        return feats
+            return None
+        self.hits += 1
+        return feats.float()
 
     def put(self, path: str, variant: int, feats: torch.Tensor) -> None:
         """Store *feats* for *path* and *variant*."""
-        self._remember(path, variant, feats)
+        feats = self._remember(path, variant, feats)
         disk = self._disk_path(path, variant)
         if disk is not None:
             np.save(disk, feats.numpy())
 
-    def _remember(self, path: str, variant: int, feats: torch.Tensor) -> None:
+    def _remember(self, path: str, variant: int, feats: torch.Tensor) -> torch.Tensor:
+        """Keep *feats* in memory if the budget allows; returns them in the store's dtype."""
+        feats = feats.to(FeatureStore.dtype)
+        if not self.keep_in_memory:
+            return feats
         size = feats.numel() * feats.element_size()
         self._last_used = next(FeatureStore._clock)
         used = FeatureStore.used_bytes()
@@ -202,6 +216,7 @@ class FeatureStore:
         if used + size <= FeatureStore.max_bytes:
             self._memory[(path, variant)] = feats
             self.nbytes += size
+        return feats
 
     @torch.no_grad()
     def featurize(self, wav: torch.Tensor) -> torch.Tensor:
@@ -210,3 +225,68 @@ class FeatureStore:
 
     def __len__(self) -> int:
         return len(self._memory)
+
+
+def _prefill_worker(args) -> int:
+    """Compute the missing variants of a slice of clips into ``cache_dir``; returns how many were computed."""
+    extractor_kwargs, cache_dir, samples, variants, dataset_kwargs = args
+    from ww_trainer.dataset import AudioDataset
+
+    import onnxruntime as ort
+    extractor = OnnxFeatureExtractor(device="cpu", **extractor_kwargs)
+    # onnxruntime otherwise starts a spinning thread per core in every worker, and N workers contend
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = so.inter_op_num_threads = 1
+    so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    extractor.sess = ort.InferenceSession(extractor.model_path, so, providers=["CPUExecutionProvider"])
+    store = FeatureStore(extractor, cache_dir, keep_in_memory=False)  # disk only; the training process keeps what fits
+    dataset = AudioDataset(samples, device="cpu", **dataset_kwargs)
+    done = 0
+    for i, (path, label) in enumerate(samples):
+        for variant in range(variants + 1):
+            disk = store._disk_path(path, variant)
+            if disk is None or disk.exists():
+                continue
+            draw = (False, False, False)
+            if variant > 0:
+                # a stored variant is filled by the first training draw that augments the clip at all, so it is
+                # drawn here the same way, until a draw augments something
+                for _ in range(1000):
+                    draw = dataset.draw_augmentation(label)
+                    if any(draw):
+                        break
+                else:
+                    continue  # this dataset never augments the clip, so no training draw reads the variant
+            store.put(path, variant, store.featurize(dataset._waveform(i, *draw)))
+            done += 1
+    return done
+
+
+def _init_prefill_process() -> None:
+    torch.set_num_threads(1)  # one core per worker process; never applied to the training process
+
+
+def prefill(store: FeatureStore, samples: Sequence[Tuple[str, str]], variants: int, workers: int,
+            dataset_kwargs: Optional[dict] = None, chunk: int = 256) -> int:
+    """Compute every clip's un-augmented features and its *variants* augmented ones in *workers* processes.
+
+    Each worker opens its own copy of the ONNX featurizer on the CPU and writes to the store's ``cache_dir``,
+    which the training process then reads. Variant ``0`` is the clip as recorded; variants ``1..K`` apply the
+    augmentations of an :class:`~ww_trainer.dataset.AudioDataset` built from *dataset_kwargs* (pass the
+    training ``aug_prob`` there), drawn with its own ``draw_augmentation`` as a training draw would, voice
+    conversion and wake-word-over-speech included. Clips already on
+    disk are skipped, so an interrupted prefill resumes. Returns the number of features computed.
+    """
+    if store.cache_dir is None or type(store.extractor) is not OnnxFeatureExtractor:
+        raise ValueError("prefill needs an ONNX featurizer and a cache_dir")
+    ext = store.extractor
+    extractor_kwargs = dict(model_path=ext.model_path, sample_rate=ext.sample_rate, feature_dim=ext._feature_dim,
+                            hop_samples=ext.hop_samples, frame_rate_hz=ext.frame_rate_hz,
+                            context_samples=ext.context_samples, streaming=ext.streaming)
+    samples = list(samples)
+    jobs = [(extractor_kwargs, str(store.cache_dir), samples[i:i + chunk], variants, dict(dataset_kwargs or {}))
+            for i in range(0, len(samples), chunk)]
+    if workers <= 1:
+        return sum(_prefill_worker(j) for j in jobs)
+    with multiprocessing.get_context("spawn").Pool(workers, initializer=_init_prefill_process) as pool:
+        return sum(pool.imap_unordered(_prefill_worker, jobs))

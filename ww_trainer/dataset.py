@@ -322,14 +322,23 @@ class AudioDataset(Dataset):
         wav, sr = _load_audio(vc_path)
         return wav, sr
 
+    def draw_augmentation(self, label: str):
+        """One draw's augmentation decisions: ``(will_augment, use_vc, use_wow)``.
+
+        The single place these are drawn, so a feature prefill fills each stored
+        variant with the same mix of augmentations a training draw would.
+        """
+        will_augment = self.aug_prob > 0 and random.random() < self.aug_prob
+        use_vc = label == "1" and self.vc is not None and random.random() < self.vc_prob
+        use_wow = bool(self.wow_files) and label == "1" and random.random() < self.wow_prob
+        return will_augment, use_vc, use_wow
+
     def __getitem__(self, idx):
         entry = self.samples[idx]
         path, label = entry[0], entry[1]
         keyword_ids = entry[2] if len(entry) > 2 else None
 
-        will_augment = self.aug_prob > 0 and random.random() < self.aug_prob
-        use_vc = label == "1" and self.vc is not None and random.random() < self.vc_prob
-        use_wow = bool(self.wow_files) and label == "1" and random.random() < self.wow_prob
+        will_augment, use_vc, use_wow = self.draw_augmentation(label)
 
         if self.feature_store is not None:
             return self._features(idx, will_augment, use_vc, use_wow), int(label), path, keyword_ids

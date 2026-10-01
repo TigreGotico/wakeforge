@@ -297,6 +297,7 @@ def training_loop(
         cache_features: Optional[bool] = None,
         feature_cache_variants: int = 0,
         feature_cache_dir: Optional[str] = None,
+        feature_cache_workers: int = 0,
 ) -> float:
     """Run the full training loop for *trainer*.
 
@@ -449,6 +450,15 @@ def training_loop(
     trainer.stream_window = clip_frames(wakes, fps)
     logger.info("Total wake-word samples: %d", len(wakes))
     logger.info("Total not-wake-word samples: %d", len(nonwakes))
+    if feature_store is not None and feature_cache_workers > 0 and feature_store.cache_dir is not None:
+        from ww_trainer.feature_store import prefill
+        import time as _time
+        t0 = _time.time()
+        n = prefill(feature_store, wakes + nonwakes, feature_cache_variants, feature_cache_workers,
+                    {**trainer.augment_opts, "aug_prob": aug_prob})
+        n += prefill(feature_store, [x for x in test_data if os.path.isfile(x[0])], 0, feature_cache_workers)
+        logger.info("[FeatureStore] prefilled %d features with %d workers in %.0f s",
+                    n, feature_cache_workers, _time.time() - t0)
 
     # Log dataset + model stats as run params once
     if trainer.mlflow:
