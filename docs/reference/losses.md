@@ -1,6 +1,6 @@
 # Loss Functions
 
-All losses are managed by `LossManager` — `ww_trainer/loss.py:1166`. Multiple losses can be weighted and combined; the manager handles triplet mining, embedding extraction, and dispatch.
+All losses are managed by `LossManager` — `ww_trainer/loss.py:1243`. Multiple losses can be weighted and combined; the manager handles triplet mining, embedding extraction, and dispatch.
 
 Each section below follows the same shape:
 
@@ -47,6 +47,7 @@ OC-Softmax is built on the same idea. Classification losses (BCE, focal, ArcFace
 | SupCon | `SupConLoss` | `loss.py:756` | embeds, labels | Contrastive |
 | ProxyNCA | `ProxyNCALoss` | `loss.py:805` | embeds, labels | Metric (learnable) |
 | MultiSimilarity | `MultiSimilarityLoss` | `loss.py:851` | embeds, labels | Metric |
+| MACR | `MarginAwareContrastiveLoss` | `loss.py:1130` | embeds, labels, logits | Contrastive |
 | HALO | `HALOLoss` | `loss.py:915` | embeds, labels | Classification |
 | SizeAware | `SizeAwareLoss` | `loss.py:1074` | logits, labels, model | MCU-regularizer |
 | RPPL | `RobustProtoDiversityLoss` | `loss.py:298` | logits, labels, embeds | Composite |
@@ -254,6 +255,20 @@ These use *all* pairs in the batch — no explicit mining needed. Cheaper in cod
 **When to use:** When you want strong metric-learning behaviour without tuning triplet mining; when batches are 32+ and contain many pair candidates.
 
 **When NOT to use:** Very small batches — the mining criteria find nothing useful. The three hyperparameters interact non-trivially; start from defaults.
+
+---
+
+### MarginAwareContrastiveLoss (MACR) — `loss.py:1130`
+
+**Intuition.** SupCon pulls every non-wake clip toward every other non-wake clip. The non-wake class is speech, noise and music mixed together, so that pull bends the embedding space. MACR pulls only wake clips together. It pushes a wake clip away from a non-wake clip only when their cosine similarity is above a margin, and it pushes twice as hard when the non-wake clip is one the model already scores as wake.
+
+**Theory.** Margin-Aware Contrastive Regularization (Zhang et al., Interspeech 2026, <https://www.isca-archive.org/interspeech_2026/zhang26ha_interspeech.html>). `L = mean(1 - z_i·z_p) + mean(w_n · max(0, z_i·z_n - m))` over wake anchors `i`, wake partners `p` and non-wake clips `n`, with `w_n = hard_weight` for hard negatives and 1 otherwise. A non-wake clip is hard when its detached wake probability is at least `hard_threshold`. The paper's pull term is a log-softmax over the other target-keyword samples; with a single wake word that term has no pull, so the cosine distance takes its place. The paper reports more than 40 % relative FRR reduction over cross-entropy at 0.5 to 0.2 FA/h on Speech Commands.
+
+**Config:** `{"name": "macr", "weight": 0.5, "margin": 0.4, "hard_weight": 2.0, "hard_threshold": 0.5}` (the paper's values)
+
+**When to use:** Beside BCE, when false accepts on similar-sounding speech are the problem. It adds nothing to the exported model.
+
+**When NOT to use:** Batches with fewer than two wake clips give no pull term.
 
 ---
 

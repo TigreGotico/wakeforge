@@ -1127,6 +1127,83 @@ class SizeAwareLoss(nn.Module):
         return base + self.l1_weight * l1 + self.size_weight * size_ratio
 
 
+class MarginAwareContrastiveLoss(nn.Module):
+    """Margin-Aware Contrastive Regularization (Zhang et al., Interspeech 2026).
+
+    A training-only auxiliary objective for low false-alarm operating points.
+    It pulls wake embeddings together and pushes each wake embedding away
+    from the non-wake embeddings whose cosine similarity exceeds a margin.
+    Non-wake clips are never pulled together: the non-wake class is
+    heterogeneous (speech, noise, music), and clustering it distorts the
+    embedding space. Hard negatives get a larger repulsion weight.
+
+    The paper's pull term is a supervised-contrastive log-softmax whose
+    denominator holds only target-keyword samples. With one target keyword
+    that denominator holds only positives and its gradient vanishes once the
+    positive similarities are equal, so the pull term here is the mean
+    cosine distance ``1 - z_i . z_p`` over wake pairs. Both terms are means
+    over wake anchors, so the loss scale does not grow with the batch size.
+
+    Paper: https://www.isca-archive.org/interspeech_2026/zhang26ha_interspeech.html
+
+    Args:
+        margin: Cosine similarity above which a wake/non-wake pair is
+            penalised (paper: 0.4).
+        hard_weight: Repulsion weight ``alpha`` for hard negatives (paper: 2.0).
+        hard_threshold: When no ``hard_mask`` is given, a non-wake sample is
+            hard if its detached wake probability is at least this value.
+    """
+
+    def __init__(self, margin: float = 0.4, hard_weight: float = 2.0,
+                 hard_threshold: float = 0.5) -> None:
+        super().__init__()
+        self.margin = margin
+        self.hard_weight = hard_weight
+        self.hard_threshold = hard_threshold
+
+    def forward(self, embeds: torch.Tensor, labels: torch.Tensor,
+                logits: Optional[torch.Tensor] = None,
+                hard_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute the pull and margin-aware push terms.
+
+        Args:
+            embeds: Embeddings ``[B, D]``.
+            labels: Binary labels ``[B]`` (1 = wake).
+            logits: Optional wake logits ``[B]``; marks hard negatives when
+                ``hard_mask`` is not given.
+            hard_mask: Optional boolean ``[B]``; ``True`` marks a hard negative.
+
+        Returns:
+            Scalar loss; zero when the batch has no wake sample.
+        """
+        z = F.normalize(embeds, p=2, dim=1)
+        labels = labels.view(-1)
+        pos = labels == 1
+        neg = ~pos
+        if not pos.any():
+            return z.sum() * 0.0
+
+        z_pos = z[pos]
+        loss = z.new_zeros(())
+
+        n_pos = z_pos.size(0)
+        if n_pos >= 2:
+            sim_pp = z_pos @ z_pos.t()
+            off_diag = ~torch.eye(n_pos, dtype=torch.bool, device=z.device)
+            loss = loss + (1.0 - sim_pp[off_diag]).mean()
+
+        if neg.any():
+            if hard_mask is None and logits is not None:
+                hard_mask = torch.sigmoid(logits.detach().view(-1)) >= self.hard_threshold
+            weights = torch.ones(int(neg.sum()), device=z.device, dtype=z.dtype)
+            if hard_mask is not None:
+                weights = torch.where(hard_mask.view(-1)[neg], self.hard_weight, 1.0).to(z.dtype)
+            sim_pn = z_pos @ z[neg].t()
+            loss = loss + (weights * F.relu(sim_pn - self.margin)).mean(dim=1).mean()
+
+        return loss
+
+
 def compute_neg_weight_schedule(
     step: int,
     total_steps: int,
@@ -1290,6 +1367,12 @@ class LossManager:
                     m_wake=cfg.get("m_wake", 0.9),
                     m_other=cfg.get("m_other", 0.2),
                     alpha=cfg.get("alpha", 20.0),
+                ).to(self.device)
+            elif name == "macr":
+                crit = MarginAwareContrastiveLoss(
+                    margin=cfg.get("margin", 0.4),
+                    hard_weight=cfg.get("hard_weight", 2.0),
+                    hard_threshold=cfg.get("hard_threshold", 0.5),
                 ).to(self.device)
             elif name == "size_aware":
                 base = nn.BCEWithLogitsLoss().to(self.device)
@@ -1538,6 +1621,9 @@ class LossManager:
 
             elif name == "halo":
                 loss_val = crit(embeds, labels.to(self.device).view(-1).long())
+
+            elif name == "macr":
+                loss_val = crit(embeds, labels.to(self.device).view(-1), logits=logits.view(-1))
 
             elif name == "size_aware":
                 # SizeAwareLoss needs the model reference
