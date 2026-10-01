@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0a1](https://github.com/TigreGotico/wakeforge/tree/0.8.0a1) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.1a3...0.8.0a1)
+
+**Merged pull requests:**
+
+- feat: event-level false activations and FRR at a FA/hour budget [\#61](https://github.com/TigreGotico/wakeforge/pull/61) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.7.1a3](https://github.com/TigreGotico/wakeforge/tree/0.7.1a3) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.7.1a2...0.7.1a3)
