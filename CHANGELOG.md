@@ -1,12 +1,19 @@
 # Changelog
 
+## [0.10.0a1](https://github.com/TigreGotico/wakeforge/tree/0.10.0a1) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.9.0a1...0.10.0a1)
+
+**Merged pull requests:**
+
+- feat: temporal relation distillation for the distillation trainer [\#63](https://github.com/TigreGotico/wakeforge/pull/63) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.9.0a1](https://github.com/TigreGotico/wakeforge/tree/0.9.0a1) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.8.0a1...0.9.0a1)
 
 **Merged pull requests:**
 
-- feat: temporal relation distillation for the distillation trainer [\#63](https://github.com/TigreGotico/wakeforge/pull/63) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
 - feat: margin-aware contrastive regularization loss [\#62](https://github.com/TigreGotico/wakeforge/pull/62) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
 
 ## [0.8.0a1](https://github.com/TigreGotico/wakeforge/tree/0.8.0a1) (2026-10-01)
