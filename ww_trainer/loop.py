@@ -48,6 +48,10 @@ from ww_trainer.visualization import (
 logger = logging.getLogger(__name__)
 
 
+class NoEpochsLeft(ValueError):
+    """A resumed checkpoint has already completed every requested epoch."""
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -440,6 +444,9 @@ def training_loop(
         if resumed_metrics:
             # ``loaded_epoch`` is the last completed epoch → continue from the next.
             start_epoch = loaded_epoch + 1
+            if start_epoch >= epochs:
+                raise NoEpochsLeft(
+                    f"no epochs left to train (checkpoint is at epoch {start_epoch} of {epochs})")
             # Fast-forward the LR schedule so warmup/cosine resumes at the right point.
             for _ in range(start_epoch):
                 scheduler.step()
