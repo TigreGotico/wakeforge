@@ -130,6 +130,8 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 # -------------------------- Augmentation --------------------------
 @click.option('--aug-prob', default=0.8, type=float,
               help='Probability of applying any augmentation to each training sample.')
+@click.option('--aug-warmup-epochs', default=3, type=int,
+              help='Epochs over which the augmentation probability ramps linearly from 0 to --aug-prob.')
 @click.option('--vc-prob', default=0.1, type=float,
               help='Probability of applying voice-cloning augmentation.')
 @click.option('--bg-noise-folder', default=None,
@@ -265,6 +267,8 @@ def train(**opts: dict) -> None:
     balanced_replacement = opts.pop("balanced_replacement", False)
     fitness_checkpoint = opts.pop("fitness_checkpoint", False)
     fitness_param_budget = opts.pop("fitness_param_budget", 100000)
+    aug_prob = opts.pop("aug_prob", 0.8)
+    aug_warmup_epochs = opts.pop("aug_warmup_epochs", 3)
 
     if tier is not None:
         tc = get_tier(tier)
@@ -381,6 +385,8 @@ def train(**opts: dict) -> None:
             metrics_log=opts["metrics_log"],
             neg_weight_schedule=neg_weight_schedule,
             max_neg_weight=max_neg_weight,
+            aug_prob=aug_prob,
+            aug_warmup_epochs=aug_warmup_epochs,
             **feature_kwargs,
         )
     else:
@@ -426,6 +432,8 @@ def train(**opts: dict) -> None:
             balanced_replacement=balanced_replacement,
             fitness_checkpoint=fitness_checkpoint,
             fitness_param_budget=fitness_param_budget,
+            aug_prob=aug_prob,
+            aug_warmup_epochs=aug_warmup_epochs,
             **feature_kwargs,
         )
 
@@ -451,6 +459,8 @@ def train(**opts: dict) -> None:
         "wake_word": ww_name,
         "arch": arch,
         "tier": tier,
+        "aug_prob": aug_prob,
+        "aug_warmup_epochs": aug_warmup_epochs,
         "featurizer": onnx_model,
         "featurizer_type": featurizer_type,
         "feature_dim": trainer.model.feature_extractor.feature_dim,
