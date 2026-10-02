@@ -150,12 +150,19 @@ class TestDeltaExtractor:
         model.eval()
         out_path = str(tmp_path / "delta_mfcc.onnx")
         model.export_to_onnx(out_path)
-        wav = torch.randn(1, 16000)
+        wav = torch.randn(1, 16000, generator=torch.Generator().manual_seed(0))
         with torch.no_grad():
             pt_out = model(wav).numpy()
-        sess = ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        sess = ort.InferenceSession(out_path, opts, providers=["CPUExecutionProvider"])
         onnx_out = sess.run(None, {"input_values": wav.numpy()})[0]
-        np.testing.assert_allclose(pt_out, onnx_out, rtol=1e-3, atol=1e-4)
+        # float32 rounding differs between torch and onnxruntime by up to ~1e-4 of the
+        # output's peak (MFCC peaks near 40, so ~4e-3 absolute), so atol scales with it.
+        np.testing.assert_allclose(
+            onnx_out, pt_out, rtol=1e-4, atol=1e-4 * float(np.abs(pt_out).max())
+        )
 
 
 class TestGammatoneExtractor:
