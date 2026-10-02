@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0a1](https://github.com/TigreGotico/wakeforge/tree/0.13.0a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.12.0a1...0.13.0a1)
+
+**Merged pull requests:**
+
+- feat\(research\): head\_bench content-addressed feature store and cosine learning-rate schedule [\#87](https://github.com/TigreGotico/wakeforge/pull/87) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.12.0a1](https://github.com/TigreGotico/wakeforge/tree/0.12.0a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.2a2...0.12.0a1)
