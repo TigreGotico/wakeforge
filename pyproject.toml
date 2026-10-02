@@ -131,6 +131,7 @@ ww_trainer-quickstart = "ww_trainer.quickstart:cli_main"
 ww_trainer-datagen = "ww_trainer.datagen:cli_main"
 ww_trainer-benchmark = "ww_trainer.benchmark:main"
 ww_trainer-infer = "ww_trainer.inference:cli_main"
+ww_trainer-export-plugin = "ww_trainer.export_plugin:main"
 
 [project.urls]
 Homepage = "https://github.com/TigreGotico/ww_trainer"
