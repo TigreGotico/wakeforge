@@ -488,4 +488,4 @@ print(f"  Models: {OUT_BASE.resolve()}")
 print()
 print("  To test best model (by F1):")
 best_loss = max(results, key=lambda x: x["f1"])["loss"]
-print(f"    python test_wakeword.py --dir {OUT_BASE}/loss_{best_loss} --audio sample.wav")
+print(f"    python wakeword_tester.py --dir {OUT_BASE}/loss_{best_loss} --audio sample.wav")
