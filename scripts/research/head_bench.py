@@ -16,7 +16,7 @@ the highest calibration recall. Heads share the batch order, so they differ only
 samples, so a later ``cache`` run featurizes only windows it has not seen: the negatives several words share,
 unchanged clips, and augmented copies, which are seeded by their source's content and copy index rather than
 by their position in the metadata. ``fit --lr-schedule cosine`` anneals the rate to lr/100 over the epochs
-after ``--warmup-epochs`` of linear warmup; the rate of every epoch is logged in fit.jsonl.
+after ``--warmup-epochs`` of linear warmup (the peak is the epoch after them); the rate of every epoch is logged in fit.jsonl.
 
 Checkpoints are chosen on a calibration set that no evaluation touches, because the synthetic validation
 set is separable within a few epochs and its loss then keeps falling as the head over-fits: the
@@ -24,7 +24,7 @@ validation positives mixed with LibriSpeech dev-other babble (three talkers) at 
 AudioSet noise at 5 dB, against one hour of dev-other speech and dev-other babble cut into windows at a
 0.5 s hop. Calibration recall is the share of those positives above the highest-scoring negative window.
 """
-import argparse, csv, hashlib, json, os, random, time
+import argparse, csv, hashlib, json, math, os, platform, random, subprocess, time
 from pathlib import Path
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 
@@ -181,15 +181,34 @@ def file_sha1(path):
     return hashlib.sha1(Path(path).read_bytes()).hexdigest()
 
 
-class FeatureStore:
-    """Featurizer outputs keyed by content: sha1 of the featurizer file's sha1 and the exact float32 window.
+def device_name(provider):
+    """Model name of the card or processor an execution provider runs on."""
+    if provider == "CUDAExecutionProvider":
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_name(0)
+        return subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True,
+                              text=True, check=True).stdout.splitlines()[0].strip()
+    if platform.processor():
+        return platform.processor()
+    for line in Path("/proc/cpuinfo").read_text().splitlines():
+        if line.startswith("model name"):
+            return line.split(":", 1)[1].strip()
+    return platform.machine()
 
-    A window is featurized once per featurizer file in any run that shares the store; the values are the
+
+class FeatureStore:
+    """Featurizer outputs keyed by content: sha1 of the featurizer file's sha1, the onnxruntime version, the
+    execution provider and the device model the session runs on, and the exact float32 window.
+
+    A window is featurized once per featurizer file and runtime in any run that shares the store (a CUDA and a
+    CPU session differ slightly before the float16 cast, so neither serves the other); the values are the
     float16 arrays ``cache`` writes, one ``.npy`` per window under a directory named by the key's first two
     hex characters."""
 
-    def __init__(self, root, featurizer):
-        self.root, self.model = Path(root), file_sha1(featurizer)
+    def __init__(self, root, featurizer, provider, device):
+        import onnxruntime
+        self.root = Path(root)
+        self.model = f"{file_sha1(featurizer)}:{onnxruntime.__version__}:{provider}:{device}"
 
     def key(self, wav):
         return hashlib.sha1(self.model.encode() + np.ascontiguousarray(wav, np.float32).tobytes()).hexdigest()
@@ -216,7 +235,8 @@ def cache(a):
     so = ort.SessionOptions(); so.intra_op_num_threads = 4
     sess = ort.InferenceSession(a.featurizer, so, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     name = sess.get_inputs()[0].name
-    store = FeatureStore(a.feature_store, a.featurizer) if a.feature_store else None
+    provider = sess.get_providers()[0]
+    store = FeatureStore(a.feature_store, a.featurizer, provider, device_name(provider)) if a.feature_store else None
 
     def featurize(wins):
         f = sess.run(None, {name: wins})[0]
@@ -314,21 +334,26 @@ def make_head(spec, dim):
 
 
 def lr_scheduler(opt, schedule, epochs, warmup):
-    """None for a constant rate; for ``cosine``, a linear warmup to the full rate over ``warmup`` epochs (epoch e
-    of the warmup at e/warmup of it), then cosine annealing over the remaining epochs down towards lr/100.
-    Stepped once per epoch, after it."""
+    """None for a constant rate; for ``cosine``, ``warmup`` epochs of linear ramp below the full rate, the peak
+    at the epoch after them, then cosine annealing to lr/100 on the last epoch. A run whose peak epoch is its
+    last (``warmup`` = ``epochs`` - 1) never anneals. Stepped once per epoch, after it."""
     if schedule == "constant":
         if warmup:
             raise SystemExit("--warmup-epochs applies to --lr-schedule cosine")
         return None
     if not 0 <= warmup < epochs:
-        raise SystemExit(f"--warmup-epochs {warmup} must leave at least one of the {epochs} epochs")
-    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-    lr = opt.param_groups[0]["lr"]
-    if not warmup:
-        return CosineAnnealingLR(opt, T_max=epochs, eta_min=lr / 100)
-    return SequentialLR(opt, [LinearLR(opt, start_factor=1 / warmup, end_factor=1.0, total_iters=warmup - 1),
-                              CosineAnnealingLR(opt, T_max=epochs - warmup, eta_min=lr / 100)], milestones=[warmup])
+        raise SystemExit(f"--warmup-epochs {warmup} must be below --epochs {epochs}")
+    from torch.optim.lr_scheduler import LambdaLR
+    floor, span = 0.01, epochs - 1 - warmup
+
+    def multiplier(e):
+        if e < warmup:
+            return (e + 1) / (warmup + 1)
+        if not span:
+            return 1.0
+        return floor + (1 - floor) * (1 + math.cos(math.pi * (e - warmup) / span)) / 2
+
+    return LambdaLR(opt, multiplier)
 
 
 def fit(a):
