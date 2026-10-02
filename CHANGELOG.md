@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1a1](https://github.com/TigreGotico/wakeforge/tree/0.15.1a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.0a1...0.15.1a1)
+
+**Merged pull requests:**
+
+- fix: key the bench feature store by runtime and anneal the cosine schedule to the floor [\#90](https://github.com/TigreGotico/wakeforge/pull/90) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.15.0a1](https://github.com/TigreGotico/wakeforge/tree/0.15.0a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.14.0a1...0.15.0a1)
