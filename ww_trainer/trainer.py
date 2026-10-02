@@ -96,6 +96,7 @@ class WakeWordTrainer:
                 "pitch_min", "pitch_max", "speed_min", "speed_max",
                 "vc_prob",
                 "wake_word_over_speech_folder", "wow_prob", "wow_snr_min", "wow_snr_max",
+                "device_aug",
             ]
         }
         # aug_prob is scheduled by the training loop — do not bake it in here

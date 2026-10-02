@@ -567,7 +567,7 @@ def training_loop(
         has_aug_files = any(
             trainer.augment_opts.get(k)
             for k in ("bg_noise_folder", "music_folder", "rir_folder",
-                      "mic_noise_folder", "bg_speech_folder")
+                      "mic_noise_folder", "bg_speech_folder", "device_aug")
         )
         if has_aug_files and aug_prob > 0:
             current_aug_prob = aug_prob * min(1.0, (ep + 1) / max(1, aug_warmup_epochs))

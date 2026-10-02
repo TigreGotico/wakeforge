@@ -9,7 +9,7 @@ Usage::
     from ww_trainer.augment import (
         AugmentationPipeline, MixBackground, ApplyReverb,
         PitchShift, SpeedPerturb, GaussianNoise, VolumePerturb,
-        SpecAugment, TimeShift, Normalize, Mixup,
+        SpecAugment, TimeShift, Normalize, Mixup, DeviceResponse,
     )
 
     pipeline = AugmentationPipeline([
@@ -496,6 +496,90 @@ class Mixup(AudioTransform):
         mixed = alpha * batch + (1.0 - alpha) * batch[idx]
         mixed_labels = alpha * labels + (1.0 - alpha) * labels[idx]
         return mixed, mixed_labels, torch.maximum(lengths, lengths[idx.to(lengths.device)])
+
+
+class DeviceResponse(AudioTransform):
+    """What a real device does to the audio it captures, applied after noise and reverb.
+
+    Each step fires with its own probability:
+
+    * speech after the word: a crop from ``speech_folder`` added from a random
+      point in the second half of the clip, at 0.3-1.0 of the clip's RMS;
+    * microphone band: high-pass at 60-300 Hz (4th-order shape) and low-pass
+      at 3000-7800 Hz (8th-order shape);
+    * microphone colour: an 8-band EQ, +-6 dB per band, over 0 Hz to Nyquist;
+    * level (always): peak-normalised, then set to -30 to 0 dBFS;
+    * compression: ``|y| ** k`` with ``k`` in 0.4-0.9, sign kept;
+    * hot input: +6 to +24 dB of gain, then ``tanh`` or a hard clip;
+    * self-noise: white or high-passed brown noise 25-50 dB below the signal.
+
+    The result is clipped to [-1, 1].
+
+    Args:
+        speech_folder: Folder of speech clips for the speech-after-the-word
+            step; without it that step is skipped.
+        speech_prob: Probability of the speech-after-the-word step.
+        band_prob: Probability of the microphone band limit.
+        colour_prob: Probability of the microphone colour EQ.
+        compress_prob: Probability of the compression step.
+        hot_prob: Probability of the hot-input step.
+        noise_prob: Probability of the self-noise step.
+    """
+
+    def __init__(self, speech_folder: Optional[str] = None,
+                 speech_prob: float = 0.3, band_prob: float = 0.6,
+                 colour_prob: float = 0.5, compress_prob: float = 0.3,
+                 hot_prob: float = 0.3, noise_prob: float = 0.5) -> None:
+        self.files = _collect_audio_files(speech_folder) if speech_folder else []
+        self.speech_prob = speech_prob
+        self.band_prob = band_prob
+        self.colour_prob = colour_prob
+        self.compress_prob = compress_prob
+        self.hot_prob = hot_prob
+        self.noise_prob = noise_prob
+
+    def __call__(self, wav: np.ndarray, sr: int = 16000) -> np.ndarray:
+        n = len(wav)
+        y = wav.astype(np.float64)
+        if not n:
+            return wav.astype(np.float32)
+        if self.files and n > 1 and random.random() < self.speech_prob:
+            speech = _load_audio_mono(random.choice(self.files), sr).astype(np.float64)
+            if len(speech):
+                cut = random.randint(n // 2, n - 1)
+                if len(speech) < n - cut:
+                    speech = np.tile(speech, int(np.ceil((n - cut) / len(speech))))
+                start = random.randint(0, len(speech) - (n - cut))
+                speech = speech[start:start + n - cut]
+                gain = np.sqrt(np.mean(y ** 2) / (np.mean(speech ** 2) + 1e-10))
+                y = y.copy()
+                y[cut:] += speech * gain * random.uniform(0.3, 1.0)
+
+        spectrum = np.fft.rfft(y)
+        freqs = np.fft.rfftfreq(n, 1 / sr)
+        if random.random() < self.band_prob:
+            lo, hi = random.uniform(60, 300), random.uniform(3000, 7800)
+            spectrum = spectrum / (1 + (lo / np.maximum(freqs, 1)) ** 4) / (1 + (freqs / hi) ** 8)
+        if random.random() < self.colour_prob:
+            bands = 10 ** (np.array([random.uniform(-6, 6) for _ in range(8)]) / 20)
+            spectrum = spectrum * np.interp(freqs, np.linspace(0, sr / 2, 8), bands)
+        y = np.fft.irfft(spectrum, n)
+
+        y = y / (np.abs(y).max() + 1e-9) * 10 ** (random.uniform(-30, 0) / 20)
+        if random.random() < self.compress_prob:
+            y = np.sign(y) * np.abs(y) ** random.uniform(0.4, 0.9)
+        if random.random() < self.hot_prob:
+            y = y * 10 ** (random.uniform(6, 24) / 20)
+            y = np.tanh(y) if random.random() < 0.5 else np.clip(y, -1, 1)
+        if random.random() < self.noise_prob:
+            noise = np.random.randn(n)
+            if random.random() < 0.5:
+                noise = np.cumsum(noise)
+                k = min(64, n)
+                noise -= np.convolve(noise, np.ones(k) / k, "same")
+            level = np.sqrt(np.mean(y ** 2)) * 10 ** (-random.uniform(25, 50) / 20)
+            y = y + noise / (np.std(noise) + 1e-9) * level
+        return np.clip(y, -1, 1).astype(np.float32)
 
 
 class AugmentationPipeline(AudioTransform):
