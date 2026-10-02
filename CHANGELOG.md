@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2a1](https://github.com/TigreGotico/wakeforge/tree/0.16.2a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.1a1...0.16.2a1)
+
+**Merged pull requests:**
+
+- fix: resolve train metadata paths beside the CSV and report missing audio [\#94](https://github.com/TigreGotico/wakeforge/pull/94) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.16.1a1](https://github.com/TigreGotico/wakeforge/tree/0.16.1a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.0a1...0.16.1a1)
