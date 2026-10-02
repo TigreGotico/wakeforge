@@ -6,8 +6,8 @@ What `ww_trainer-quickstart` will actually cost you before you run it.
 
 | Preset | Flags | Disk (HF cache + outputs) | Network, first run | Peak RAM | Time, CPU | Time, GPU |
 |---|---|---|---|---|---|---|
-| **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~1.5 GB | ~10 min | ~3 min |
-| **Known phrase** | `--wake-word "hey jarvis"` (any phrase in [§ Pre-built positives](#pre-built-positives-skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
+| **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~1.5 GB | ~70 min, measured with a novel phrase on 8 cores (download- and synthesis-bound) | download- and synthesis-bound, as on CPU |
+| **Known phrase** | `--wake-word "hey mycroft"` (any phrase in [§ Pre-built positives](#pre-built-positives-skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
 | **Default** | (no flags, novel phrase) | ~6–8 GB | ~5 GB | ~3 GB | ~30–60 min | ~10–15 min |
 | **Default + VC** | `--vc-refs <dir>` | + engine ONNX | + engine ONNX (voiceclonnx, downloaded on first use) | ~5 GB | + ~15 min | + ~5 min |
 | **Production** | `--n-positive 5000 --epochs 100 --tier large` | ~15–20 GB | ~7 GB | ~8 GB | not recommended | ~1–2 h |
@@ -74,8 +74,6 @@ Just type the phrase — no `--vc-refs`, no TTS plugins, no language tag.
 
 | Wake word phrase | HF dataset | Size |
 |---|---|---|
-| `hey jarvis` | [`TigreGotico/synthetic-wakeword-hey_jarvis`](https://huggingface.co/datasets/TigreGotico/synthetic-wakeword-hey_jarvis) | ~85 MB |
-| `ok google` | [`TigreGotico/synthetic-wakeword-ok_google`](https://huggingface.co/datasets/TigreGotico/synthetic-wakeword-ok_google) | ~85 MB |
 | `alexa` | [`TigreGotico/synthetic-wakeword-alexa`](https://huggingface.co/datasets/TigreGotico/synthetic-wakeword-alexa) | 73 MB |
 | `hey mycroft` | [`TigreGotico/synthetic-wakeword-hey_mycroft`](https://huggingface.co/datasets/TigreGotico/synthetic-wakeword-hey_mycroft) | 90 MB |
 | `hey siri` | [`TigreGotico/synthetic-wakeword-hey_siri`](https://huggingface.co/datasets/TigreGotico/synthetic-wakeword-hey_siri) | 81 MB |

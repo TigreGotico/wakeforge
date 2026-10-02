@@ -45,6 +45,8 @@ Pass `featurizer_path` first, `head_path` second — order is mandatory. Swappin
 
 A head trained on a pretrained featurizer (`wakehubert`, ...) needs only the head: pass `None` as the featurizer and it is rebuilt from the head's `pretrained_featurizer` and `featurizer_revision` metadata (`ww_trainer-infer --model best_f1.onnx --audio clip.wav` does the same).
 
+Input audio must be 16 kHz mono float32. `OnnxWakeWordInferencer.infer` does not resample, and `ww_trainer-infer` resamples only when `soundfile` is missing; with `soundfile` installed it only warns when a file has another sample rate, then scores it as if it were 16 kHz, which gives a wrong score. Pass 16 kHz mono; resample first (for example `ffmpeg -i in.wav -ar 16000 -ac 1 clip.wav`).
+
 See [export.md](export.md) for how to produce these files.
 
 ---

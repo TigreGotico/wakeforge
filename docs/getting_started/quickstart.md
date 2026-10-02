@@ -5,10 +5,17 @@
 > into voice cloning. Plan for **≈ 6–8 GB free disk and 5 GB download**
 > on the default preset, **~30–60 min on CPU** (or ~10–15 min on a
 > mid-range GPU). Smoke runs with `--no-augmentation-data --n-positive
-> 200` finish in ≈ 1.5 GB / 10 min on CPU. Full per-dataset breakdown:
-> [`requirements.md`](requirements.md).
+> 200` need ≈ 1.5 GB of disk. With a novel phrase they take about **70 min
+> on an 8-core CPU**, almost all of it in datagen rather than training: one
+> HTTP round trip per downloaded file (ESC-50 ≈ 2 000, NAR ≈ 850,
+> `not-wake-words-speech-en` up to 10 000), AudioSet streamed as parquet
+> and capped at 5 000 rows, and about 11 min of sequential edge-tts
+> synthesis. Synthesis needs internet access, because
+> edge-tts calls an online service. A phrase with a prebuilt positives
+> dataset (such as `"hey mycroft"`) skips the synthesis. Full per-dataset
+> breakdown: [`requirements.md`](requirements.md).
 
-Goal: go from typing a phrase like `"hey jarvis"` to a deployable ONNX model in **one command**, on a laptop, in under 10 minutes for a small smoke test.
+Goal: go from typing a phrase like `"hey toaster"` to a deployable ONNX model in **one command**, on a laptop. Training a micro-tier model takes minutes; the wall-clock time of a first run is set by the dataset downloads and the TTS synthesis described above.
 
 How it works under the hood — `train_from_wakeword` — `ww_trainer/quickstart.py:290`:
 
@@ -45,18 +52,22 @@ uv pip install -e ".[dev,datagen,torchcodec]"
 
 ```bash
 ww_trainer-quickstart \
-  --wake-word "hey jarvis" \
-  --output-dir ./hey_jarvis \
-  --tier small \          # default
-  --epochs 50 \           # default
-  --n-positive 1000 \     # default
-  --no-augmentation-data  # skip HF downloads (faster smoke test)
+  --wake-word "hey toaster" \
+  --output-dir ./hey_toaster \
+  --tier small \
+  --epochs 50 \
+  --n-positive 1000 \
+  --no-augmentation-data
 ```
+
+`--tier small`, `--epochs 50` and `--n-positive 1000` repeat the defaults and
+can be dropped. `--no-augmentation-data` skips the background-noise, music
+and RIR downloads; the negative datasets are still downloaded.
 
 On completion:
 ```
-✓ Dataset: ./hey_jarvis/dataset
-✓ Model:   ./hey_jarvis/model/best_f1.onnx  (F1=0.923)
+✓ Dataset: ./hey_toaster/dataset
+✓ Model:   ./hey_toaster/model/best_f1.onnx  (F1=0.923)
 ```
 
 That F1 score is a training-set metric. It is not a measured FA/hour or
@@ -77,7 +88,7 @@ All options:
 | `--n-positive` | `1000` | Positive samples to synthesise |
 | `--lang` | `en` | BCP-47 language for TTS (e.g. `en-us`, `nl-nl`, `pt-br` — pass a region for best voice selection) |
 | `--adversarial/--no-adversarial` | on | Grapheme hard-negatives |
-| `--vc-refs` | unset | Dir of reference WAVs for voice conversion (needs `[vc]`) |
+| `--vc-refs` | unset | Dir of reference WAVs for voice conversion (needs the `[vc]` extra) |
 | `--augmentation-data/--no-augmentation-data` | on | Download bg_noise/music/RIR |
 | `--reuse-dataset` | off | Skip datagen if dataset exists |
 | `--device` | `auto` | `auto`, `cpu`, or `cuda` |
@@ -117,11 +128,18 @@ The CLI exports both automatically when `--export-onnx` is on (default). Pass bo
 from ww_trainer.inference import OnnxWakeWordInferencer
 
 model = OnnxWakeWordInferencer(
-    "hey_jarvis/model/best_f1_featurizer.onnx",
-    "hey_jarvis/model/best_f1.onnx",
+    "hey_toaster/model/best_f1_featurizer.onnx",
+    "hey_toaster/model/best_f1.onnx",
 )
 score = model.infer(wav_float32_array)  # float in [0, 1]
 ```
+
+The input is 16 kHz mono float32. `OnnxWakeWordInferencer.infer` does not
+resample. `ww_trainer-infer` resamples only when `soundfile` is missing
+(through `torchaudio`); with `soundfile` installed it prints a warning for
+another sample rate and scores the clip as if it were 16 kHz, which gives a
+wrong score. Pass 16 kHz mono, for example after
+`ffmpeg -i in.wav -ar 16000 -ac 1 clip.wav`.
 
 ## Output Layout
 
@@ -151,7 +169,8 @@ the timbre of a reference speaker, multiplying effective diversity.
 VC is opt-in and requires:
 
 1. The VC extra: `uv pip install -e ".[vc]"` (pure-ONNX `voiceclonnx`,
-   zero PyTorch at runtime).
+   zero PyTorch at runtime). `[vc-onnx]` is an alias of `[vc]`; there is no
+   `[vc-torch]` extra.
 2. A directory of short reference WAVs (3–10 s of clean speech each), one
    per target speaker.
 
@@ -159,8 +178,8 @@ Then pass `--vc-refs`:
 
 ```bash
 ww_trainer-quickstart \
-  --wake-word "hey jarvis" \
-  --output-dir ./hey_jarvis \
+  --wake-word "hey toaster" \
+  --output-dir ./hey_toaster \
   --vc-refs ./my_voices/
 ```
 
@@ -174,8 +193,8 @@ If you already have a dataset from `ww_trainer-datagen`, pass `--reuse-dataset` 
 
 ```bash
 ww_trainer-quickstart \
-  --wake-word "hey jarvis" \
-  --output-dir ./hey_jarvis \
+  --wake-word "hey toaster" \
+  --output-dir ./hey_toaster \
   --reuse-dataset
 ```
 

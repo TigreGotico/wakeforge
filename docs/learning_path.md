@@ -25,15 +25,15 @@ exported separately.
 
 ---
 
-## Stage 1 — Your first model (10 minutes, one command)
+## Stage 1 — Your first model (one command)
 
 **Goal:** produce a working `best_f1.onnx` + `best_f1_featurizer.onnx` pair
 for a phrase of your choice.
 
 ```bash
 ww_trainer-quickstart \
-  --wake-word "hey jarvis" \
-  --output-dir ./hey_jarvis \
+  --wake-word "hey toaster" \
+  --output-dir ./hey_toaster \
   --tier micro \
   --epochs 10 \
   --no-augmentation-data
