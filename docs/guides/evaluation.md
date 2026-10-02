@@ -13,6 +13,8 @@ How to measure feature extractor and model latency, and compare PyTorch vs ONNX 
 - `bench_onnx_vs_pytorch` — latency and numerical accuracy comparison between PyTorch and ONNX Runtime (`benchmark.py:181`)
 - `run_benchmark` — runs the full suite, saves CSVs and plots (`benchmark.py:269`)
 
+`ww_trainer-benchmark` is the CLI for `run_benchmark`. It measures extractor and model latency, real-time factor and the numerical difference between a PyTorch extractor and its ONNX export, all on synthetic dummy audio. It does not measure detection quality: it reports no recall, false-accept rate or F1 and it never loads a trained model or a dataset. Use it to check that a tier fits a latency budget and that ONNX export preserves the features; use the evaluation tools in [`expectations.md`](expectations.md) for quality.
+
 ---
 
 ## Quick Start
@@ -26,7 +28,7 @@ report = run_benchmark(output_dir="benchmark_results/", device="cpu")
 Or from the CLI:
 
 ```bash
-uv run python -m ww_trainer.benchmark --output-dir benchmark_results/ --device cpu --runs 50
+ww_trainer-benchmark --output-dir benchmark_results/ --device cpu --runs 50
 ```
 
 ---

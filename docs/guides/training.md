@@ -16,10 +16,32 @@ The training metadata is a plain-text CSV with two columns and no header:
 /absolute/path/to/hey_jarvis_002.wav,1
 ```
 
-- Column 1: absolute or relative path to an audio file (WAV, FLAC, MP3, OGG, M4A).
+- Column 1: absolute or relative path to an audio file (WAV, FLAC, MP3, OGG, M4A). A relative path is resolved against the directory `ww_trainer-train` runs in, not against the CSV's own directory. `ww_trainer-train` drops rows whose file does not exist before it splits, without a log line or a count. This is a known defect, not intended behaviour: a wrong working directory leaves an empty or short training set with no warning, so check the `Training ... on N samples` line.
 - Column 2: `1` for wake word, `0` for non-wake.
 
-`AudioDataset` (`dataset.py:80`) accepts this as a list of `(path, label)` tuples. Files are validated on construction; missing files are logged with `logger.warning`. Label distribution is logged via `logger.info`.
+### CSVs written by datagen
+
+`ww_trainer-datagen --output-dir <out>` (and the quickstart, which uses `<out>/dataset`) writes two CSVs, one per split, instead of a single `dataset.csv`:
+
+```
+<out>/train/metadata.csv
+<out>/test/metadata.csv
+```
+
+Each path in them is written as `<out>/positives/processed/<name>.wav` or `<out>/negatives/processed/<name>.wav`, exactly as spelled in `--output-dir`. A relative `--output-dir` therefore yields relative paths, which only resolve when `ww_trainer-train` runs from the directory datagen ran in. Pass an absolute `--output-dir` to train from anywhere. Train on both splits by passing them as `--metadata` and `--test-metadata`:
+
+```bash
+ww_trainer-train \
+  --wake-word hey_toaster \
+  --metadata <out>/train/metadata.csv \
+  --test-metadata <out>/test/metadata.csv \
+  --tier micro \
+  --output-dir ./models/hey_toaster_micro
+```
+
+The examples below use `dataset.csv` as a stand-in for either a hand-written CSV or `train/metadata.csv`.
+
+`AudioDataset` (`dataset.py:80`) accepts this as a list of `(path, label)` tuples. Files are validated on construction; `AudioDataset` logs missing files with `logger.warning`, but `ww_trainer-train` removes them before building the dataset, so the CLI never reaches that warning. Label distribution is logged via `logger.info`.
 
 ### Directory layout
 
@@ -540,8 +562,11 @@ ww_trainer-train \
   --metadata dataset.csv \
   --tier small \
   --resume ./models/hey_jarvis_small/best_f1.pt \
+  --save-best \
   --output-dir ./models/hey_jarvis_small
 ```
+
+`best_f1.pt` exists only for a run that used `--save-best`. A run without it leaves `ep1.pt`, `ep2.pt`, ... and `final_model.pt`, so resume from one of those (for example `--resume ./models/hey_jarvis_small/ep30.pt`).
 
 On resume (model weights, at trainer construction: `trainer.py:94`–`95`; hard-negative cache and optimizer/LR state, in the training loop: `loop.py:307`–`344`):
 - Model weights are loaded from `resume`.

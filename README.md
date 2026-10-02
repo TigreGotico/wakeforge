@@ -88,12 +88,14 @@ Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,
 A default quickstart run needs **≈ 6–8 GB disk** and **~5 GB download**
 (or ~1.5 GB with `--no-augmentation-data`). Voice cloning via `--vc-refs`
 adds the per-engine ONNX weights downloaded on first use from the
-HuggingFace Hub (size varies by `voiceclonnx` engine). Full per-dataset
+HuggingFace Hub (size varies by `voiceclonnx` engine). A smoke run with a novel phrase
+takes about 70 min on 8 CPU cores, dominated by dataset downloads and
+edge-tts synthesis (which needs internet access). Full per-dataset
 budget: [`docs/getting_started/requirements.md`](docs/getting_started/requirements.md).
 ## 60-second quickstart
 
 ```bash
-ww_trainer-quickstart --wake-word "hey jarvis" --output-dir ./hey_jarvis
+ww_trainer-quickstart --wake-word "hey toaster" --output-dir ./hey_toaster
 ```
 
 Or in Python:
@@ -106,8 +108,17 @@ print(result.best_onnx_path, result.metrics)
 ```
 
 Output: `best_f1_featurizer.onnx` + `best_f1.onnx` under
-`./hey_jarvis/model/`. Load both with `OnnxWakeWordInferencer` —
-[`docs/guides/inference.md`](docs/guides/inference.md).
+`./hey_toaster/model/`. Load both with `OnnxWakeWordInferencer` —
+[`docs/guides/inference.md`](docs/guides/inference.md). Input audio is
+16 kHz mono. `OnnxWakeWordInferencer` does not resample, and
+`ww_trainer-infer` resamples only when `soundfile` is missing, so pass
+16 kHz mono.
+
+`ww_trainer-benchmark` measures extractor and model latency, real-time
+factor and PyTorch-versus-ONNX numerical parity on dummy audio. It does not
+measure detection quality (no recall, false-accept rate or F1), so it says
+nothing about whether a trained model works; see
+[`docs/guides/evaluation.md`](docs/guides/evaluation.md).
 
 ## Documentation
 
