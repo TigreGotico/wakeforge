@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2a1](https://github.com/TigreGotico/wakeforge/tree/0.11.2a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.1a1...0.11.2a1)
+
+**Merged pull requests:**
+
+- fix\(cli\): --aug-prob reaches the training loop, and --aug-warmup-epochs is exposed [\#84](https://github.com/TigreGotico/wakeforge/pull/84) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.11.1a1](https://github.com/TigreGotico/wakeforge/tree/0.11.1a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a3...0.11.1a1)
