@@ -16,6 +16,51 @@ from ww_trainer.tiers import get_tier, list_tiers
 from ww_trainer.trainer import WakeWordTrainer
 
 
+MAX_MISSING_FRACTION = 0.05
+
+
+def _load_rows(csv_path: str, flag: str, allow_missing: bool) -> List[Tuple[str, str]]:
+    """Read ``path,label`` rows, keeping those whose audio file exists.
+
+    Relative paths resolve against one base per CSV: its own directory when any
+    of them exists there, otherwise the working directory. Missing files are
+    counted and reported; losing more than 5% of the rows (or all of them) is an
+    error unless ``allow_missing`` is set.
+    """
+    csv_dir = Path(csv_path).parent
+    entries: List[Tuple[str, str]] = []
+    with open(csv_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                path, label = line.strip().split(",", 1)
+                entries.append((path, label))
+    relative = [p for p, _ in entries if not os.path.isabs(p)]
+    beside_csv = any((csv_dir / p).is_file() for p in relative)
+    base = csv_dir if beside_csv else Path()
+    rows: List[Tuple[str, str]] = []
+    missing: List[str] = []
+    for path, label in entries:
+        resolved = Path(path) if os.path.isabs(path) else base / path
+        if resolved.is_file():
+            rows.append((str(resolved), label))
+        else:
+            missing.append(str(resolved))
+    total = len(entries)
+    if missing:
+        examples = ", ".join(missing[:5])
+        message = (f"{flag} {csv_path}: {len(missing)} of {total} audio files not found "
+                   f"(e.g. {examples})")
+        if beside_csv:
+            elsewhere = sum(1 for p in relative if not (csv_dir / p).is_file() and Path(p).is_file())
+            if elsewhere:
+                message += (f"; {elsewhere} of them exist relative to the working directory, "
+                            "but this CSV's paths are resolved beside the CSV")
+        if not allow_missing and (not rows or len(missing) / total > MAX_MISSING_FRACTION):
+            raise click.ClickException(f"{message}. Fix the paths or pass --allow-missing.")
+        click.secho(f"Warning: {message}; skipping them.", fg="yellow", err=True)
+    return rows
+
+
 @click.command(help="""
 Train a wake-word detection model using the WakeWordTrainer.
 
@@ -39,6 +84,9 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
               help="Optional CSV with test data (same format). If not provided, dataset is split.")
 @click.option("--split", default=0.8, type=float,
               help="Train/test split ratio if --test-metadata is not provided (default: 0.8).")
+@click.option("--allow-missing", is_flag=True, default=False,
+              help="Train even when more than 5%% of the rows in a metadata CSV name audio "
+                   "files that do not exist.")
 # -------------------------- Training --------------------------
 @click.option("--epochs", default=50, type=int, help="Number of training epochs.")
 @click.option("--batch-size", default=16, type=int, help="Mini-batch size.")
@@ -327,18 +375,14 @@ def train(**opts: dict) -> None:
     seed = opts.pop("seed", 42)
     set_seed(seed)
 
-    with open(metadata, "r", encoding="utf-8") as f:
-        entries: List[Tuple[str, str]] = [tuple(line.strip().split(",", 1))
-                                          for line in f if line.strip()]
-    # Filter to existing files *before* splitting so missing files don't skew
-    # the train/test ratio away from --split.
-    entries = [e for e in entries if os.path.isfile(e[0])]
+    allow_missing = opts.pop("allow_missing", False)
+    # Missing files are dropped *before* splitting so they don't skew the
+    # train/test ratio away from --split.
+    entries = _load_rows(metadata, "--metadata", allow_missing)
     random.shuffle(entries)
 
     if test_metadata:
-        with open(test_metadata, "r", encoding="utf-8") as f:
-            test_data = [tuple(line.strip().split(",", 1)) for line in f if line.strip()]
-        test_data = [f for f in test_data if os.path.isfile(f[0])]
+        test_data = _load_rows(test_metadata, "--test-metadata", allow_missing)
         train_data = entries
     else:
         split_idx = int(len(entries) * opts["split"])
