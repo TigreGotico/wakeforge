@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0a1](https://github.com/TigreGotico/wakeforge/tree/0.12.0a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.2a2...0.12.0a1)
+
+**Merged pull requests:**
+
+- feat\(augment\): device response augmentation \(microphone band, colour, level, compression, clipping, self-noise\) [\#82](https://github.com/TigreGotico/wakeforge/pull/82) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.11.2a2](https://github.com/TigreGotico/wakeforge/tree/0.11.2a2) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.2a1...0.11.2a2)
