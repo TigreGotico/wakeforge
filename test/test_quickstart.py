@@ -119,6 +119,48 @@ class TestMaxNegativeReachesDatagen:
         assert seen["max_negative"] == 20
 
 
+class TestQuickstartCapsNegativesByDefault:
+    """The documented smoke run must not download whole negative corpora."""
+
+    def test_default_cap_is_the_positive_count_and_zero_is_uncapped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import ww_trainer.datagen as datagen_mod
+        import ww_trainer.quickstart as qs
+
+        seen: dict = {}
+
+        def fake_pipeline(datagen_cfg):
+            seen["max_negative"] = datagen_cfg.max_negative
+            raise RuntimeError("stop after config")
+
+        monkeypatch.setattr(datagen_mod, "run_datagen_pipeline", fake_pipeline)
+        cfg = QuickstartConfig(wake_word="hey_x", output_dir=tmp_path, n_positive=200)
+        with pytest.raises(RuntimeError, match="stop after config"):
+            qs._run_or_load_datagen(cfg)
+        assert seen["max_negative"] == 200
+        cfg = QuickstartConfig(wake_word="hey_x", output_dir=tmp_path, max_negative=0)
+        with pytest.raises(RuntimeError, match="stop after config"):
+            qs._run_or_load_datagen(cfg)
+        assert seen["max_negative"] is None
+
+    def test_cli_leaves_the_cap_to_the_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from click.testing import CliRunner
+        import ww_trainer.quickstart as qs
+
+        seen: list = []
+
+        def fake_train(**kwargs):
+            seen.append(kwargs["max_negative"])
+            raise RuntimeError("stop")
+
+        monkeypatch.setattr(qs, "train_from_wakeword", fake_train)
+        for extra in ([], ["--max-negative", "0"]):
+            monkeypatch.setattr("sys.argv", ["ww_trainer-quickstart", "--wake-word", "hey x",
+                                             "--output-dir", str(tmp_path), *extra])
+            with pytest.raises(RuntimeError, match="stop"):
+                qs.cli_main()
+        assert seen == [None, 0]
+
+
 class TestReadCsv:
     """_read_csv parses path,label rows correctly."""
 

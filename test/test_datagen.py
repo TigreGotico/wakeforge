@@ -435,8 +435,8 @@ class TestFolderReposBypassTheDatasetsBuilder:
         monkeypatch.setitem(sys.modules, "torchcodec", None)
         monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: ["a.wav", "b.wav"])
         import huggingface_hub
-        monkeypatch.setattr(huggingface_hub, "hf_hub_download",
-                            lambda repo, name, repo_type=None: str(src / name))
+        monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                            lambda repo, repo_type=None, allow_patterns=None, max_workers=None: str(src))
         monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
 
         files = datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=1, sr=16000)
@@ -536,16 +536,18 @@ def _install_folder_repos(monkeypatch, tmp_path: Path, n_files: int = 30) -> Non
     def list_files(repo):
         return [f"clips/{i:03d}.wav" for i in range(n_files)]
 
-    def hub_download(repo, name, repo_type=None):
-        path = src / repo.replace("/", "__") / name
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _make_wav(path, duration=0.3)
-        return str(path)
+    def snapshot(repo, repo_type=None, allow_patterns=None, max_workers=None):
+        root = src / repo.replace("/", "__")
+        for name in allow_patterns:
+            path = root / name
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _make_wav(path, duration=0.3)
+        return str(root)
 
     monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
     monkeypatch.setattr(datagen, "_list_repo_audio_files", list_files)
-    monkeypatch.setattr(huggingface_hub, "hf_hub_download", hub_download)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
 
 
 def _pipeline_config(out: Path, seed: int = 42) -> DatagenConfig:
@@ -620,6 +622,143 @@ class TestUndecodableItemsAreSkipped:
 
         assert len(files) == 1
         assert files[0].exists()
+
+
+class TestCappedLoadStreamsAndStopsAtTheCap:
+    def _run(self, tmp_path, monkeypatch, max_samples):
+        import io
+        import sys
+        import soundfile as sf
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
+        buf = io.BytesIO()
+        sf.write(buf, np.zeros(16000, dtype=np.float32), 16000, format="WAV")
+        row = {"audio": {"bytes": buf.getvalue(), "path": "clip.wav"}}
+        calls: list = []
+        pulled = [0]
+
+        class FakeDataset:
+            features = {"audio": hf_datasets.Audio()}
+
+            def cast_column(self, col, feature):
+                return self
+
+            def __iter__(self):
+                for _ in range(50):
+                    pulled[0] += 1
+                    yield row
+
+        def fake_load(dataset_id, **kwargs):
+            calls.append(kwargs)
+            return FakeDataset()
+
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: [])
+        monkeypatch.setattr(hf_datasets, "load_dataset", fake_load)
+        files = datagen.download_hf_audio_dataset(
+            "org/parquet", tmp_path / "out", max_samples=max_samples, sr=16000)
+        return files, calls, pulled[0]
+
+    def test_a_capped_load_streams_and_reads_no_more_than_the_cap(self, tmp_path, monkeypatch) -> None:
+        files, calls, pulled = self._run(tmp_path, monkeypatch, 3)
+
+        assert calls == [{"split": "train", "streaming": True}]
+        assert len(files) == 3
+        assert pulled == 3
+
+    def test_an_uncapped_load_still_uses_the_cache_first(self, tmp_path, monkeypatch) -> None:
+        _, calls, _ = self._run(tmp_path, monkeypatch, None)
+
+        assert calls[0]["streaming"] is False
+
+
+class TestFolderRepoFetchesOnlyTheDrawnFilesInOneCall:
+    def test_a_capped_folder_repo_makes_one_batched_request_for_n_files(self, tmp_path, monkeypatch) -> None:
+        import huggingface_hub
+
+        listing = [f"clips/{i:05d}.wav" for i in range(10000)]
+        requests: list = []
+        singles: list = []
+
+        def snapshot(repo, repo_type=None, allow_patterns=None, max_workers=None):
+            requests.append(list(allow_patterns))
+            root = tmp_path / "hub"
+            for name in allow_patterns:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _make_wav(path, duration=0.2)
+            return str(root)
+
+        monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
+        monkeypatch.setattr(datagen, "_list_repo_audio_files", lambda repo: listing)
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                            lambda *a, **k: singles.append(a) or "")
+
+        files = datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=7, sr=16000)
+
+        assert len(files) == 7
+        assert len(requests) == 1 and len(requests[0]) == 7
+        assert set(requests[0]) <= set(listing)
+        assert singles == []
+
+
+class TestSnapshotPatternsAreLiteral:
+    def test_special_characters_in_names_match_only_the_drawn_files(self, tmp_path, monkeypatch) -> None:
+        import huggingface_hub
+        from huggingface_hub.utils import filter_repo_objects
+
+        drawn_names = ["a[1].wav", "b*.wav", "c?.wav", "d e.wav"]
+        decoys = ["a1.wav", "bxyz.wav", "cz.wav", "d  e.wav", "other.wav"]
+        listing = sorted(drawn_names + decoys)
+        patterns: list = []
+
+        def snapshot(repo, repo_type=None, allow_patterns=None, max_workers=None):
+            patterns.extend(allow_patterns)
+            root = tmp_path / "hub"
+            root.mkdir(exist_ok=True)
+            for name in listing:
+                _make_wav(root / name, duration=0.2)
+            return str(root)
+
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+
+        (tmp_path / "out").mkdir()
+        datagen._download_audio_files("org/folder", drawn_names, tmp_path / "out", 16000)
+
+        matched = list(filter_repo_objects(listing, allow_patterns=patterns))
+        assert sorted(matched) == sorted(drawn_names)
+
+    def test_a_failed_snapshot_raises_instead_of_yielding_no_clips(self, tmp_path, monkeypatch) -> None:
+        import huggingface_hub
+
+        def snapshot(*a, **k):
+            raise OSError("network down")
+
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+
+        with pytest.raises(RuntimeError, match="org/folder.*network down"):
+            datagen._download_audio_files("org/folder", ["a.wav"], tmp_path / "out", 16000)
+
+
+class TestUnreachableRepoRaises:
+    def test_a_failed_listing_and_a_failed_load_raise_naming_both(self, tmp_path, monkeypatch) -> None:
+        import huggingface_hub
+
+        hf_datasets = _fake_datasets_module()
+        monkeypatch.setitem(sys.modules, "datasets", hf_datasets)
+
+        def broken_listing(self, *a, **k):
+            raise OSError("listing refused")
+
+        def broken_load(*a, **k):
+            raise ValueError("load refused")
+
+        monkeypatch.setattr(huggingface_hub.HfApi, "list_repo_files", broken_listing)
+        monkeypatch.setattr(hf_datasets, "load_dataset", broken_load)
+
+        with pytest.raises(RuntimeError, match="org/folder.*listing refused.*load refused"):
+            datagen.download_hf_audio_dataset("org/folder", tmp_path / "out", max_samples=5)
 
 
 class TestNotebookForwardsMaxNegative:

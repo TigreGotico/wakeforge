@@ -22,17 +22,16 @@ laptop; GPU times a mid-range consumer card (RTX 3060 or similar).
 
 Sources are declared in `NEGATIVE_DATASETS` —
 [`ww_trainer/datagen.py:47-73`](https://github.com/TigreGotico/wakeforge/blob/dev/ww_trainer/datagen.py).
-"Upstream" is the full repo size on HF (what ends up in the HF cache if
+The default cap is `--max-negative`, which defaults to `--n-positive` clips per negative dataset (`0` takes every clip). The sample is drawn from the repo's file list before download, and only the drawn files are fetched, in one batched call. "Upstream" is the full repo size on HF (what ends up in the HF cache if
 loaded non-streaming). "Local output" is what wakeforge writes under
 `<output-dir>/dataset/` after sampling and resampling to 16 kHz WAV.
 
 | Dataset | Role | Default cap | Upstream | Local output |
 |---|---|---|---|---|
-| [`TigreGotico/ESC-50`](https://huggingface.co/datasets/TigreGotico/ESC-50) | General negatives (env. sounds) | none (~2 000 clips) | 883 MB | ~200 MB |
-| [`TigreGotico/NAR`](https://huggingface.co/datasets/TigreGotico/NAR) | General negatives | none | 45 MB | ~30 MB |
-| [`agkphysics/AudioSet`](https://huggingface.co/datasets/agkphysics/AudioSet) | General negatives | **5 000 samples** | 2.4 TB total — streamed, only the 5 000 capped samples are kept | ~500 MB |
-| [`TigreGotico/not-wake-words-speech-en`](https://huggingface.co/datasets/TigreGotico/not-wake-words-speech-en) | Speech negatives (primary), also a voice-donor pool for VC | none | 320 MB | ~250 MB |
-| [`hf-internal-testing/librispeech_asr_demo`](https://huggingface.co/datasets/hf-internal-testing/librispeech_asr_demo) | Speech negatives | ~70 clips | 9 MB | ~7 MB |
+| [`TigreGotico/ESC-50`](https://huggingface.co/datasets/TigreGotico/ESC-50) | General negatives (env. sounds) | `--n-positive` (~2 000 clips upstream) | 883 MB | ~32 MB at 200 |
+| [`TigreGotico/NAR`](https://huggingface.co/datasets/TigreGotico/NAR) | General negatives | `--n-positive` | 45 MB | ~4 MB at 200 |
+| [`agkphysics/AudioSet`](https://huggingface.co/datasets/agkphysics/AudioSet) | General negatives | `--n-positive` (at most 5 000) | 2.4 TB total — streamed, only the capped samples are kept | ~62 MB at 200 |
+| [`TigreGotico/not-wake-words-speech-en`](https://huggingface.co/datasets/TigreGotico/not-wake-words-speech-en) | Speech negatives (primary), also a voice-donor pool for VC | `--n-positive` | 320 MB | ~7 MB at 200 |
 | [`TigreGotico/ambient_noises`](https://huggingface.co/datasets/TigreGotico/ambient_noises) | `bg_noise/` augmentation | none | 297 MB | ~250 MB |
 | [`TigreGotico/building_106_kitchen_3secs`](https://huggingface.co/datasets/TigreGotico/building_106_kitchen_3secs) | `bg_noise/` augmentation | none | 432 MB | ~400 MB |
 | [`TigreGotico/public_domain_sounds_3secs`](https://huggingface.co/datasets/TigreGotico/public_domain_sounds_3secs) | `bg_noise/` augmentation | none | 902 MB | ~850 MB |
@@ -220,6 +219,6 @@ In order of impact:
    reduces the positive footprint to a known number.
 2. `--no-augmentation-data` — drops bg_noise/music/RIR.
 3. `--reuse-dataset` — skip datagen on subsequent runs.
-4. `--n-positive 200` — fewer TTS calls and fewer mined negatives.
+4. `--n-positive 200` — fewer TTS calls. `--max-negative 200` — fewer mined negatives.
 5. `--tier esp32_nano` / `micro` — smallest models, no SSL featurizer.
 6. Skip `--vc-refs` — no VC engine download.
