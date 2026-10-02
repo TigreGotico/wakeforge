@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.0a2](https://github.com/TigreGotico/wakeforge/tree/0.11.0a2) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a1...0.11.0a2)
+
+**Merged pull requests:**
+
+- perf\(feature\_store\): float16 features and a parallel prefill of augmented variants [\#80](https://github.com/TigreGotico/wakeforge/pull/80) ([JarbasAl](https://github.com/JarbasAl))
+- perf\(augment\): FFT reverb and a bounded cache of decoded augmentation clips [\#79](https://github.com/TigreGotico/wakeforge/pull/79) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.11.0a1](https://github.com/TigreGotico/wakeforge/tree/0.11.0a1) (2026-10-01)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.10.0a1...0.11.0a1)
@@ -216,19 +225,19 @@
 
 ## [0.4.0a3](https://github.com/TigreGotico/wakeforge/tree/0.4.0a3) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a3)
 
 **Merged pull requests:**
 
 - docs: publish-ready overhaul + repo cleanup + CI fixes [\#11](https://github.com/TigreGotico/wakeforge/pull/11) ([JarbasAl](https://github.com/JarbasAl))
 
-## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
-
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a2...0.4.0a1)
-
 ## [0.4.0a2](https://github.com/TigreGotico/wakeforge/tree/0.4.0a2) (2026-05-13)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a2)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.4.0a1...0.4.0a2)
+
+## [0.4.0a1](https://github.com/TigreGotico/wakeforge/tree/0.4.0a1) (2026-05-13)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.3.0a1...0.4.0a1)
 
 **Merged pull requests:**
 
