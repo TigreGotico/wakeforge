@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0a1](https://github.com/TigreGotico/wakeforge/tree/0.14.0a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.13.0a1...0.14.0a1)
+
+**Merged pull requests:**
+
+- feat\(export\): ww\_trainer-export-plugin writes a head or an ensemble in the OVOS plugin's bundled-model format [\#85](https://github.com/TigreGotico/wakeforge/pull/85) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.13.0a1](https://github.com/TigreGotico/wakeforge/tree/0.13.0a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.12.0a1...0.13.0a1)
