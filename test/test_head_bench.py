@@ -232,6 +232,16 @@ def test_device_name_is_nonempty_for_cpu():
     assert hb.device_name("CPUExecutionProvider")
 
 
+def test_cpu_device_name_prefers_cpuinfo_model(tmp_path, monkeypatch):
+    info = tmp_path / "cpuinfo"
+    info.write_text("processor\t: 0\nmodel name\t: Example CPU 9000 @ 3.0GHz\n")
+    monkeypatch.setattr(hb, "CPUINFO", info)
+    monkeypatch.setattr(hb.platform, "processor", lambda: "x86_64")
+    assert hb.device_name("CPUExecutionProvider") == "Example CPU 9000 @ 3.0GHz"
+    info.unlink()
+    assert hb.device_name("CPUExecutionProvider") == "x86_64"
+
+
 def test_cosine_rejects_warmup_not_below_epochs():
     opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.1)
     for warmup in (5, 6):
