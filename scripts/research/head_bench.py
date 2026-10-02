@@ -1,7 +1,7 @@
 """Wake-word head bench on frozen featurizers: features computed once, many heads trained at once.
 
-    head_bench.py cache <featurizer.onnx> <cache_dir> [--metadata kws/train.csv --val kws/val.csv]
-    bench.py fit <cache_dir> <out_dir> [--heads gru,gru-h256,...] [--epochs 20]
+    head_bench.py cache <featurizer.onnx> <cache_dir> [--metadata kws/train.csv --val kws/val.csv] [--feature-store DIR]
+    bench.py fit <cache_dir> <out_dir> [--heads gru,gru-h256,...] [--epochs 20] [--lr-schedule cosine --warmup-epochs 2]
     bench.py export <out_dir> <head_name>        (ONNX head that kws_eval.py can score)
 
 ``cache`` runs the featurizer once over every 1.5 s training and validation window (the same windows
@@ -12,13 +12,19 @@ each epoch uses every positive and five times as many negatives, half the highes
 of the previous epoch (hard negatives) and half drawn at random; BCE; the kept checkpoint is the one with
 the highest calibration recall. Heads share the batch order, so they differ only in architecture.
 
+``--feature-store DIR`` keeps every window's features keyed by the featurizer file and the window's exact
+samples, so a later ``cache`` run featurizes only windows it has not seen: the negatives several words share,
+unchanged clips, and augmented copies, which are seeded by their source's content and copy index rather than
+by their position in the metadata. ``fit --lr-schedule cosine`` anneals the rate to lr/100 over the epochs
+after ``--warmup-epochs`` of linear warmup; the rate of every epoch is logged in fit.jsonl.
+
 Checkpoints are chosen on a calibration set that no evaluation touches, because the synthetic validation
 set is separable within a few epochs and its loss then keeps falling as the head over-fits: the
 validation positives mixed with LibriSpeech dev-other babble (three talkers) at 10 and 5 dB and with
 AudioSet noise at 5 dB, against one hour of dev-other speech and dev-other babble cut into windows at a
 0.5 s hop. Calibration recall is the share of those positives above the highest-scoring negative window.
 """
-import argparse, csv, json, random, time
+import argparse, csv, hashlib, json, os, random, time
 from pathlib import Path
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 
@@ -92,7 +98,11 @@ DEVICE = bool(int(__import__("os").environ.get("WF_DEVICE_AUG", "0")))
 def augmenter(seed=0, pool=400):
     """Head-time augmentation of a 1.5 s window from training-only pools (never the evaluation's): gain,
     speed, room reverberation, and AudioSet noise or LibriSpeech train-clean-100 babble at 0-20 dB. The
-    pools are ``pool`` crops read once into memory."""
+    pools are ``pool`` crops read once into memory.
+
+    ``aug(x, key)`` draws every random choice from a generator seeded by ``key`` (and ``seed``), so the same
+    key gives the same augmented window in every run: ``cache`` keys a copy by its source file's content hash
+    and the copy's index, which is what lets a feature store reuse augmented windows across runs."""
     import glob, soundfile as sf
     rng = random.Random(seed)
 
@@ -113,7 +123,8 @@ def augmenter(seed=0, pool=400):
     talk = crops(sorted(glob.glob(f"{TALK}/**/*.flac", recursive=True)), N, pool)
     rirs = [r / (np.abs(r).max() + 1e-9) for r in crops(sorted(glob.glob("data/rir/**/*.wav", recursive=True)), 8000, 100)]
 
-    def aug(x):
+    def aug(x, key):
+        rng = random.Random(int.from_bytes(hashlib.sha1(f"{seed}:{key}".encode()).digest()[:8], "big"))
         y = x
         if rng.random() < 0.5:  # move the word within the window: real audio has it anywhere
             k = rng.randint(-SR * 2 // 5, SR * 2 // 5)
@@ -133,11 +144,11 @@ def augmenter(seed=0, pool=400):
             pc, pn = np.mean(y ** 2), max(np.mean(v ** 2), 1e-10)
             y = y + v * np.sqrt(pc / (pn * 10 ** (snr / 10)))
         if DEVICE:
-            return device(y)
+            return device(y, rng)
         y = y * 10 ** (rng.uniform(-6, 6) / 20)
         return (y / max(1.0, np.abs(y).max())).astype(np.float32)
 
-    def device(y):
+    def device(y, rng):
         # what a real device adds: speech after the word, the microphone's band and colour, level-dependent
         # gain and compression, clipping when the input is too hot, and the microphone's own noise floor
         if talk and rng.random() < 0.3:
@@ -166,37 +177,95 @@ def augmenter(seed=0, pool=400):
     return aug
 
 
+def file_sha1(path):
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()
+
+
+class FeatureStore:
+    """Featurizer outputs keyed by content: sha1 of the featurizer file's sha1 and the exact float32 window.
+
+    A window is featurized once per featurizer file in any run that shares the store; the values are the
+    float16 arrays ``cache`` writes, one ``.npy`` per window under a directory named by the key's first two
+    hex characters."""
+
+    def __init__(self, root, featurizer):
+        self.root, self.model = Path(root), file_sha1(featurizer)
+
+    def key(self, wav):
+        return hashlib.sha1(self.model.encode() + np.ascontiguousarray(wav, np.float32).tobytes()).hexdigest()
+
+    def path(self, key):
+        return self.root / key[:2] / f"{key}.npy"
+
+    def get(self, key):
+        p = self.path(key)
+        return np.load(p) if p.exists() else None
+
+    def put(self, key, feats):
+        p = self.path(key); p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f"{p.stem}.{os.getpid()}.tmp.npy")
+        np.save(tmp, feats.astype(np.float16)); tmp.replace(p)
+
+
+CALIB_SECONDS = 3600
+
+
 def cache(a):
     import onnxruntime as ort
     out = Path(a.cache_dir); out.mkdir(parents=True, exist_ok=True)
     so = ort.SessionOptions(); so.intra_op_num_threads = 4
     sess = ort.InferenceSession(a.featurizer, so, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     name = sess.get_inputs()[0].name
+    store = FeatureStore(a.feature_store, a.featurizer) if a.feature_store else None
+
+    def featurize(wins):
+        f = sess.run(None, {name: wins})[0]
+        if f.shape[0] != len(wins):
+            f = np.concatenate([sess.run(None, {name: w[None]})[0] for w in wins])
+        return f.astype(np.float16)
+
     vf, vl = read_meta(a.val)
-    cpos, cneg = calibration_windows(vf, vl)
+    cpos, cneg = calibration_windows(vf, vl, seconds=CALIB_SECONDS)
     splits = [("train", *read_meta(a.metadata), None), ("val", vf, vl, None),
               ("calib", [None] * (len(cpos) + len(cneg)), np.r_[np.ones(len(cpos)), np.zeros(len(cneg))].astype(np.int8),
                np.concatenate([cpos, cneg]))]
     if a.pos_aug:
-        # every training positive also as --pos-aug augmented copies, and a quarter of the negatives once
+        # every training positive also as --pos-aug augmented copies, and a quarter of the negatives once;
+        # a copy is keyed by its source's content and how many copies of that content came before it
         aug = augmenter()
         tf, tl = read_meta(a.metadata)
         extra = [(f, 1) for f, l in zip(tf, tl) if l == 1 for _ in range(a.pos_aug)]
         extra += [(f, 0) for f, l in zip(tf, tl) if l == 0][::4]
-        splits[0] = ("train", list(tf) + [("aug", f) for f, _ in extra], np.r_[tl, [l for _, l in extra]].astype(np.int8), None)
+        digests, seen, keyed = {}, {}, []
+        for f, _ in extra:
+            if f not in digests:
+                digests[f] = file_sha1(f)
+            h = digests[f]
+            keyed.append(("aug", f, f"{h}:{seen.get(h, 0)}")); seen[h] = seen.get(h, 0) + 1
+        splits[0] = ("train", list(tf) + keyed, np.r_[tl, [l for _, l in extra]].astype(np.int8), None)
     for split, files, labels, audio in splits:
-        feats = None
+        feats, hits, misses = None, 0, 0
         for i in range(0, len(files), 64):
             wins = audio[i:i + 64] if audio is not None else np.stack(
-                [aug(load_window(f[1])) if isinstance(f, tuple) else load_window(f) for f in files[i:i + 64]])
-            f = sess.run(None, {name: wins})[0]
-            if f.shape[0] != len(wins):
-                f = np.concatenate([sess.run(None, {name: w[None]})[0] for w in wins])
+                [aug(load_window(f[1]), f[2]) if isinstance(f, tuple) else load_window(f) for f in files[i:i + 64]])
+            if store is None:
+                f = featurize(wins)
+            else:
+                keys = [store.key(w) for w in wins]
+                got = [store.get(k) for k in keys]
+                todo = [j for j, g in enumerate(got) if g is None]
+                if todo:
+                    for j, v in zip(todo, featurize(wins[todo])):
+                        store.put(keys[j], v); got[j] = v
+                hits += len(wins) - len(todo); misses += len(todo)
+                f = np.stack(got)
             if feats is None:
                 feats = np.lib.format.open_memmap(out / f"{split}.npy", "w+", np.float16, (len(files), *f.shape[1:]))
-            feats[i:i + len(wins)] = f.astype(np.float16)
+            feats[i:i + len(wins)] = f
         feats.flush(); np.save(out / f"{split}_labels.npy", labels)
         print(split, feats.shape, int(labels.sum()), "positives", flush=True)
+        if store is not None:
+            print(f"{split} feature store: {hits} hits, {misses} featurized", flush=True)
     (out / "meta.json").write_text(json.dumps({"featurizer": a.featurizer, "metadata": a.metadata, "val": a.val}) + "\n")
 
 
@@ -244,6 +313,24 @@ def make_head(spec, dim):
     return GRUHead(dim, bidirectional=spec.startswith("bigru"), **kw)
 
 
+def lr_scheduler(opt, schedule, epochs, warmup):
+    """None for a constant rate; for ``cosine``, a linear warmup to the full rate over ``warmup`` epochs (epoch e
+    of the warmup at e/warmup of it), then cosine annealing over the remaining epochs down towards lr/100.
+    Stepped once per epoch, after it."""
+    if schedule == "constant":
+        if warmup:
+            raise SystemExit("--warmup-epochs applies to --lr-schedule cosine")
+        return None
+    if not 0 <= warmup < epochs:
+        raise SystemExit(f"--warmup-epochs {warmup} must leave at least one of the {epochs} epochs")
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+    lr = opt.param_groups[0]["lr"]
+    if not warmup:
+        return CosineAnnealingLR(opt, T_max=epochs, eta_min=lr / 100)
+    return SequentialLR(opt, [LinearLR(opt, start_factor=1 / warmup, end_factor=1.0, total_iters=warmup - 1),
+                              CosineAnnealingLR(opt, T_max=epochs - warmup, eta_min=lr / 100)], milestones=[warmup])
+
+
 def fit(a):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     c = Path(a.cache_dir)
@@ -261,6 +348,7 @@ def fit(a):
     specs = a.heads.split(",")
     heads = {s: make_head(s, X.shape[-1]).to(dev) for s in specs}
     opts = {s: torch.optim.Adam(h.parameters(), lr=a.lr) for s, h in heads.items()}
+    scheds = [lr_scheduler(o, a.lr_schedule, a.epochs, a.warmup_epochs) for o in opts.values()]
     out = Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
     best = {s: (-1.0, 0.0) for s in specs}
     # five negatives per positive, half of them hard; capped by the negatives there are
@@ -278,7 +366,7 @@ def fit(a):
             for s, h in heads.items():
                 loss = F.binary_cross_entropy_with_logits(h(xb), yb)
                 opts[s].zero_grad(set_to_none=True); loss.backward(); opts[s].step()
-        rec = {"epoch": ep, "seconds": round(time.time() - t0, 1)}
+        rec = {"epoch": ep, "seconds": round(time.time() - t0, 1), "lr": opts[specs[0]].param_groups[0]["lr"]}
         with torch.no_grad():
             for h in heads.values(): h.eval()
             # hard negatives for the next epoch: the negatives the first head scores highest
@@ -296,6 +384,9 @@ def fit(a):
                 if (cal, -vl) > best[s]:
                     best[s] = (cal, -vl); torch.save({"spec": s, "dim": X.shape[-1], "state": h.state_dict(), "epoch": ep, "calib_recall": cal}, out / f"{s}.pt")
         log.write(json.dumps(rec) + "\n"); log.flush(); print(json.dumps(rec), flush=True)
+        for sch in scheds:
+            if sch is not None:
+                sch.step()
 
 
 def export(a):
@@ -315,12 +406,16 @@ def main():
     p.add_argument("--path-map", action="append", default=[], help="old=new prefix rewrite for metadata paths")
     p.add_argument("--aug-talk", default="data/LibriSpeech/train-clean-100", help="speech whose talkers become head-time babble")
     p.add_argument("--calib-speech", default="data/LibriSpeech/dev-other", help="LibriSpeech split used for calibration speech and babble")
+    p.add_argument("--feature-store", default=None, help="directory of featurizer outputs keyed by window content, reused across runs")
     p = sub.add_parser("fit"); p.add_argument("cache_dir"); p.add_argument("out_dir")
     p.add_argument("--heads", default="gru"); p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch-size", type=int, default=64); p.add_argument("--lr", type=float, default=5e-4); p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-pos", type=int, default=0, help="train on this many positive clips, chosen by clip (0: all)")
     p.add_argument("--pos-aug", type=int, default=0, help="augmented copies per positive the cache was built with (needed by --max-pos)")
     p.add_argument("--subset-seed", type=int, default=0, help="which clips --max-pos keeps")
+    p.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                   help="constant: --lr every epoch; cosine: cosine annealing to lr/100 after the warmup")
+    p.add_argument("--warmup-epochs", type=int, default=0, help="epochs of linear warmup before the cosine schedule")
     p = sub.add_parser("export"); p.add_argument("out_dir"); p.add_argument("head")
     a = ap.parse_args()
     global CALIB_SPEECH, TALK
