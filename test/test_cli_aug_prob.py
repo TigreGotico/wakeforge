@@ -27,6 +27,8 @@ def _invoke(monkeypatch, tmp_path, extra, finish=False):
 
     monkeypatch.setattr(cli, "WakeWordTrainer", FakeTrainer)
     monkeypatch.setattr("ww_trainer.feature_store.store_for", lambda *a, **k: None)
+    for i in range(4):
+        (tmp_path / f"c{i}.wav").write_bytes(b"x")
     meta = tmp_path / "m.csv"
     meta.write_text("".join(f"{tmp_path / f'c{i}.wav'},{i % 2}\n" for i in range(4)))
     out = tmp_path / "out"
