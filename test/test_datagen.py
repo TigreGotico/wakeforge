@@ -31,6 +31,12 @@ from ww_trainer.datagen import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_parquet_probe(monkeypatch):
+    """Keep these tests off the Hub: no repo here is probed for Parquet shards."""
+    monkeypatch.setattr(datagen, "_list_parquet_configs", lambda repo: [])
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -549,6 +555,9 @@ def _install_folder_repos(monkeypatch, tmp_path: Path, n_files: int = 30) -> Non
     monkeypatch.setitem(sys.modules, "datasets", _fake_datasets_module())
     monkeypatch.setattr(datagen, "_list_repo_audio_files", list_files)
     monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    monkeypatch.setattr(datagen, "NEGATIVE_DATASETS", {
+        k: [datagen.split_source(v)[0] for v in vs] for k, vs in datagen.NEGATIVE_DATASETS.items()
+    })
 
 
 def _pipeline_config(out: Path, seed: int = 42) -> DatagenConfig:
