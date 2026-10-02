@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.1a1](https://github.com/TigreGotico/wakeforge/tree/0.16.1a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.0a1...0.16.1a1)
+
+**Merged pull requests:**
+
+- fix\(datagen\): fixed-length windows for every example and near-miss negatives from a phrase file [\#40](https://github.com/TigreGotico/wakeforge/pull/40) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.16.0a1](https://github.com/TigreGotico/wakeforge/tree/0.16.0a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.1a2...0.16.0a1)
