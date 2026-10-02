@@ -1,8 +1,21 @@
 """Wake-word head bench on frozen featurizers: features computed once, many heads trained at once.
 
     head_bench.py cache <featurizer.onnx> <cache_dir> [--metadata kws/train.csv --val kws/val.csv] [--feature-store DIR]
-    bench.py fit <cache_dir> <out_dir> [--heads gru,gru-h256,...] [--epochs 20] [--lr-schedule cosine --warmup-epochs 2]
-    bench.py export <out_dir> <head_name>        (ONNX head that kws_eval.py can score)
+    bench.py fit <cache_dir> <out_dir> [--heads gru,gru-h256,kwt:d_model=32,...] [--loss bce] [--epochs 20] [--lr-schedule cosine --warmup-epochs 2]
+    bench.py export <out_dir> <head_name> [--allow-fixed-frames]        (ONNX head that kws_eval.py can score)
+
+``cache`` takes the featurizer as an ONNX path or as a pretrained name (``wakehubert-tiny``, ``wakewav-mel-tcn-int8``, ...);
+a path that exists wins. The cache's meta.json records the resolved file and its sha1.
+
+``fit --heads`` takes the GRU specs (``gru``, ``gru-h256``, ``bigru-l2``) and any ``ww_trainer.factory.HEAD_REGISTRY`` name,
+optionally with keyword overrides, ``kwt:d_model=32,n_layers=2``. ``ocsvm`` and ``phonmatch`` cannot give one logit per
+window from features alone and are refused. ``--loss`` is ``bce``, ``focal`` or ``label_smoothing_bce``, or a weighted sum such as
+``bce+0.5*focal``. The logged validation loss is BCE whichever loss trains, and the kept checkpoint is the one with the highest
+calibration recall, then the lowest validation BCE. Training-loss values do not compare across losses: focal (alpha 0.9)
+weights positives about nine to one and its value is a fifth of BCE's on random logits and a seventeenth at zero logits with one positive in six, so a ``0.5*focal`` term is small beside ``bce``.
+
+``export`` refuses a head whose graph only runs at the cache's frame count (kwt, conformer) unless ``--allow-fixed-frames``
+is given; the ONNX file then carries ``fixed_frames`` in its metadata.
 
 ``cache`` runs the featurizer once over every 1.5 s training and validation window (the same windows
 ww_trainer-train reads) and stores float16 features; every training positive is also stored as
@@ -24,7 +37,7 @@ validation positives mixed with LibriSpeech dev-other babble (three talkers) at 
 AudioSet noise at 5 dB, against one hour of dev-other speech and dev-other babble cut into windows at a
 0.5 s hop. Calibration recall is the share of those positives above the highest-scoring negative window.
 """
-import argparse, csv, hashlib, json, math, os, platform, random, subprocess, time
+import argparse, ast, csv, hashlib, json, math, os, platform, random, re, subprocess, time
 from pathlib import Path
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 
@@ -229,14 +242,24 @@ class FeatureStore:
 CALIB_SECONDS = 3600
 
 
+def resolve_featurizer(arg, revision=None):
+    """(onnx path, pretrained name or None, revision or None): a path that exists wins over a pretrained name."""
+    if os.path.exists(arg):
+        return arg, None, None
+    from ww_trainer.pretrained import resolve_pretrained
+    path, config = resolve_pretrained(arg, revision)
+    return path, arg, config["_revision"]
+
+
 def cache(a):
     import onnxruntime as ort
     out = Path(a.cache_dir); out.mkdir(parents=True, exist_ok=True)
+    onnx_path, fname, frev = resolve_featurizer(a.featurizer, a.featurizer_revision)
     so = ort.SessionOptions(); so.intra_op_num_threads = 4
-    sess = ort.InferenceSession(a.featurizer, so, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    sess = ort.InferenceSession(onnx_path, so, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     name = sess.get_inputs()[0].name
     provider = sess.get_providers()[0]
-    store = FeatureStore(a.feature_store, a.featurizer, provider, device_name(provider)) if a.feature_store else None
+    store = FeatureStore(a.feature_store, onnx_path, provider, device_name(provider)) if a.feature_store else None
 
     def featurize(wins):
         f = sess.run(None, {name: wins})[0]
@@ -286,7 +309,8 @@ def cache(a):
         print(split, feats.shape, int(labels.sum()), "positives", flush=True)
         if store is not None:
             print(f"{split} feature store: {hits} hits, {misses} featurized", flush=True)
-    (out / "meta.json").write_text(json.dumps({"featurizer": a.featurizer, "metadata": a.metadata, "val": a.val}) + "\n")
+    (out / "meta.json").write_text(json.dumps({"featurizer": onnx_path, "featurizer_name": fname, "featurizer_revision": frev,
+                                                  "featurizer_sha1": file_sha1(onnx_path), "metadata": a.metadata, "val": a.val}) + "\n")
 
 
 
@@ -333,6 +357,92 @@ def make_head(spec, dim):
     return GRUHead(dim, bidirectional=spec.startswith("bigru"), **kw)
 
 
+LEGACY_GRU = re.compile(r"(bi)?gru(-[hl]\d+)*$")
+REFUSED_HEADS = {"ocsvm": "a one-class kernel model fitted on embeddings, with no gradient path from a logit",
+                 "phonmatch": "its forward pass needs the keyword's phoneme ids besides the features"}
+LOSSES = {"bce", "focal", "label_smoothing_bce"}
+
+
+def split_specs(text):
+    """Head specs of a --heads value: commas separate heads, except inside brackets and between the
+    ``key=value`` overrides of one ``name:`` spec."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "," and depth == 0:
+            parts.append(cur); cur = ""
+            continue
+        depth += (ch in "[(") - (ch in "])")
+        cur += ch
+    parts.append(cur)
+    specs = []
+    for p in parts:
+        if specs and "=" in p and ":" not in p.split("=")[0] and ":" in specs[-1]:
+            specs[-1] += "," + p
+        else:
+            specs.append(p)
+    return specs
+
+
+def head_names():
+    from ww_trainer.factory import HEAD_REGISTRY
+    return sorted(set(HEAD_REGISTRY) - set(REFUSED_HEADS))
+
+
+def build_head(spec, dim, frames):
+    """A GRU spec builds the bench's own GRUHead; ``name`` or ``name:key=value,...`` builds the factory head of
+    that name at feature size ``dim``. The head is run once on a [2, frames, dim] input, so one that cannot
+    produce one logit per window of the cache's length fails here."""
+    if LEGACY_GRU.match(spec):
+        return make_head(spec, dim)
+    from ww_trainer.factory import HEAD_REGISTRY
+    name, _, opts = spec.partition(":")
+    if name in REFUSED_HEADS:
+        raise SystemExit(f"head {name!r} is not supported: {REFUSED_HEADS[name]}. Supported: gru-style specs and {', '.join(head_names())}")
+    if name not in HEAD_REGISTRY:
+        raise SystemExit(f"unknown head {spec!r}. Supported: gru, gru-h256, bigru-l2 style specs and {', '.join(head_names())}")
+    cls, valid = HEAD_REGISTRY[name]
+    kw = {}
+    for item in split_specs_items(opts):
+        k, eq, v = item.partition("=")
+        if not eq or k not in valid:
+            raise SystemExit(f"head {name!r}: bad override {item!r}; keys are {', '.join(sorted(valid))}")
+        try:
+            kw[k] = ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            kw[k] = v
+    head = cls(device="cpu", sample_rate=SR, input_size=dim, **kw)
+    head.eval()
+    with torch.no_grad():
+        out = head(torch.zeros(2, frames, dim))
+    if tuple(out.shape) != (2,):
+        raise SystemExit(f"head {spec!r} gives output of shape {tuple(out.shape)} on [2, {frames}, {dim}], not one logit per window")
+    return head
+
+
+def split_specs_items(opts):
+    return [i for i in split_specs(opts) if i] if opts else []
+
+
+def stem(spec):
+    return spec.replace(":", ".").replace(",", "+")
+
+
+def make_loss(text):
+    """``bce``, ``focal``, ``label_smoothing_bce`` or a sum of them, each optionally ``weight*name``."""
+    parts = []
+    for term in text.split("+"):
+        w, _, name = term.rpartition("*")
+        if name not in LOSSES:
+            raise SystemExit(f"unsupported loss {name!r}; supported: {', '.join(sorted(LOSSES))}, summed with '+' and weighted as 'weight*name'. "
+                             "Metric losses need a head embedding and pairing that this bench does not provide")
+        parts.append((name, float(w) if w else 1.0))
+    if parts == [("bce", 1.0)]:
+        return F.binary_cross_entropy_with_logits
+    from ww_trainer.loss import LossManager
+    crits = [(w, LossManager([{"name": n}]).losses[0]["criterion"]) for n, w in parts]
+    return lambda logits, y: sum(w * c(logits, y) for w, c in crits)
+
+
 def lr_scheduler(opt, schedule, epochs, warmup):
     """None for a constant rate; for ``cosine``, ``warmup`` epochs of linear ramp below the full rate, the peak
     at the epoch after them, then cosine annealing to lr/100 on the last epoch. A run whose peak epoch is its
@@ -370,8 +480,10 @@ def fit(a):
         pos = torch.from_numpy(clip_subset(y.cpu().numpy(), a.pos_aug, a.max_pos, a.subset_seed)).to(dev)
         print(f"training on {a.max_pos} positive clips, {len(pos)} rows with their augmented copies", flush=True)
     g = torch.Generator(device="cpu").manual_seed(a.seed); torch.manual_seed(a.seed)
-    specs = a.heads.split(",")
-    heads = {s: make_head(s, X.shape[-1]).to(dev) for s in specs}
+    specs = split_specs(a.heads)
+    loss_fn = make_loss(a.loss)
+    heads = {s: build_head(s, X.shape[-1], X.shape[1]).to(dev) for s in specs}
+    batch_stats = {s for s in specs if not LEGACY_GRU.match(s)}
     opts = {s: torch.optim.Adam(h.parameters(), lr=a.lr) for s, h in heads.items()}
     scheds = [lr_scheduler(o, a.lr_schedule, a.epochs, a.warmup_epochs) for o in opts.values()]
     out = Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -389,7 +501,9 @@ def fit(a):
             b = idx[i:i + a.batch_size]
             xb, yb = X[b].float(), y[b]
             for s, h in heads.items():
-                loss = F.binary_cross_entropy_with_logits(h(xb), yb)
+                if len(b) < 2 and s in batch_stats:
+                    continue
+                loss = loss_fn(h(xb), yb)
                 opts[s].zero_grad(set_to_none=True); loss.backward(); opts[s].step()
         rec = {"epoch": ep, "seconds": round(time.time() - t0, 1), "lr": opts[specs[0]].param_groups[0]["lr"]}
         with torch.no_grad():
@@ -407,7 +521,7 @@ def fit(a):
                 rec[s] = {"val_loss": round(vl, 4), "val_recall@0.5": round(((p >= 0.5) & (yv == 1)).sum().item() / max(1, (yv == 1).sum().item()), 4),
                           "val_fp@0.5": int(((p >= 0.5) & (yv == 0)).sum().item()), "calib_recall": round(cal, 4)}
                 if (cal, -vl) > best[s]:
-                    best[s] = (cal, -vl); torch.save({"spec": s, "dim": X.shape[-1], "state": h.state_dict(), "epoch": ep, "calib_recall": cal}, out / f"{s}.pt")
+                    best[s] = (cal, -vl); torch.save({"spec": s, "dim": X.shape[-1], "frames": X.shape[1], "loss": a.loss, "state": h.state_dict(), "epoch": ep, "calib_recall": cal}, out / f"{stem(s)}.pt")
         log.write(json.dumps(rec) + "\n"); log.flush(); print(json.dumps(rec), flush=True)
         for sch in scheds:
             if sch is not None:
@@ -415,17 +529,51 @@ def fit(a):
 
 
 def export(a):
-    ck = torch.load(Path(a.out_dir) / f"{a.head}.pt", map_location="cpu")
-    h = make_head(ck["spec"], ck["dim"]); h.load_state_dict(ck["state"]); h.eval()
-    path = Path(a.out_dir) / f"{a.head}.onnx"
-    torch.onnx.export(h, torch.randn(1, 75, ck["dim"]), str(path), input_names=["features"], output_names=["logit"],
-                      dynamic_axes={"features": {0: "batch", 1: "frames"}, "logit": {0: "batch"}}, opset_version=17, dynamo=False)
-    print(path)
+    import io
+    import onnxruntime as ort
+    from ww_trainer.utils import embed_onnx_metadata
+    ck = torch.load(Path(a.out_dir) / f"{stem(a.head)}.pt", map_location="cpu")
+    frames = ck.get("frames", 75)
+    h = build_head(ck["spec"], ck["dim"], frames); h.load_state_dict(ck["state"]); h.eval()
+    path = Path(a.out_dir) / f"{stem(a.head)}.onnx"
+    gen = torch.Generator().manual_seed(0)
+
+    def write(dynamic):
+        buf = io.BytesIO()
+        axes = {"features": {0: "batch", 1: "frames"} if dynamic else {0: "batch"}, "logit": {0: "batch"}}
+        torch.onnx.export(h, torch.randn(1, frames, ck["dim"]), buf, input_names=["features"], output_names=["logit"],
+                          dynamic_axes=axes, opset_version=17, dynamo=False)
+        return buf.getvalue()
+
+    def diff(model, t):
+        x = torch.randn(3, t, ck["dim"], generator=gen)
+        got = ort.InferenceSession(model, providers=["CPUExecutionProvider"]).run(None, {"features": x.numpy()})[0]
+        with torch.no_grad():
+            return float(np.abs(got - h(x).numpy()).max())
+
+    model = write(True)
+    try:
+        dynamic = diff(model, frames + 25) < 1e-4
+    except Exception:
+        dynamic = False
+    if not dynamic:
+        if not a.allow_fixed_frames:
+            raise SystemExit(f"head {a.head!r} exports with a fixed {frames}-frame input: onnxruntime fails at any other length. "
+                             "Pass --allow-fixed-frames to export it anyway")
+        model = write(False)
+    err = diff(model, frames)
+    if not err < 1e-4:
+        raise SystemExit(f"{path}: onnxruntime differs from torch by {err} on random input")
+    path.write_bytes(model)
+    if not dynamic:
+        embed_onnx_metadata(str(path), {"fixed_frames": str(frames)})
+    print(path, f"max abs diff {err:.2e}", "frames dynamic" if dynamic else f"fixed_frames {frames}")
 
 
 def main():
     ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("cache"); p.add_argument("featurizer"); p.add_argument("cache_dir")
+    p = sub.add_parser("cache"); p.add_argument("featurizer", help="ONNX file, or a pretrained name such as wakehubert-tiny")
+    p.add_argument("--featurizer-revision", default=None, help="Hub revision of a pretrained featurizer"); p.add_argument("cache_dir")
     p.add_argument("--metadata", default="kws/train.csv"); p.add_argument("--val", default="kws/val.csv")
     p.add_argument("--pos-aug", type=int, default=8, help="augmented copies of every training positive (0: none)")
     p.add_argument("--path-map", action="append", default=[], help="old=new prefix rewrite for metadata paths")
@@ -433,7 +581,9 @@ def main():
     p.add_argument("--calib-speech", default="data/LibriSpeech/dev-other", help="LibriSpeech split used for calibration speech and babble")
     p.add_argument("--feature-store", default=None, help="directory of featurizer outputs keyed by window content, reused across runs")
     p = sub.add_parser("fit"); p.add_argument("cache_dir"); p.add_argument("out_dir")
-    p.add_argument("--heads", default="gru"); p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--heads", default="gru", help="gru-style specs and HEAD_REGISTRY names, name:key=value,... for overrides")
+    p.add_argument("--loss", default="bce", help="bce, focal, label_smoothing_bce, or a sum such as bce+0.5*focal")
+    p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch-size", type=int, default=64); p.add_argument("--lr", type=float, default=5e-4); p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-pos", type=int, default=0, help="train on this many positive clips, chosen by clip (0: all)")
     p.add_argument("--pos-aug", type=int, default=0, help="augmented copies per positive the cache was built with (needed by --max-pos)")
@@ -442,6 +592,7 @@ def main():
                    help="constant: --lr every epoch; cosine: cosine annealing to lr/100 after the warmup")
     p.add_argument("--warmup-epochs", type=int, default=0, help="epochs of linear warmup before the cosine schedule")
     p = sub.add_parser("export"); p.add_argument("out_dir"); p.add_argument("head")
+    p.add_argument("--allow-fixed-frames", action="store_true", help="export a head whose graph only runs at the cache's frame count, recording it as fixed_frames metadata")
     a = ap.parse_args()
     global CALIB_SPEECH, TALK
     if a.cmd == "cache":
