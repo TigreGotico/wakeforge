@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0a1](https://github.com/TigreGotico/wakeforge/tree/0.15.0a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.14.0a1...0.15.0a1)
+
+**Merged pull requests:**
+
+- feat\(train\): keep the checkpoint with the best recall at zero false accepts on calibration audio [\#83](https://github.com/TigreGotico/wakeforge/pull/83) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.14.0a1](https://github.com/TigreGotico/wakeforge/tree/0.14.0a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.13.0a1...0.14.0a1)
