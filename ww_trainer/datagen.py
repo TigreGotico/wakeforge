@@ -10,6 +10,7 @@ Entry point: ``ww_trainer-datagen`` (see :func:`cli_main`).
 from __future__ import annotations
 
 import csv
+import inspect
 import io
 import json
 import logging
@@ -357,20 +358,50 @@ def download_hf_audio_dataset(
 # ---------------------------------------------------------------------------
 
 
-def _collect_tts_plugins(lang: str) -> List[tuple[str, Any]]:
+#: Plugins that synthesize through a remote server: without a configured host they fall back to public
+#: servers, so they are used only when ``--tts-config`` names the host.
+_HOST_PLUGINS = {"ovos-tts-plugin-server"}
+
+#: Speaking rates drawn per edge-tts clip.
+_EDGE_RATES = ("-20%", "-10%", "+0%", "+10%", "+20%", "+30%")
+
+#: Seconds between two requests to one plugin, so a long run is not rate limited by the online services;
+#: ``tts_config[name]["min_interval_s"]`` overrides it.
+_MIN_INTERVAL_S = {"ovos-tts-plugin-edge-tts": 0.25, "ovos-tts-plugin-google-tx": 1.0, "ovos-tts-plugin-server": 0.0}
+
+#: Attempts per clip, with the wait doubling after each failure.
+_ATTEMPTS = 3
+
+
+def load_tts_config(path: Optional[str]) -> Dict[str, dict]:
+    """Read ``{plugin name: plugin config}`` from a JSON file; ``None`` gives an empty mapping."""
+    if not path:
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _collect_tts_plugins(lang: str, tts_config: Optional[Dict[str, dict]] = None) -> List[tuple[str, Any]]:
     """Discover all installed OVOS TTS plugins via OPM and return ``(name, instance)`` pairs.
 
     Uses ``ovos_plugin_manager.tts.find_tts_plugins()`` for entry-point
     discovery, so any installed OVOS TTS plugin (edge-tts, google-tx,
-    phoonnx, piper, …) is automatically picked up.
+    phoonnx, piper, …) is automatically picked up. ``tts_config`` gives a
+    plugin its config; a remote-server plugin is used only when that config
+    names a ``host``.
     """
     from ovos_plugin_manager.tts import find_tts_plugins
 
+    tts_config = tts_config or {}
     plugins = find_tts_plugins()  # Dict[str, Type[TTS]]
     instances: List[tuple[str, Any]] = []
     for name, plugin_cls in plugins.items():
+        cfg = {"lang": lang, **tts_config.get(name, {})}
+        if name in _HOST_PLUGINS and not cfg.get("host"):
+            logger.info("Skipping %s: no host in the TTS config", name)
+            continue
         try:
-            instance = plugin_cls(config={"lang": lang})
+            instance = plugin_cls(config=cfg)
             instances.append((name, instance))
         except Exception:
             continue
@@ -394,35 +425,119 @@ def _collect_tts_plugins(lang: str) -> List[tuple[str, Any]]:
     return instances
 
 
+def voice_options(name: str, plugin: Any, lang: str,
+                  tts_config: Optional[Dict[str, dict]] = None) -> List[Dict[str, Any]]:
+    """Every per-call option set one plugin can synthesize with: its voices, accents and speaking rates.
+
+    A plugin left at its default voice says the wake word in one voice however many clips are asked for,
+    so each clip draws one of these instead. ``tts_config[name]["voices"]`` lists voices explicitly (a
+    remote server's catalogue, say); edge-tts offers every voice of the language at several rates;
+    google-tx offers its regional accents; any other plugin exposing ``available_voices`` offers those.
+    """
+    prefix = lang.split("-")[0].lower()
+    listed = (tts_config or {}).get(name, {}).get("voices")
+    if listed:
+        return [{"voice": v} for v in listed]
+    if name == "ovos-tts-plugin-edge-tts":
+        try:
+            from ovos_tts_plugin_edge_tts import VOICES
+        except ImportError:
+            return [{}]
+        voices = [v for loc, vs in VOICES.items() if loc.lower().split("-")[0] == prefix for v in vs]
+        return [{"voice": v, "rate": r} for v in voices for r in _EDGE_RATES] or [{}]
+    if name == "ovos-tts-plugin-google-tx":
+        try:
+            from ovos_tts_plugin_google_tx import REGIONAL_CONFIGS
+        except ImportError:
+            return [{}]
+        return [{"lang": loc} for loc in REGIONAL_CONFIGS if loc.lower().split("-")[0] == prefix] or [{}]
+    voices = getattr(plugin, "available_voices", None)
+    if isinstance(voices, (list, tuple, set, dict)) and voices:
+        return [{"voice": v} for v in voices]
+    return [{}]
+
+
+def _accepted_options(plugin: Any, opts: Dict[str, Any]) -> Dict[str, Any]:
+    """The options ``plugin.get_tts`` accepts; a keyword it would reject is dropped so the call can succeed."""
+    try:
+        params = inspect.signature(plugin.get_tts).parameters
+    except (TypeError, ValueError):
+        return opts
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return opts
+    return {k: v for k, v in opts.items() if k in params}
+
+
 def synthesize_positives(
     wake_word: str,
     output_dir: Path,
     n: int = 1000,
     lang: str = "en",
+    tts_config: Optional[Dict[str, dict]] = None,
 ) -> List[Path]:
     """Synthesize *n* positive samples using available TTS plugins.
+
+    Each clip draws a plugin and then one of that plugin's voices, accents or
+    speaking rates (:func:`voice_options`). Every clip written gets a row in
+    ``synthesis.csv`` beside it naming the plugin and the options used.
 
     Returns list of written WAV paths.
 
     Raises:
         RuntimeError: If no TTS plugins are installed.
     """
-    tts_instances = _collect_tts_plugins(lang)
+    tts_instances = _collect_tts_plugins(lang, tts_config)
+    options = {name: voice_options(name, plugin, lang, tts_config) for name, plugin in tts_instances}
+    interval = {name: float((tts_config or {}).get(name, {}).get("min_interval_s", _MIN_INTERVAL_S.get(name, 0.0)))
+                for name, _ in tts_instances}
+    last_call: Dict[str, float] = {}
+    failures: Dict[str, int] = {}
+    last_error: Dict[str, str] = {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     text = wake_word.replace("_", " ").replace("-", " ")
     written: List[Path] = []
+    manifest = output_dir / "synthesis.csv"
+    new_manifest = not manifest.exists()
+    with open(manifest, "a", newline="", encoding="utf-8") as fh:
+        rows = csv.writer(fh)
+        if new_manifest:
+            rows.writerow(["file", "text", "plugin", "options"])
+        for i in range(n):
+            name, plugin = random.choice(tts_instances)
+            opts = random.choice(options[name])
+            call_opts = _accepted_options(plugin, {"lang": lang, **opts})
+            out_path = output_dir / f"{uuid4().hex[:12]}.wav"
+            # written under a temporary name and moved into place only when the synthesis returned audio, so a
+            # failed or refused request leaves no file the manifest does not list
+            tmp_path = out_path.with_suffix(".part.wav")
+            wait = max(interval[name], 0.5)
+            for attempt in range(_ATTEMPTS):
+                pause = interval[name] - (time.monotonic() - last_call.get(name, -1e9))
+                if pause > 0:
+                    time.sleep(pause)
+                last_call[name] = time.monotonic()
+                try:
+                    plugin.get_tts(text, str(tmp_path), **call_opts)
+                    if tmp_path.exists() and tmp_path.stat().st_size > 44:
+                        tmp_path.replace(out_path)
+                        written.append(out_path)
+                        rows.writerow([out_path.name, text, name, json.dumps(call_opts, sort_keys=True)])
+                        break
+                    last_error[name] = "no audio written"
+                except Exception as e:
+                    last_error[name] = f"{type(e).__name__}: {e}"
+                    logger.debug("%s failed on attempt %d: %s", name, attempt + 1, e)
+                tmp_path.unlink(missing_ok=True)
+                if attempt + 1 < _ATTEMPTS:
+                    time.sleep(wait)
+                    wait *= 2
+            else:
+                failures[name] = failures.get(name, 0) + 1
 
-    for i in range(n):
-        name, plugin = random.choice(tts_instances)
-        out_path = output_dir / f"{uuid4().hex[:12]}.wav"
-        try:
-            plugin.get_tts(text, str(out_path), lang=lang)
-            if out_path.exists():
-                written.append(out_path)
-        except Exception:
-            continue
-
+    for name, count in sorted(failures.items()):
+        logger.warning("%s produced no audio for %d clips after %d attempts each; last error: %s",
+                       name, count, _ATTEMPTS, last_error.get(name))
     logger.info("Synthesized %d / %d positive samples", len(written), n)
     return written
 
@@ -729,6 +844,8 @@ class DatagenConfig:
     adversarial_n: int = 20
     llm_url: Optional[str] = None
     llm_model: str = "gemma3:4b"
+    # TTS plugin configs, {plugin name: config} as JSON (a remote server's host and voice list)
+    tts_config: Optional[str] = None
     # Augmentation resources
     download_augmentation: bool = True
     pre_augment: bool = False
@@ -817,7 +934,8 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     else:
         logger.info("  Unknown wake word — synthesizing via TTS")
         pos_files = synthesize_positives(
-            ww_key, positives_dir, n=config.n_positive, lang=config.lang
+            ww_key, positives_dir, n=config.n_positive, lang=config.lang,
+            tts_config=load_tts_config(config.tts_config),
         )
 
     # Optional voice conversion
@@ -897,11 +1015,13 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             adv_dir = negatives_dir / "adversarial"
             try:
                 adv_files = synthesize_positives(
-                    adv_texts[0], adv_dir, n=0, lang=config.lang
+                    adv_texts[0], adv_dir, n=0, lang=config.lang,
+                    tts_config=load_tts_config(config.tts_config),
                 )
                 # Synthesize each adversarial text
                 for text in adv_texts:
-                    files = synthesize_positives(text, adv_dir, n=1, lang=config.lang)
+                    files = synthesize_positives(text, adv_dir, n=1, lang=config.lang,
+                                                 tts_config=load_tts_config(config.tts_config))
                     neg_files.extend(files)
             except RuntimeError:
                 logger.warning("No TTS available for adversarial synthesis")
@@ -1088,6 +1208,11 @@ def cli_main() -> None:
         "--llm-model", default="gemma3:4b", help="LLM model name (default: gemma3:4b)"
     )
     parser.add_argument(
+        "--tts-config", default=None,
+        help="JSON file of {plugin name: config} for the TTS plugins: a remote server's host and voice list, "
+             "or a plugin's own settings. Without a host, ovos-tts-plugin-server is not used.",
+    )
+    parser.add_argument(
         "--no-augmentation-data",
         action="store_true",
         help="Skip downloading bg_noise/music/rir",
@@ -1118,6 +1243,7 @@ def cli_main() -> None:
         adversarial_n=args.adversarial_n,
         llm_url=args.llm_url,
         llm_model=args.llm_model,
+        tts_config=args.tts_config,
         download_augmentation=not args.no_augmentation_data,
         pre_augment=args.pre_augment,
         seed=args.seed,
