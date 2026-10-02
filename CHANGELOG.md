@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.3a1](https://github.com/TigreGotico/wakeforge/tree/0.16.3a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.2a1...0.16.3a1)
+
+**Merged pull requests:**
+
+- fix: read the CPU model from cpuinfo before platform.processor [\#93](https://github.com/TigreGotico/wakeforge/pull/93) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.16.2a1](https://github.com/TigreGotico/wakeforge/tree/0.16.2a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.1a1...0.16.2a1)
