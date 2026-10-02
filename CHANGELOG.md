@@ -1,8 +1,20 @@
 # Changelog
 
+## [0.11.1a1](https://github.com/TigreGotico/wakeforge/tree/0.11.1a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a3...0.11.1a1)
+
+**Merged pull requests:**
+
+- fix\(datagen\): a voice per synthesized clip, paced requests, and no file from a failed one [\#76](https://github.com/TigreGotico/wakeforge/pull/76) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.11.0a3](https://github.com/TigreGotico/wakeforge/tree/0.11.0a3) (2026-10-02)
 
-[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a1...0.11.0a3)
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a2...0.11.0a3)
+
+## [0.11.0a2](https://github.com/TigreGotico/wakeforge/tree/0.11.0a2) (2026-10-01)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.0a1...0.11.0a2)
 
 **Merged pull requests:**
 
