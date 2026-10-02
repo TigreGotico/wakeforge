@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0a1](https://github.com/TigreGotico/wakeforge/tree/0.16.0a1) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.1a2...0.16.0a1)
+
+**Merged pull requests:**
+
+- feat: head bench ablation axes \(pretrained featurizer, factory heads, losses\) [\#88](https://github.com/TigreGotico/wakeforge/pull/88) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.15.1a2](https://github.com/TigreGotico/wakeforge/tree/0.15.1a2) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.1a1...0.15.1a2)
