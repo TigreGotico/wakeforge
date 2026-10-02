@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2a2](https://github.com/TigreGotico/wakeforge/tree/0.11.2a2) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.2a1...0.11.2a2)
+
+**Merged pull requests:**
+
+- test\(feats\): deterministic DeltaExtractor ONNX parity check [\#86](https://github.com/TigreGotico/wakeforge/pull/86) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.11.2a1](https://github.com/TigreGotico/wakeforge/tree/0.11.2a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.11.1a1...0.11.2a1)
