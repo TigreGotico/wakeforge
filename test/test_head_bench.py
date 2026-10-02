@@ -34,6 +34,9 @@ class SpySession:
     def get_inputs(self):
         return self._s.get_inputs()
 
+    def get_providers(self):
+        return self._s.get_providers()
+
     def run(self, out, feed):
         SpySession.rows += next(iter(feed.values())).shape[0]
         return self._s.run(out, feed)
@@ -121,6 +124,32 @@ def test_featurizer_change_invalidates(ws):
     assert rows == 0
 
 
+def test_store_key_depends_on_runtime(ws, monkeypatch):
+    wav = np.random.default_rng(0).standard_normal(SR).astype(np.float32)
+    key = lambda provider, device="cpu0": hb.FeatureStore(ws.root / "s", ws.feat, provider, device).key(wav)
+    assert key("CPUExecutionProvider") == key("CPUExecutionProvider")
+    assert key("CUDAExecutionProvider") != key("CPUExecutionProvider")
+    assert key("CUDAExecutionProvider", "RTX 3090") != key("CUDAExecutionProvider", "RTX 4000 Ada")
+    before = key("CPUExecutionProvider")
+    monkeypatch.setattr(onnxruntime, "__version__", "0.0.0-other")
+    assert key("CPUExecutionProvider") != before
+
+
+def test_cache_keys_on_session_provider(ws, monkeypatch):
+    class CudaSession(SpySession):
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    monkeypatch.setattr(hb, "device_name", lambda provider: "card")
+    monkeypatch.setattr(onnxruntime, "InferenceSession", CudaSession)
+    first, _ = run_cache(ws, "c1")
+    monkeypatch.setattr(onnxruntime, "InferenceSession", SpySession)
+    rows, _ = run_cache(ws, "c2")
+    assert rows == first > 0
+    rows, _ = run_cache(ws, "c3")
+    assert rows == 0
+
+
 def test_augmented_copies_identical_across_runs(ws):
     _, a = run_cache(ws, "c1", store=None)
     fewer = _csv(ws.root / "fewer.csv", ws.pos[1:] + ws.neg)
@@ -146,12 +175,14 @@ def test_augmentation_keyed_not_sequential(ws, monkeypatch, device):
 def _expected_lr(lr, epochs, warmup, schedule):
     if schedule == "constant":
         return [lr] * epochs
-    out, T, low = [], epochs - warmup, lr / 100
-    for e in range(1, epochs + 1):
-        if e <= warmup:
-            out.append(lr * e / warmup)
+    out, low, span = [], lr / 100, epochs - 1 - warmup
+    for e in range(epochs):
+        if e < warmup:
+            out.append(lr * (e + 1) / (warmup + 1))
+        elif not span:
+            out.append(lr)
         else:
-            out.append(low + (lr - low) * (1 + math.cos(math.pi * (e - warmup - 1) / T)) / 2)
+            out.append(low + (lr - low) * (1 + math.cos(math.pi * (e - warmup) / span)) / 2)
     return out
 
 
@@ -166,6 +197,45 @@ def test_lr_scheduler_sequence(schedule, warmup):
         if sch is not None:
             sch.step()
     assert seen == pytest.approx(_expected_lr(lr, epochs, warmup, schedule), rel=1e-9, abs=1e-12)
+
+
+def _multipliers(epochs, warmup, lr=0.1):
+    opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=lr)
+    sch = hb.lr_scheduler(opt, "cosine", epochs, warmup)
+    seen = []
+    for _ in range(epochs):
+        seen.append(opt.param_groups[0]["lr"] / lr)
+        sch.step()
+    return seen
+
+
+@pytest.mark.parametrize("epochs,warmup", [(10, 0), (10, 1), (10, 2), (5, 3), (5, 4), (1, 0)])
+def test_cosine_multipliers_peak_once_and_end_at_floor(epochs, warmup):
+    m = _multipliers(epochs, warmup)
+    print(epochs, warmup, [round(x, 4) for x in m])
+    assert m[warmup] == pytest.approx(1.0)
+    assert sum(abs(x - 1.0) < 1e-12 for x in m) == 1
+    assert m[:warmup] == pytest.approx([(e + 1) / (warmup + 1) for e in range(warmup)])
+    assert all(a > b for a, b in zip(m[warmup:], m[warmup + 1:]))
+    if epochs > warmup + 1:
+        assert m[-1] == pytest.approx(0.01, rel=1e-9)
+    else:
+        assert m[-1] == pytest.approx(1.0)
+
+
+def test_one_epoch_cosine_runs_at_full_rate():
+    assert _multipliers(1, 0) == [1.0]
+
+
+def test_device_name_is_nonempty_for_cpu():
+    assert hb.device_name("CPUExecutionProvider")
+
+
+def test_cosine_rejects_warmup_not_below_epochs():
+    opt = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.1)
+    for warmup in (5, 6):
+        with pytest.raises(SystemExit, match="below --epochs"):
+            hb.lr_scheduler(opt, "cosine", 5, warmup)
 
 
 def test_constant_rejects_warmup():
