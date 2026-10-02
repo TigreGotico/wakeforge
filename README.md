@@ -53,6 +53,7 @@ here.
 - **Pretrained WakeHuBERT featurizer** — a 0.64M-parameter streaming extractor distilled from HuBERT-base (128-d at 50 fps, float32 and int8), downloaded from [`TigreGotico/wakehubert-tiny`](https://huggingface.co/TigreGotico/wakehubert-tiny) with `--tier wakehubert` or `--featurizer-type wakehubert`. A GRU head trained on 900 synthetic "alexa" clips detected 95% (95% interval 92–97) of the real speakers in the Picovoice benchmark at a threshold set for 0.5 false activations per hour (0.31 measured on 6.5 h of held-out streams), and 94 / 85 / 56% in babble at 10 / 5 / 0 dB, in a single run. Other published extractors (other architectures, 256-d outputs, WavLM and XEUS teachers) can be selected by name for comparison. Every training path takes a featurizer name — every head (`--arch gru`, `bigru`, `cnn`, ...), the `wakehubert` and `wakehubert-bigru` tiers, the quickstart, grid and genetic search, multi-stage and infinite training — and computes its features once per clip. Exported heads name the featurizer and its revision, so inference needs only the head. See [Use a pretrained WakeHuBERT featurizer](docs/reference/extractors.md#use-a-pretrained-wakehubert-featurizer) and `notebooks/nb12_wakehubert.ipynb`.
 - **Genetic + Bayesian HP search** with island-model parallelism, adaptive mutation, two-stage refinement.
 - **Synthetic datagen** — TTS + pure-ONNX voice conversion ([voiceclonnx](https://github.com/TigreGotico/voiceclonnx)) to bootstrap a dataset from zero recordings.
+- **Voice-grid synthetic data** — `ww_trainer-voicegrid` says a phrase with every donor voice of a language (OmniVoice random speakers plus the language's specialised engines) at several speaking rates, pitches and text forms, resumably and in parallel; see [Voice-grid synthetic data](docs/guides/voicegrid.md).
 - **Hard-negative mining** and **infinite training** for industrial-scale negative pools.
 - **ONNX-first**: featurizer and head export cleanly; no CUDA-only kernels.
 - **Hardware tiers** from `esp32_nano` (sub-1 KB int8) to `hubert_medium`.
@@ -81,7 +82,7 @@ uv pip install -e ".[dev]"
 uv pip install -e ".[dev,datagen,torchcodec]"
 ```
 
-Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `vc`, `mic`,
+Optional extras (`sweep`, `transformers`, `mlflow`, `datagen`, `voicegrid`, `vc`, `mic`,
 `viz`, `markov`, `ocsvm`, `torchcodec`) — see
 [`docs/faq.md`](docs/faq.md#2-install).
 

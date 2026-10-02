@@ -104,6 +104,22 @@ datagen = [
     "vadonnx>=0.1.0",  # pure-ONNX VAD (silence trimming)
 ]
 
+# ── Voice-grid synthetic data (ww_trainer-voicegrid) ───────────────────────
+voicegrid = [
+    "phoonnx",
+    "edge-tts",
+    "ovos-plugin-manager",
+    "ovos-tts-plugin-edge-tts",
+    "ovos-tts-plugin-google-tx",
+    "voiceclonnx",
+    "speakeronnx",
+    "onnx-asr",
+    "uroman",
+    "scriptconv[misaki]",  # Kokoro's English phonemizer
+    "num2words",           # misaki.en imports it and scriptconv[misaki] does not install it
+    "spacy<4",             # misaki's spaCy; the 4.0 dev wheels fail to import against current numpy
+]
+
 # ── Live microphone testing ────────────────────────────────────────────────
 mic = [
     "sounddevice",
@@ -129,6 +145,7 @@ notebooks = [
 ww_trainer-train = "ww_trainer.cli:train"
 ww_trainer-quickstart = "ww_trainer.quickstart:cli_main"
 ww_trainer-datagen = "ww_trainer.datagen:cli_main"
+ww_trainer-voicegrid = "ww_trainer.voicegrid:cli_main"
 ww_trainer-benchmark = "ww_trainer.benchmark:main"
 ww_trainer-infer = "ww_trainer.inference:cli_main"
 ww_trainer-export-plugin = "ww_trainer.export_plugin:main"
@@ -138,6 +155,9 @@ Homepage = "https://github.com/TigreGotico/ww_trainer"
 
 [tool.setuptools.dynamic]
 version = {attr = "ww_trainer.version.__version__"}
+
+[tool.setuptools.package-data]
+ww_trainer = ["data/*.json"]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,0 +1,398 @@
+{
+ "donors": {
+  "omnivoice": {
+   "kind": "omnivoice"
+  },
+  "styletts2": {
+   "kind": "phoonnx",
+   "index": "styletts2"
+  },
+  "kokoro": {
+   "kind": "phoonnx",
+   "index": "styletts2",
+   "voices": [
+    "kokoro*"
+   ]
+  },
+  "pockettts": {
+   "kind": "phoonnx",
+   "index": "pockettts"
+  },
+  "supertonic": {
+   "kind": "phoonnx",
+   "index": "supertonic"
+  },
+  "orpheus": {
+   "kind": "phoonnx",
+   "index": "orpheus"
+  },
+  "magpie": {
+   "kind": "phoonnx",
+   "index": "magpie"
+  },
+  "qwen3tts": {
+   "kind": "phoonnx",
+   "index": "qwen3tts"
+  },
+  "chatterbox": {
+   "kind": "phoonnx",
+   "index": "chatterbox"
+  },
+  "f5tts": {
+   "kind": "phoonnx",
+   "index": "f5tts"
+  },
+  "indic_parler": {
+   "kind": "phoonnx",
+   "index": "indic_parler"
+  },
+  "bsc": {
+   "kind": "phoonnx",
+   "index": "bsc"
+  },
+  "proxectonos": {
+   "kind": "phoonnx",
+   "index": "proxectonos"
+  },
+  "ovos": {
+   "kind": "phoonnx",
+   "index": "ovos"
+  },
+  "piper": {
+   "kind": "phoonnx",
+   "index": "piper"
+  },
+  "piper_community": {
+   "kind": "phoonnx",
+   "index": "piper_community"
+  },
+  "phonikud": {
+   "kind": "phoonnx",
+   "index": "phonikud"
+  },
+  "edge": {
+   "kind": "edge"
+  },
+  "google": {
+   "kind": "plugin",
+   "plugin": "ovos-tts-plugin-google-tx"
+  }
+ },
+ "languages": {
+  "en": [
+   "omnivoice",
+   "styletts2",
+   "pockettts",
+   "supertonic",
+   "orpheus",
+   "edge",
+   "google"
+  ],
+  "pt": [
+   "omnivoice",
+   "pockettts",
+   "supertonic",
+   "styletts2",
+   "edge",
+   "ovos"
+  ],
+  "es": [
+   "omnivoice",
+   "pockettts",
+   "supertonic",
+   "styletts2",
+   "edge"
+  ],
+  "de": [
+   "omnivoice",
+   "pockettts",
+   "supertonic",
+   "piper",
+   "edge"
+  ],
+  "fr": [
+   "omnivoice",
+   "pockettts",
+   "supertonic",
+   "piper",
+   "magpie",
+   "edge"
+  ],
+  "it": [
+   "omnivoice",
+   "pockettts",
+   "supertonic",
+   "magpie",
+   "edge"
+  ],
+  "ca": [
+   "omnivoice",
+   "styletts2",
+   "bsc",
+   "edge"
+  ],
+  "gl": [
+   "omnivoice",
+   "proxectonos",
+   "edge"
+  ],
+  "eu": [
+   "omnivoice",
+   "styletts2",
+   "piper_community",
+   "edge"
+  ],
+  "zh": [
+   "omnivoice",
+   "styletts2",
+   "qwen3tts",
+   "edge"
+  ],
+  "ja": [
+   "omnivoice",
+   "supertonic",
+   "styletts2",
+   "edge"
+  ],
+  "hi": [
+   "omnivoice",
+   "supertonic",
+   "styletts2",
+   "indic_parler",
+   "edge"
+  ],
+  "ar": [
+   "omnivoice",
+   "supertonic",
+   "chatterbox",
+   "f5tts",
+   "edge"
+  ],
+  "ko": [
+   "omnivoice",
+   "supertonic",
+   "magpie",
+   "edge"
+  ],
+  "vi": [
+   "omnivoice",
+   "supertonic",
+   "magpie",
+   "edge"
+  ],
+  "nl": [
+   "omnivoice",
+   "supertonic",
+   "piper",
+   "edge"
+  ],
+  "pl": [
+   "omnivoice",
+   "supertonic",
+   "piper",
+   "edge"
+  ],
+  "ru": [
+   "omnivoice",
+   "supertonic",
+   "piper",
+   "edge"
+  ],
+  "uk": [
+   "omnivoice",
+   "supertonic",
+   "piper",
+   "edge"
+  ],
+  "bg": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "cs": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "da": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "el": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "et": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "fi": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "hr": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "hu": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "id": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "lt": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "lv": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "ro": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "sk": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "sl": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "sv": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "tr": [
+   "omnivoice",
+   "supertonic",
+   "edge"
+  ],
+  "fa": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "he": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "ms": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "no": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "sw": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "th": [
+   "omnivoice",
+   "piper",
+   "piper_community",
+   "phonikud",
+   "edge"
+  ],
+  "an": [
+   "omnivoice",
+   "ovos",
+   "edge"
+  ],
+  "ast": [
+   "omnivoice",
+   "ovos",
+   "edge"
+  ],
+  "oc": [
+   "omnivoice",
+   "ovos",
+   "edge"
+  ],
+  "az": [
+   "omnivoice",
+   "edge"
+  ],
+  "kab": [
+   "omnivoice",
+   "edge"
+  ]
+ },
+ "fallback": [
+  "omnivoice",
+  "edge"
+ ],
+ "macrolanguages": {
+  "ar": [
+   "arb",
+   "arq",
+   "ars",
+   "ary",
+   "arz",
+   "apc",
+   "acm",
+   "afb",
+   "aeb"
+  ],
+  "zh": [
+   "cmn"
+  ],
+  "ms": [
+   "zsm"
+  ],
+  "no": [
+   "nb",
+   "nn"
+  ],
+  "fa": [
+   "pes"
+  ],
+  "et": [
+   "ekk"
+  ],
+  "lv": [
+   "lvs"
+  ],
+  "sw": [
+   "swh"
+  ],
+  "sq": [
+   "als"
+  ],
+  "uz": [
+   "uzn"
+  ]
+ }
+}
