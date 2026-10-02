@@ -34,7 +34,8 @@ class QuickstartConfig:
         vc_refs_dir: Optional voice-conversion reference directory.
         download_augmentation: Download bg_noise/music/RIR datasets from HF.
         max_negative: Cap on the number of clips taken from each negative
-            dataset. ``None`` takes every clip.
+            dataset, drawn before anything is downloaded. ``None`` takes as many
+            clips as *n_positive*; ``0`` takes every clip.
         llm_url: Optional Ollama URL for LLM-based adversarial generation.
         tier: Hardware tier name (see ``ww_trainer-tiers``).
         featurizer: Pretrained featurizer name (e.g. ``"wakehubert-mel-tcn-wide"``,
@@ -161,7 +162,7 @@ def _run_or_load_datagen(cfg: QuickstartConfig):  # noqa: ANN202
         vad_trim=cfg.vad_trim,
         vc_refs_dir=cfg.vc_refs_dir,
         download_augmentation=cfg.download_augmentation,
-        max_negative=cfg.max_negative,
+        max_negative=cfg.n_positive if cfg.max_negative is None else cfg.max_negative or None,
         llm_url=cfg.llm_url,
         seed=cfg.seed,
     )
@@ -345,6 +346,9 @@ def cli_main() -> None:
     @click.option("--lr", default=5e-4, show_default=True, type=float, help="Learning rate.")
     @click.option("--n-positive", default=1000, show_default=True, type=int,
                   help="Number of positive audio samples to synthesise.")
+    @click.option("--max-negative", default=None, type=int,
+                  help="Clips taken from each negative dataset, drawn before download "
+                       "(default: --n-positive; 0 takes every clip).")
     @click.option("--lang", default="en", show_default=True, help="BCP-47 language tag for TTS.")
     @click.option("--adversarial/--no-adversarial", default=True, show_default=True,
                   help="Generate grapheme-level hard-negative confusables.")
@@ -373,6 +377,7 @@ def cli_main() -> None:
         batch_size: int,
         lr: float,
         n_positive: int,
+        max_negative: Optional[int],
         lang: str,
         adversarial: bool,
         augmentation_data: bool,
@@ -394,6 +399,7 @@ def cli_main() -> None:
             batch_size=batch_size,
             lr=lr,
             n_positive=n_positive,
+            max_negative=max_negative,
             lang=lang,
             adversarial=adversarial,
             download_augmentation=augmentation_data,

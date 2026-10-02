@@ -10,7 +10,9 @@
 > HTTP round trip per downloaded file (ESC-50 ≈ 2 000, NAR ≈ 850,
 > `not-wake-words-speech-en` up to 10 000), AudioSet streamed as parquet
 > and capped at 5 000 rows, and about 11 min of sequential edge-tts
-> synthesis. Synthesis needs internet access, because
+> synthesis. Each negative source is capped at `--n-positive` clips by
+> default (`--max-negative`; `0` takes every clip), so the file counts
+> above apply only to a larger cap or `--max-negative 0`. Synthesis needs internet access, because
 > edge-tts calls an online service. A phrase with a prebuilt positives
 > dataset (such as `"hey mycroft"`) skips the synthesis. Full per-dataset
 > breakdown: [`requirements.md`](requirements.md).

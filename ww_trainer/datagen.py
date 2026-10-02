@@ -10,8 +10,10 @@ Entry point: ``ww_trainer-datagen`` (see :func:`cli_main`).
 from __future__ import annotations
 
 import csv
+import glob
 import inspect
 import io
+import itertools
 import json
 import logging
 import os
@@ -59,7 +61,6 @@ NEGATIVE_DATASETS: Dict[str, List[str]] = {
     # These are downloaded alongside "general" negatives and mixed in.
     "speech": [
         "TigreGotico/not-wake-words-speech-en",        # primary: curated NWW speech
-        "hf-internal-testing/librispeech_asr_demo",    # ~70 clips, LibriSpeech clean
     ],
     "bg_noise": [
         "TigreGotico/ambient_noises",
@@ -279,26 +280,36 @@ def _write_window(wav: np.ndarray, dst: Path, sr: int) -> None:
 
 def _list_repo_audio_files(dataset_id: str) -> List[str]:
     """Sorted audio file paths in a Hugging Face dataset repo, or [] when it is
-    not a plain folder of audio files (or the listing fails)."""
+    not a plain folder of audio files. A failed listing raises."""
     from huggingface_hub import HfApi
 
-    try:
-        files = HfApi().list_repo_files(dataset_id, repo_type="dataset")
-    except Exception as exc:
-        logger.warning("Could not list files of %s: %s", dataset_id, exc)
-        return []
+    files = HfApi().list_repo_files(dataset_id, repo_type="dataset")
     return sorted(f for f in files if Path(f).suffix.lower() in AUDIO_EXTS)
 
 
 def _download_audio_files(dataset_id: str, files: List[str], output_dir: Path, sr: int) -> List[Path]:
-    """Download each audio file, decode it with soundfile and save 16-bit mono WAV at *sr*."""
-    from huggingface_hub import hf_hub_download
+    """Fetch *files* in one batched snapshot, decode each with soundfile and save 16-bit mono WAV at *sr*.
+
+    One ``snapshot_download`` call fetches only the named files, in parallel,
+    where a ``hf_hub_download`` per file costs a sequential round trip each.
+    A failed fetch raises, so a source is never silently left with no clips.
+    """
+    from huggingface_hub import snapshot_download
+
+    try:
+        root = Path(snapshot_download(
+            dataset_id,
+            repo_type="dataset",
+            allow_patterns=[glob.escape(name) for name in files],
+            max_workers=8,
+        ))
+    except Exception as exc:
+        raise RuntimeError(f"Download of {len(files)} files from {dataset_id} failed: {exc}") from exc
 
     written: List[Path] = []
     for i, name in enumerate(files):
         try:
-            local = hf_hub_download(dataset_id, name, repo_type="dataset")
-            arr, orig_sr = sf.read(local, dtype="float32")
+            arr, orig_sr = sf.read(root / name, dtype="float32")
         except Exception as exc:
             logger.warning("Skipping %s/%s: %s", dataset_id, name, exc)
             continue
@@ -327,10 +338,11 @@ def download_hf_audio_dataset(
     never moves the global random state that the train/test split uses.
 
     Already-downloaded WAV files are reused without any network access.
-    The HuggingFace Arrow cache (``~/.cache/huggingface/datasets``) is used on
-    the first download so that subsequent calls with the same dataset skip the
-    HTTP transfer.  Streaming mode (which bypasses the cache) is only used as a
-    last resort when the cached download fails.
+    With *max_samples* set the corpus is streamed and at most that many rows are
+    read, so the download is bounded by the cap. Without it the HuggingFace Arrow
+    cache (``~/.cache/huggingface/datasets``) is filled on the first download so
+    that subsequent calls with the same dataset skip the HTTP transfer; streaming
+    is then only a fallback when the cached download fails.
 
     Returns list of written file paths.
     """
@@ -350,7 +362,13 @@ def download_hf_audio_dataset(
     # ── Repos that are folders of audio files: fetch the files themselves ──
     # This needs no `datasets` builder at all, so it works where torchcodec
     # (which the Audio feature requires to encode or decode) cannot load.
-    audio_files = _list_repo_audio_files(dataset_id)
+    listing_error: Optional[Exception] = None
+    try:
+        audio_files = _list_repo_audio_files(dataset_id)
+    except Exception as exc:
+        logger.warning("Could not list files of %s: %s", dataset_id, exc)
+        listing_error = exc
+        audio_files = []
     if audio_files:
         if max_samples is not None and max_samples < len(audio_files):
             # Sample, do not slice. _list_repo_audio_files returns a sorted
@@ -366,16 +384,20 @@ def download_hf_audio_dataset(
             audio_files = sorted(rng.sample(audio_files, max_samples))
         return _download_audio_files(dataset_id, audio_files, output_dir, sr)
 
-    # ── Prefer cached (non-streaming) download ──────────────────────────────
-    # Non-streaming stores Arrow files in ~/.cache/huggingface/datasets so
-    # re-runs with the same dataset_id are instant.  Fall back to streaming
-    # only if the non-streaming load fails (e.g. dataset too large for RAM).
-    # Known huge datasets (STREAMING_ONLY_DATASETS) skip the non-streaming
-    # attempt entirely — load_dataset(streaming=False) would download the
-    # full upstream (hundreds of GB / TB) before iteration starts.
+    # ── Choose how the corpus is read ───────────────────────────────────────
+    # A capped call streams: non-streaming load_dataset() fills the whole Arrow
+    # cache before iteration starts, so max_samples would only trim what was
+    # already downloaded. An uncapped call prefers the cached download, so
+    # re-runs with the same dataset_id are instant, and falls back to streaming
+    # if that fails. STREAMING_ONLY_DATASETS never take the non-streaming path.
     # Note: trust_remote_code was removed in datasets ≥ 3.x; omit it.
     ds = None
-    modes = (True,) if dataset_id in STREAMING_ONLY_DATASETS else (False, True)
+    if dataset_id in STREAMING_ONLY_DATASETS:
+        modes = (True,)
+    elif max_samples is not None:
+        modes = (True, False)
+    else:
+        modes = (False, True)
     for streaming in modes:
         try:
             ds = load_dataset(dataset_id, split="train", streaming=streaming)
@@ -383,28 +405,30 @@ def download_hf_audio_dataset(
             # decoder needs torchcodec, whose wheel links CUDA libraries and
             # cannot load next to a ROCm or CPU-only torch.
             for col in ("audio", "Audio", "sound", "file"):
-                if col in ds.features and isinstance(ds.features[col], Audio):
+                features = ds.features or {}
+                if col in features and isinstance(features[col], Audio):
                     ds = ds.cast_column(col, Audio(decode=False))
                     break
             break
         except Exception as exc:
-            if not streaming:
+            if streaming != modes[-1]:
                 logger.warning(
-                    "Cached download of %s failed (%s); retrying with streaming", dataset_id, exc
+                    "Loading %s (streaming=%s) failed (%s); retrying with streaming=%s",
+                    dataset_id, streaming, exc, not streaming,
                 )
             else:
-                logger.error("Streaming download of %s also failed: %s", dataset_id, exc)
-                return []
+                raise RuntimeError(
+                    f"Download of {dataset_id} failed: listing: {listing_error or 'ok, not a folder of audio files'}; "
+                    f"load (streaming={streaming}): {exc}"
+                ) from exc
 
     if ds is None:
         return []
 
     written: List[Path] = []
     audio_col = None
-    for i, example in enumerate(ds):
-        if max_samples is not None and i >= max_samples:
-            break
-
+    rows = ds if max_samples is None else itertools.islice(ds, max_samples)
+    for i, example in enumerate(rows):
         # Auto-detect audio column on first row
         if audio_col is None:
             for col in ("audio", "Audio", "sound", "file"):
