@@ -18,6 +18,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from ww_trainer.calibration_audio import build_calibration_set, calib_recall, calibration_scores
 from ww_trainer.checkpoint import save_intermediate_checkpoint
 from ww_trainer.mining import load_mining_cache, save_mining_cache
 from ww_trainer.dataset import AudioDataset, _load_audio, collate_fn
@@ -245,6 +246,15 @@ def _update_best_checkpoints(
     return updated
 
 
+def validation_loss(targets: List[int], probs: List[float]) -> float:
+    """Binary cross-entropy of validation probabilities *probs* against *targets*."""
+    if not targets:
+        return float("inf")
+    p = np.clip(np.asarray(probs, dtype=np.float64), 1e-7, 1 - 1e-7)
+    t = np.asarray(targets, dtype=np.float64)
+    return float(-np.mean(t * np.log(p) + (1 - t) * np.log(1 - p)))
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -298,6 +308,8 @@ def training_loop(
         feature_cache_variants: int = 0,
         feature_cache_dir: Optional[str] = None,
         feature_cache_workers: int = 0,
+        calib_speech: Optional[str] = None,
+        calib_seconds: float = 3600.0,
 ) -> float:
     """Run the full training loop for *trainer*.
 
@@ -362,6 +374,13 @@ def training_loop(
             draws are not kept). Mixup then blends stored features.
         feature_cache_dir: Directory where stored ONNX features persist across
             runs and processes.
+        calib_speech: Folder of held-out speech. When set, every epoch scores
+            a calibration set built from it (see
+            :mod:`~ww_trainer.calibration_audio`), logs ``calib_recall``,
+            keeps ``best_calib.pt`` on the best ``(calib_recall, -val_loss)``
+            and makes that checkpoint the final model.
+        calib_seconds: Seconds of calibration negatives, half speech and half
+            babble.
 
     Returns:
         Best F1 score achieved during training.
@@ -448,6 +467,13 @@ def training_loop(
     wakes = [x for x in train_data if x[1] == "1" and os.path.isfile(x[0])]
     nonwakes = [x for x in train_data if x[1] == "0" and os.path.isfile(x[0])]
     trainer.stream_window = clip_frames(wakes, fps)
+
+    calibration = None
+    if calib_speech:
+        calibration = build_calibration_set(
+            [x for x in test_data if x[1] == "1" and os.path.isfile(x[0])],
+            calib_speech, trainer.augment_opts.get("bg_noise_folder"), calib_seconds,
+        )
     logger.info("Total wake-word samples: %d", len(wakes))
     logger.info("Total not-wake-word samples: %d", len(nonwakes))
     if feature_store is not None and feature_cache_workers > 0 and feature_store.cache_dir is not None:
@@ -492,6 +518,8 @@ def training_loop(
         if _k in resumed_metrics:
             best_metrics[_k] = resumed_metrics[_k]
     best_fitness = -1.0
+    best_calib = (resumed_metrics.get("calib_recall", -1.0),
+                  -resumed_metrics.get("calib_val_loss", float("inf")))
     epochs_no_new = 0
     hard_negatives: List[Tuple[str, str]] = []
     easy_negatives: List[Tuple[str, str]] = []
@@ -613,6 +641,17 @@ def training_loop(
         )
         epoch_bar.set_postfix(loss=f"{avg_loss:.4f}", f1=f"{f1:.4f}", eer=f"{det_report.eer:.4f}")
 
+        calib_metrics: Dict[str, float] = {}
+        if calibration is not None:
+            pos_scores, neg_scores = calibration_scores(trainer.model, calibration, trainer.device,
+                                                        batch_size, feature_store)
+            calib_metrics = {"calib_recall": calib_recall(pos_scores, neg_scores),
+                             "val_loss": validation_loss(targets, probs)}
+            tqdm.write(f"  ep {ep+1:>3}/{epochs}  calib_recall={calib_metrics['calib_recall']:.4f}  "
+                       f"val_loss={calib_metrics['val_loss']:.4f}")
+            if trainer.mlflow:
+                trainer.mlflow_log("log_metrics", calib_metrics, step=ep + 1)
+
         if len(set(targets)) > 1:
             current_threshold, _ = find_optimal_threshold(
                 np.array(targets), np.array(probs), criterion="f1"
@@ -665,7 +704,8 @@ def training_loop(
                                 fp_per_hour, target_fp_per_hour, loss_manager.max_neg_weight)
 
         if metrics_log:
-            log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc)
+            log_metrics_csv(str(output_dir / metrics_log), ep + 1, avg_loss, acc, prec, rec, f1, auc,
+                            extra=calib_metrics)
 
         log_confidence_histogram(targets, probs, ep + 1,
                                  output_dir / "viz" / "confidence", mlflow=trainer.mlflow)
@@ -776,6 +816,19 @@ def training_loop(
         if updated:
             logger.info("Updated best model(s): %s", ", ".join(updated))
 
+        if calib_metrics and (calib_metrics["calib_recall"], -calib_metrics["val_loss"]) > best_calib:
+            best_calib = (calib_metrics["calib_recall"], -calib_metrics["val_loss"])
+            save_intermediate_checkpoint(
+                trainer.model, trainer.wake_word, trainer.arch, ep,
+                {**best_metrics, "calib_recall": calib_metrics["calib_recall"],
+                 "calib_val_loss": calib_metrics["val_loss"]},
+                optimizer, output_dir / "best_calib.pt",
+                trainer.export_onnx, trainer.mlflow,
+                stream_window=trainer.stream_window,
+            )
+            logger.info("Updated best calibration checkpoint: calib_recall=%.4f",
+                        calib_metrics["calib_recall"])
+
         if ep == epochs - 1:
             break
 
@@ -811,6 +864,15 @@ def training_loop(
             logger.info("Early stopping — no new hard negatives for %d epochs.", patience)
             break
 
+    final_ep, final_metrics = ep, best_metrics
+    best_calib_ckpt = output_dir / "best_calib.pt"
+    if calibration is not None and best_calib_ckpt.exists():
+        final_ep, calib_ckpt_metrics = trainer.load_checkpoint(best_calib_ckpt)
+        final_metrics = {**best_metrics, "calib_recall": calib_ckpt_metrics["calib_recall"],
+                         "calib_val_loss": calib_ckpt_metrics["calib_val_loss"]}
+        logger.info("Final model is the best calibration checkpoint (epoch %d, calib_recall=%.4f)",
+                    final_ep + 1, calib_ckpt_metrics["calib_recall"])
+
     # Stage 2: fit OCSVM on positive embeddings if head supports it
     if hasattr(trainer.model.classifier, "fit_ocsvm"):
         try:
@@ -830,7 +892,7 @@ def training_loop(
         ckpt = output_dir / "final_model.pt"
         save_intermediate_checkpoint(
             trainer.model, trainer.wake_word, trainer.arch,
-            ep, best_metrics, optimizer, ckpt,
+            final_ep, final_metrics, optimizer, ckpt,
             trainer.export_onnx, trainer.mlflow,
             stream_window=trainer.stream_window,
         )

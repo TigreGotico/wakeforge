@@ -272,6 +272,15 @@ Each epoch, `replacement_ratio` fraction of the epoch data is dropped and replac
 
 Composite fitness: `(1 - fp_weight*FP_rate - fn_weight*FN_rate) * size_penalty`. See `compute_fitness_score()` — `evaluation.py`.
 
+### Calibration Checkpoint
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--calib-speech` | dir | `None` | Held-out speech (LibriSpeech-style flac/wav, searched recursively); turns calibration selection on |
+| `--calib-seconds` | float | `3600` | Seconds of calibration negatives, half speech and half babble |
+
+A synthetic validation split saturates within a few epochs, so its F1 does not tell checkpoints apart. With `--calib-speech`, the trainer builds a calibration set once at the start: every validation wake clip mixed with three-talker babble cut from the calibration speech at 10 dB and at 5 dB, and with `--bg-noise-folder` noise at 5 dB, against windows of the speech and of babble at a 0.5 s hop, each as long as the median wake clip. Each epoch it scores that set through the model like the validation clips and logs `calib_recall`, the share of positives scoring above the highest negative (recall at zero false accepts), with `val_loss` in the metrics CSV. `best_calib.pt` is the checkpoint with the best `(calib_recall, -val_loss)`, and `final_model.pt` is that checkpoint. With `--training-stages`, each stage starts from the previous stage's `best_calib.pt`, and the top-level `final_model.pt` is the stage `best_calib.pt` with the best `(calib_recall, -val_loss)`, not an average of stages. Use speech no evaluation touches, for example LibriSpeech dev-other. See `ww_trainer/calibration_audio.py`.
+
 ### Performance
 
 | Option | Type | Default | Description |
@@ -422,10 +431,11 @@ When `--save-best` is set, the trainer saves a separate checkpoint whenever a me
 | `best_recall.pt` + `best_recall.ts` | Highest eval recall |
 | `best_f1.pt` + `best_f1.ts` | Highest eval F1 |
 | `best_fitness.pt` | Highest composite fitness score (requires `--fitness-checkpoint`) |
+| `best_calib.pt` + `best_calib.ts` | Highest recall at zero false accepts on calibration audio (requires `--calib-speech`; saved with or without `--save-best`) |
 
 Without `--save-best`, a checkpoint `ep{N}.pt` is saved every epoch.
 
-A final checkpoint is always saved as `final_model.pt` at the end of training.
+A final checkpoint is always saved as `final_model.pt` at the end of training. With `--calib-speech` it holds the `best_calib.pt` weights instead of the last epoch's.
 
 The `.pt` file contains model weights only. The `.ts` (trainer state) file contains epoch number, best metrics, and optimizer state. Both are needed to fully resume training.
 
