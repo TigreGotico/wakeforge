@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1a2](https://github.com/TigreGotico/wakeforge/tree/0.15.1a2) (2026-10-02)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.1a1...0.15.1a2)
+
+**Merged pull requests:**
+
+- docs: honest first-run time, real datagen CSV layout, copy-paste-safe shell blocks [\#91](https://github.com/TigreGotico/wakeforge/pull/91) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.15.1a1](https://github.com/TigreGotico/wakeforge/tree/0.15.1a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.15.0a1...0.15.1a1)
