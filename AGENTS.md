@@ -46,9 +46,14 @@ learned that sustained sound is the wake word. These rules follow.
    near_miss.txt` with one phonetic neighbour per line; each is rendered by
    every installed TTS plugin `--adversarial-per-text` times. Without this,
    "hey microsoft" and "hey minecraft" are accepted like the phrase.
-4. Held-out voices stay out. Keep a set of TTS voices that never render a
+4. Silence is a negative class. `--silence-windows` (300 by default) writes
+   that many windows each of digital zeros, -60 dBFS and -40 dBFS white noise
+   to `negatives/silence/`, at their level, never peak normalised. Without
+   them the first buffer on a muted channel is undefined: the shipped
+   precise model scored 0.67 on its first chunk of zeros.
+5. Held-out voices stay out. Keep a set of TTS voices that never render a
    training clip and use them only for the false reject and near-miss rows.
-5. More positives means more voices, not more renderings of one voice.
+6. More positives means more voices, not more renderings of one voice.
    `synthesize_positives` picks a random installed plugin per clip with that
    plugin's default voice. Install several voices or plugins to get variety.
 

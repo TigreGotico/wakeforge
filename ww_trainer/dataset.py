@@ -1,6 +1,8 @@
 import logging
 import random
+import re
 import tempfile
+from pathlib import Path
 from typing import Optional, Union
 
 import numpy
@@ -76,6 +78,16 @@ from ww_trainer.augment import (
 
 logger = logging.getLogger(__name__)
 
+
+
+_SILENCE_WINDOW_NAME = re.compile(r"(zeros|noise_m\d+dbfs)_\d+\.wav")
+
+
+def is_silence_window(path: str) -> bool:
+    """Whether *path* is a silence window as datagen writes it: ``negatives/silence/<class>_<n>.wav``."""
+    p = Path(path)
+    return (p.parent.name == "silence" and p.parent.parent.name == "negatives"
+            and _SILENCE_WINDOW_NAME.fullmatch(p.name) is not None)
 
 
 class AudioDataset(Dataset):
@@ -387,6 +399,9 @@ class AudioDataset(Dataset):
     def _waveform(self, idx: int, will_augment: bool, use_vc: bool, use_wow: bool) -> torch.Tensor:
         """Load sample *idx* as a mono waveform, applying the chosen augmentations."""
         path, label = self.samples[idx][0], self.samples[idx][1]
+        # Augmentation adds noise relative to the clip's own level and peak-normalises, which turns a
+        # silence window into loud noise; the class exists to be heard at its level.
+        will_augment = will_augment and not is_silence_window(path)
 
         # 0. Apply Voice Conversion -> simulate a new speaker
         if use_vc:
