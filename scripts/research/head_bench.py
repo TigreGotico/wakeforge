@@ -194,6 +194,9 @@ def file_sha1(path):
     return hashlib.sha1(Path(path).read_bytes()).hexdigest()
 
 
+CPUINFO = Path("/proc/cpuinfo")
+
+
 def device_name(provider):
     """Model name of the card or processor an execution provider runs on."""
     if provider == "CUDAExecutionProvider":
@@ -201,12 +204,11 @@ def device_name(provider):
             return torch.cuda.get_device_name(0)
         return subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True,
                               text=True, check=True).stdout.splitlines()[0].strip()
-    if platform.processor():
-        return platform.processor()
-    for line in Path("/proc/cpuinfo").read_text().splitlines():
-        if line.startswith("model name"):
-            return line.split(":", 1)[1].strip()
-    return platform.machine()
+    if CPUINFO.exists():
+        for line in CPUINFO.read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    return platform.processor() or platform.machine()
 
 
 class FeatureStore:
