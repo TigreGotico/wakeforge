@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.0a1](https://github.com/TigreGotico/wakeforge/tree/0.17.0a1) (2026-10-03)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.5a1...0.17.0a1)
+
+**Merged pull requests:**
+
+- feat: add ww\_trainer-voicegrid, a resumable parallel voice-grid data generator [\#96](https://github.com/TigreGotico/wakeforge/pull/96) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.16.5a1](https://github.com/TigreGotico/wakeforge/tree/0.16.5a1) (2026-10-03)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.4a1...0.16.5a1)
