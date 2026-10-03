@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1a1](https://github.com/TigreGotico/wakeforge/tree/0.18.1a1) (2026-10-03)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.18.0a1...0.18.1a1)
+
+**Merged pull requests:**
+
+- fix: export\_plugin accepts the int8 WakeHuBERT featurizer [\#98](https://github.com/TigreGotico/wakeforge/pull/98) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.18.0a1](https://github.com/TigreGotico/wakeforge/tree/0.18.0a1) (2026-10-03)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.17.1a1...0.18.0a1)
