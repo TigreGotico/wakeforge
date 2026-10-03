@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.4a1](https://github.com/TigreGotico/wakeforge/tree/0.16.4a1) (2026-10-03)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.3a1...0.16.4a1)
+
+**Merged pull requests:**
+
+- fix: stream a capped dataset download instead of filling the whole cache [\#89](https://github.com/TigreGotico/wakeforge/pull/89) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.16.3a1](https://github.com/TigreGotico/wakeforge/tree/0.16.3a1) (2026-10-02)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.2a1...0.16.3a1)
