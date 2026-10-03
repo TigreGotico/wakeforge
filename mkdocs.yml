@@ -69,6 +69,7 @@ nav:
       - FAQ: faq.md
   - Guides:
       - Datasets: guides/datasets.md
+      - Voice-grid synthetic data: guides/voicegrid.md
       - Training: guides/training.md
       - Evaluation (latency & RTF): guides/evaluation.md
       - Inference: guides/inference.md
