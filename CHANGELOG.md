@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.1a1](https://github.com/TigreGotico/wakeforge/tree/0.17.1a1) (2026-10-03)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.17.0a1...0.17.1a1)
+
+**Merged pull requests:**
+
+- fix: friendly CLI errors, infer resampling, empty wake word, rerun guard [\#92](https://github.com/TigreGotico/wakeforge/pull/92) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.17.0a1](https://github.com/TigreGotico/wakeforge/tree/0.17.0a1) (2026-10-03)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.16.5a1...0.17.0a1)
