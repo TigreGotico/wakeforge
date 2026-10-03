@@ -49,12 +49,15 @@ KNOWN_POSITIVE_DATASETS: Dict[str, str] = {
     "home_assistant": "TigreGotico/synthetic-wakeword-home_assistant",
 }
 
+#: A source is ``repo`` or ``repo:config``. A negative repo that declares several Parquet configs must name
+#: one, because configs can overlap: AudioSet's ``full`` holds ``balanced`` and ``unbalanced``, so reading
+#: every config writes a clip twice. ``balanced`` (about 22,000 clips) covers the 5,000-clip cap.
 NEGATIVE_DATASETS: Dict[str, List[str]] = {
     # Non-speech environmental sounds (label=0)
     "general": [
         "TigreGotico/ESC-50",
         "TigreGotico/NAR",
-        "agkphysics/AudioSet",          # large general audio; capped by max_negative
+        "agkphysics/AudioSet:balanced",  # large general audio; capped by max_negative
     ],
     # Human speech that is NOT the wake word — critical for preventing
     # models from learning "speech vs silence" instead of the specific phrase.
@@ -88,6 +91,12 @@ STREAMING_ONLY_DATASETS: set = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def split_source(source: str) -> tuple[str, Optional[str]]:
+    """``"org/repo:config"`` → ``("org/repo", "config")``; a bare repo has no config."""
+    repo, _, config = source.partition(":")
+    return repo, config or None
 
 
 def normalize_wake_word(s: str) -> str:
@@ -363,8 +372,20 @@ def download_hf_audio_dataset(
     max_samples: Optional[int] = None,
     sr: int = 16000,
     seed: int = 0,
+    hf_config: Optional[List[str]] = None,
+    keep_labels: Optional[Set[str]] = None,
+    all_configs: bool = True,
 ) -> List[Path]:
     """Download a HuggingFace audio dataset and save WAVs to *output_dir*.
+
+    A repo stored as Parquet shards is streamed, bounded by *max_samples*, from
+    the configs it declares or the ones named in *hf_config*; a named config the
+    repo lacks, or *hf_config* on a repo that is not Parquet, raises. With
+    *keep_labels* set, rows of a repo with a ``label`` column are kept only when
+    their lower-cased label is in it; a ClassLabel feature is read by name, not by index.
+    With *all_configs* false, a Parquet repo that declares several configs needs one
+    named in *hf_config*, or the call raises. A repo that is a folder of audio files is
+    fetched file by file.
 
     A capped download from a folder repo draws its files with a generator
     seeded by *seed* and *dataset_id*, so the draw is the same on every run and
@@ -391,6 +412,19 @@ def download_hf_audio_dataset(
         return existing[:max_samples] if max_samples is not None else existing
 
     logger.info("Downloading %s → %s (max=%s)", dataset_id, output_dir, max_samples)
+
+    # ── Repos stored as Parquet shards with an embedded audio column ───────
+    parquet_configs = _list_parquet_configs(dataset_id)
+    if parquet_configs:
+        missing = [c for c in hf_config or [] if c not in parquet_configs]
+        if missing:
+            raise ValueError(f"{dataset_id} has no config {missing}; its configs are {parquet_configs}")
+        if not all_configs and not hf_config and len(parquet_configs) > 1:
+            raise ValueError(f"{dataset_id} declares configs {parquet_configs}; name one as 'repo:config'")
+        chosen = hf_config or parquet_configs
+        return _download_parquet_dataset(dataset_id, chosen, output_dir, max_samples, sr, seed, keep_labels)
+    if hf_config:
+        raise ValueError(f"{dataset_id} is not stored as Parquet, so it has no configs to select {hf_config} from")
 
     # ── Repos that are folders of audio files: fetch the files themselves ──
     # This needs no `datasets` builder at all, so it works where torchcodec
@@ -458,11 +492,26 @@ def download_hf_audio_dataset(
     if ds is None:
         return []
 
+    written, _ = _write_rows(
+        ds if max_samples is None else itertools.islice(ds, max_samples),
+        dataset_id, output_dir, sr,
+    )
+    logger.info("  Downloaded %d files from %s", len(written), dataset_id)
+    return written
+
+
+def _write_rows(
+    rows: Any, dataset_id: str, output_dir: Path, sr: int, start: int = 0,
+) -> tuple[List[Path], List[tuple[str, str]]]:
+    """Decode the audio column of *rows* and save each as a 16-bit mono WAV at *sr*.
+
+    Files are named by row position from *start*. Returns the written paths and,
+    where the rows carry a ``label`` column, a ``(file name, label)`` pair for each.
+    """
     written: List[Path] = []
+    labels: List[tuple[str, str]] = []
     audio_col = None
-    rows = ds if max_samples is None else itertools.islice(ds, max_samples)
-    for i, example in enumerate(rows):
-        # Auto-detect audio column on first row
+    for i, example in enumerate(rows, start):
         if audio_col is None:
             for col in ("audio", "Audio", "sound", "file"):
                 if col in example:
@@ -476,7 +525,7 @@ def download_hf_audio_dataset(
                         break
             if audio_col is None:
                 logger.warning("No audio column found in %s", dataset_id)
-                return written
+                return written, labels
 
         audio = example[audio_col]
         try:
@@ -505,8 +554,83 @@ def download_hf_audio_dataset(
         fname = output_dir / f"{i:06d}.wav"
         _save_audio(str(fname), torch.tensor(arr).unsqueeze(0).float(), sr)
         written.append(fname)
+        if "label" in example:
+            labels.append((fname.name, str(example["label"])))
+    return written, labels
 
-    logger.info("  Downloaded %d files from %s", len(written), dataset_id)
+
+def _list_parquet_configs(dataset_id: str) -> List[str]:
+    """Config names of a Hugging Face dataset repo stored as Parquet shards, or []
+    when the repo holds no ``*.parquet`` file or cannot be listed."""
+    from huggingface_hub import HfApi
+
+    try:
+        files = HfApi().list_repo_files(dataset_id, repo_type="dataset")
+    except Exception as exc:
+        logger.warning("Could not list files of %s: %s", dataset_id, exc)
+        return []
+    if not any(f.endswith(".parquet") for f in files):
+        return []
+    from datasets import get_dataset_config_names
+
+    return list(get_dataset_config_names(dataset_id))
+
+
+def _label_text(value: Any, names: Any) -> str:
+    """Lower-cased label of a row; *names* is a ClassLabel feature that turns an index into its name."""
+    if names is not None and isinstance(value, int):
+        value = names.int2str(value)
+    return str(value).strip().lower()
+
+
+def _download_parquet_dataset(
+    dataset_id: str,
+    configs: List[str],
+    output_dir: Path,
+    max_samples: Optional[int],
+    sr: int,
+    seed: int,
+    keep_labels: Optional[Set[str]] = None,
+) -> List[Path]:
+    """Stream the ``train`` split of each of *configs* and save its clips as WAVs.
+
+    A cap is shared out between the configs, rounded up, and the run stops at the
+    cap. A ``labels.csv`` beside the WAVs records the ``label`` column where the
+    repo has one. A failed load raises.
+    """
+    import zlib
+    from datasets import Audio, ClassLabel, load_dataset
+
+    written: List[Path] = []
+    labels: List[tuple[str, str]] = []
+    quota = None if max_samples is None else -(-max_samples // len(configs))
+    for config in configs:
+        remaining = None if max_samples is None else min(quota, max_samples - len(written))
+        if remaining is not None and remaining <= 0:
+            break
+        try:
+            ds = load_dataset(dataset_id, name=config, split="train", streaming=True)
+            features = ds.features or {}
+            if "audio" in features:
+                ds = ds.cast_column("audio", Audio(decode=False))
+            names = features["label"] if isinstance(features.get("label"), ClassLabel) else None
+            if remaining is not None:
+                ds = ds.shuffle(seed=zlib.crc32(f"{seed}:{dataset_id}:{config}".encode()),
+                                buffer_size=min(1000, 4 * remaining))
+        except Exception as exc:
+            raise RuntimeError(f"Load of {dataset_id} config {config} failed: {exc}") from exc
+        rows = ds
+        if keep_labels is not None:
+            rows = (r for r in rows if "label" not in r or _label_text(r["label"], names) in keep_labels)
+        if remaining is not None:
+            rows = itertools.islice(rows, remaining)
+        got, got_labels = _write_rows(rows, dataset_id, output_dir, sr, start=len(written))
+        written.extend(got)
+        labels.extend(got_labels)
+    if labels:
+        with open(output_dir / "labels.csv", "w", newline="") as f:
+            csv.writer(f).writerows([("file", "label"), *labels])
+    logger.info("  Downloaded %d files from %s (configs %s)", len(written), dataset_id, configs)
     return written
 
 
@@ -989,6 +1113,7 @@ class DatagenConfig:
     output_dir: Path
     n_positive: int = 1000
     max_negative: Optional[int] = None
+    hf_config: Optional[List[str]] = None
     lang: str = "en"
     sample_rate: int = 16000
     vad_trim: bool = True
@@ -1092,7 +1217,8 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
         logger.info("  Known wake word — downloading from %s", hf_dataset)
         pos_files = download_hf_audio_dataset(
             hf_dataset, positives_dir, max_samples=config.n_positive,
-            sr=config.sample_rate, seed=config.seed,
+            sr=config.sample_rate, seed=config.seed, hf_config=config.hf_config,
+            keep_labels={"1", "true", ww_key, ww_key.replace("_", " "), ww_key.replace("_", "-")},
         )
     else:
         logger.info("  Unknown wake word — synthesizing via TTS")
@@ -1138,7 +1264,8 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
     neg_files: List[Path] = []
     phrase_of: dict[Path, str] = {}
     for category in ("general", "speech"):
-        for ds_id in NEGATIVE_DATASETS.get(category, []):
+        for source in NEGATIVE_DATASETS.get(category, []):
+            ds_id, ds_config = split_source(source)
             ds_name = ds_id.split("/")[-1]
             ds_out = negatives_dir / ds_name
             # Respect user's max_negative, but enforce a hard cap for huge datasets.
@@ -1148,23 +1275,36 @@ def run_datagen_pipeline(config: DatagenConfig) -> DatagenResult:
             else:
                 cap = config.max_negative
             files = download_hf_audio_dataset(
-                ds_id, ds_out, max_samples=cap, sr=config.sample_rate, seed=config.seed
+                ds_id, ds_out, max_samples=cap, sr=config.sample_rate, seed=config.seed,
+                hf_config=[ds_config] if ds_config else None, all_configs=False,
             )
             neg_files.extend(files)
 
     # Augmentation resources (NOT in CSV)
     if config.download_augmentation:
-        for ds_id in NEGATIVE_DATASETS["bg_noise"]:
+        for source in NEGATIVE_DATASETS["bg_noise"]:
+            ds_id, ds_config = split_source(source)
             ds_name = ds_id.split("/")[-1]
-            download_hf_audio_dataset(ds_id, bg_noise_dir / ds_name, sr=config.sample_rate)
+            download_hf_audio_dataset(
+                ds_id, bg_noise_dir / ds_name, sr=config.sample_rate,
+                hf_config=[ds_config] if ds_config else None, all_configs=False,
+            )
 
-        for ds_id in NEGATIVE_DATASETS["music"]:
+        for source in NEGATIVE_DATASETS["music"]:
+            ds_id, ds_config = split_source(source)
             ds_name = ds_id.split("/")[-1]
-            download_hf_audio_dataset(ds_id, music_dir / ds_name, sr=config.sample_rate)
+            download_hf_audio_dataset(
+                ds_id, music_dir / ds_name, sr=config.sample_rate,
+                hf_config=[ds_config] if ds_config else None, all_configs=False,
+            )
 
-        for ds_id in NEGATIVE_DATASETS["rir"]:
+        for source in NEGATIVE_DATASETS["rir"]:
+            ds_id, ds_config = split_source(source)
             ds_name = ds_id.split("/")[-1]
-            download_hf_audio_dataset(ds_id, rir_dir / ds_name, sr=config.sample_rate)
+            download_hf_audio_dataset(
+                ds_id, rir_dir / ds_name, sr=config.sample_rate,
+                hf_config=[ds_config] if ds_config else None, all_configs=False,
+            )
 
     # ── Stage 3: Optional adversarial hard-negatives ────────────────────
     if config.adversarial:
@@ -1429,6 +1569,11 @@ def cli_main() -> None:
         "--max-negative", type=int, default=None, help="Max general negative samples"
     )
     parser.add_argument(
+        "--hf-config", nargs="+", default=None, metavar="CONFIG",
+        help="Configs to read from the positive Parquet dataset repo, e.g. default omnivoice "
+             "(default: every config the repo declares); negatives always read all of theirs",
+    )
+    parser.add_argument(
         "--lang", default="en", help="Language for TTS (default: en)"
     )
     parser.add_argument(
@@ -1499,6 +1644,7 @@ def cli_main() -> None:
         output_dir=args.output_dir,
         n_positive=args.n_positive,
         max_negative=args.max_negative,
+        hf_config=args.hf_config,
         lang=args.lang,
         sample_rate=16000,
         vad_trim=not args.no_vad,
