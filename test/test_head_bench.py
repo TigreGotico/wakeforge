@@ -79,7 +79,7 @@ def run_cache(ws, name, store="store", featurizer=None, metadata=None):
     SpySession.rows = 0
     a = argparse.Namespace(featurizer=featurizer or ws.feat, cache_dir=str(ws.root / name), metadata=metadata or ws.train,
                            val=ws.val, pos_aug=POS_AUG, feature_store=str(ws.root / store) if store else None,
-                           featurizer_revision=None)
+                           featurizer_revision=None, calib_stream_hours=0)
     hb.cache(a)
     c = ws.root / name
     return SpySession.rows, {s: np.load(c / f"{s}.npy") for s in ("train", "val", "calib")}
@@ -342,7 +342,7 @@ def test_head_fits_exports_and_matches_onnxruntime(fitted, head, loss):
     out = fitted[loss]
     ck = torch.load(out / f"{hb.stem(head)}.pt", map_location="cpu")
     assert ck["spec"] == head and ck["frames"] == FRAMES and ck["loss"] == loss
-    hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=True))
+    hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=True, calibrate=False))
     sess = onnxruntime.InferenceSession(str(out / f"{hb.stem(head)}.onnx"), providers=["CPUExecutionProvider"])
     assert [i.name for i in sess.get_inputs()] == ["features"] and [o.name for o in sess.get_outputs()] == ["logit"]
     x = torch.randn(5, FRAMES, DIM, generator=torch.Generator().manual_seed(3))
@@ -436,9 +436,9 @@ def test_fixed_frame_heads_need_the_flag_and_record_their_length(fitted, head):
     stem = hb.stem(head)
     (out / f"{stem}.onnx").unlink(missing_ok=True)
     with pytest.raises(SystemExit, match="allow-fixed-frames"):
-        hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=False))
+        hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=False, calibrate=False))
     assert not (out / f"{stem}.onnx").exists()
-    hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=True))
+    hb.export(argparse.Namespace(out_dir=str(out), head=head, allow_fixed_frames=True, calibrate=False))
     import onnx
     meta = {m.key: m.value for m in onnx.load(str(out / f"{stem}.onnx")).metadata_props}
     assert meta["fixed_frames"] == str(FRAMES)
@@ -450,5 +450,150 @@ def test_fixed_frame_heads_need_the_flag_and_record_their_length(fitted, head):
 def test_dynamic_heads_export_without_the_flag_and_carry_no_fixed_frames(fitted):
     import onnx
     out = fitted["bce"]
-    hb.export(argparse.Namespace(out_dir=str(out), head="gru", allow_fixed_frames=False))
+    hb.export(argparse.Namespace(out_dir=str(out), head="gru", allow_fixed_frames=False, calibrate=False))
     assert "fixed_frames" not in {m.key for m in onnx.load(str(out / "gru.onnx")).metadata_props}
+
+
+def _calibration_cache(c, stream_hours=1.0):
+    rng = np.random.default_rng(1)
+    c.mkdir()
+    for split, n, n_pos in (("train", 400, 100), ("val", 40, 10), ("calib", 700, 200)):
+        labels = np.r_[np.ones(n_pos), np.zeros(n - n_pos)].astype(np.int8)
+        shift = labels * (rng.uniform(0.3, 3.0, n) if split == "calib" else 3.0)
+        feats = rng.standard_normal((n, 75, 8)) + shift[:, None, None]
+        np.save(c / f"{split}.npy", feats.astype(np.float16)); np.save(c / f"{split}_labels.npy", labels)
+    np.save(c / "calib_stream.npy", _negative_stream(2, stream_hours))
+
+
+def _negative_stream(seed, hours):
+    return np.random.default_rng(seed).standard_normal((int(hours * 3600 * 50), 8)).astype(np.float16)
+
+
+def _export(tmp_path, name, **kw):
+    a = argparse.Namespace(out_dir=str(tmp_path / "out-bce"), head="gru-h16", calibrate=False, cache_dir=None,
+                           target_fa_per_hour=1.0, **kw)
+    path = Path(a.out_dir) / "gru-h16.onnx"
+    hb.export(a)
+    path.rename(path.with_name(f"{name}.onnx"))
+    return str(path.with_name(f"{name}.onnx"))
+
+
+def _logits(onnx_path, feats):
+    s = onnxruntime.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    return np.concatenate([s.run(None, {"features": feats[i:i + 128]})[0] for i in range(0, len(feats), 128)]).astype(np.float64)
+
+
+def test_calibrated_export_unsaturates_and_holds_the_detection_rate_on_held_out_streams(tmp_path):
+    c = tmp_path / "cache"
+    _calibration_cache(c)
+    hb.fit(_fit_ns(tmp_path, "gru-h16", "bce", epochs=15))
+    ck_path = tmp_path / "out-bce" / "gru-h16.pt"
+    ck = torch.load(ck_path)
+    for k in ("fc2.weight", "fc2.bias"):
+        ck["state"][k] *= 10
+    torch.save(ck, ck_path)
+    target = 120.0
+    plain = _export(tmp_path, "plain")
+    hb.export(argparse.Namespace(out_dir=str(tmp_path / "out-bce"), head="gru-h16", calibrate=True, cache_dir=str(c),
+                                 target_fa_per_hour=target, positives_per_hour=4.0, allow_fixed_frames=False))
+    cal = str(tmp_path / "out-bce" / "gru-h16.onnx")
+    x = np.load(c / "calib.npy").astype(np.float32)
+    y = np.load(c / "calib_labels.npy")
+    zp, zc = _logits(plain, x), _logits(cal, x)
+    sig = lambda z: 1 / (1 + np.exp(-z))
+    assert (sig(zp[y == 1]) >= 0.999999).mean() > 0.25
+    assert (sig(zc[y == 1]) >= 0.999999).mean() < 0.05
+    assert np.array_equal(np.argsort(zp, kind="stable"), np.argsort(zc, kind="stable"))
+    assert abs(np.median(sig(zc[y == 1])) - 0.9) < 0.02
+    held_out = torch.from_numpy(_negative_stream(3, 1.0)).unfold(0, 75, 4).permute(0, 2, 1).float().numpy()
+    detections = hb.debounced_events(_logits(cal, held_out), 0.0)
+    assert target / 1.5 <= detections <= target * 1.5
+    meta = {m.key: m.value for m in __import__("onnx").load(cal).metadata_props}
+    assert meta["calibrated"] == "1"
+    assert float(meta["target_fa_per_hour"]) == target and float(meta["calib_a"]) > 0
+    assert float(meta["calib_hours"]) == pytest.approx(1.0, rel=0.01) and meta["calib_extrapolated"] == "False"
+    assert target / 1.5 <= int(meta["calib_events"]) <= target * 1.5
+    assert float(meta["positives_per_hour"]) == 4.0 and 0.5 < float(meta["roc_auc"]) <= 1.0
+    assert float(meta["default_threshold"]) == float(meta["f2_threshold"]) and 0.05 <= float(meta["f2_threshold"]) <= 0.99
+    assert 0 < float(meta["f2"]) <= 1 and 0 < float(meta["f2_recall"]) <= 1
+
+
+def test_debounce_counts_one_event_per_quiet_period():
+    z = np.full(200, -5.0)
+    z[[10, 11, 12, 36, 37, 63]] = 5.0
+    assert hb.debounced_events(z, 0.0) == 3
+    assert hb.debounced_events(z, 6.0) == 0
+
+
+def test_thin_tail_is_extended_from_the_measured_one():
+    rng = np.random.default_rng(5)
+    hours, target = 6.0, 2.0
+    fit = rng.laplace(size=int(hours * 3600 / hb.BLOCK_SECONDS))
+    a, b, info = hb.fit_calibration(np.full(50, 15.0), fit, hours, target)
+    assert info["calib_extrapolated"] and a > 0
+    held_out = rng.laplace(size=int(60 * 3600 / hb.BLOCK_SECONDS))
+    rate = hb.debounced_events(a * held_out + b, 0.0) / 60
+    assert target / 2 <= rate <= target * 2
+
+
+def _spiked_stream(spikes=30, blocks=45000):
+    z = np.full(blocks, -10.0)
+    z[50::blocks // spikes] = 1.0
+    return z
+
+
+def test_f2_threshold_trades_recall_against_false_activations():
+    pos = np.r_[np.full(100, 3.0), np.zeros(100)]
+    stream = _spiked_stream()
+    hours = len(stream) * hb.BLOCK_SECONDS / 3600
+    plenty = hb.f2_operating_point(pos, stream, hours, 300 / hours)
+    assert plenty["f2_threshold"] == 0.5 and plenty["f2_recall"] == 1.0
+    assert plenty["f2"] == pytest.approx(5 * (300 / 330) / (4 * (300 / 330) + 1))
+    scarce = hb.f2_operating_point(pos, stream, hours, 3 / hours)
+    assert scarce["f2_threshold"] == 0.95 and scarce["f2_recall"] == 0.5
+    assert scarce["f2"] == pytest.approx(5 * 0.5 / (4 + 0.5))
+
+
+def test_roc_auc_matches_sklearn():
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.default_rng(7)
+    pos, neg = rng.normal(1.0, 1.0, 300), np.r_[rng.normal(0.0, 1.0, 5000), np.full(20, 1.0), np.full(20, 0.5)]
+    pos = np.r_[pos, 1.0, 0.5]
+    labels = np.r_[np.ones(len(pos)), np.zeros(len(neg))]
+    assert hb.roc_auc(pos, neg) == pytest.approx(roc_auc_score(labels, np.r_[pos, neg]), abs=1e-12)
+
+
+@pytest.mark.parametrize("threshold,good", [(0.5, True), (0.6, True), (0.7, True), (0.49, False), (0.71, False), (0.95, False)])
+def test_verdict_accepts_f2_thresholds_between_half_and_seven_tenths(threshold, good):
+    verdict = hb.calibration_verdict(threshold)
+    assert verdict.startswith("calibration good") == good
+    assert good or (verdict.startswith("warning") and f"{threshold:.2f}" in verdict)
+
+
+def test_calibration_speech_must_not_overlap_training_audio(ws):
+    train = hb.read_meta(ws.train)[0]
+    with pytest.raises(SystemExit, match="holds the training file"):
+        hb.refuse_overlap([str(ws.root / "kws")], ws.train, "data/LibriSpeech/train-clean-100")
+    with pytest.raises(SystemExit, match="augmentation pool"):
+        hb.refuse_overlap(["data/LibriSpeech"], None, "data/LibriSpeech/train-clean-100")
+    with pytest.raises(SystemExit, match="augmentation pool"):
+        hb.refuse_overlap(["data/LibriSpeech/train-clean-100/sub"], None, "data/LibriSpeech/train-clean-100")
+    hb.refuse_overlap(["data/LibriSpeech/dev-other"], ws.train, "data/LibriSpeech/train-clean-100")
+    assert train
+
+
+def test_calibration_refuses_a_head_that_does_not_separate():
+    with pytest.raises(SystemExit, match="nothing to calibrate"):
+        hb.fit_calibration(np.zeros(20), np.random.default_rng(0).laplace(size=40000) + 1, 1.0, 100.0)
+
+
+def test_calib_stream_featurizes_continuous_negative_audio(ws):
+    out = ws.root / "stream"
+    hb.calib_stream(argparse.Namespace(featurizer=ws.feat, featurizer_revision=None, cache_dir=str(out), calib_stream_hours=0.02,
+                                       calib_stream_speech=["data/LibriSpeech/dev-other"], metadata=ws.train,
+                                       aug_talk="data/LibriSpeech/train-clean-100"))
+    stream = np.load(out / "calib_stream.npy")
+    run_cache(ws, "c1")
+    window = np.load(ws.root / "c1" / "calib.npy", mmap_mode="r").shape[1]
+    assert stream.dtype == np.float16 and stream.ndim == 2
+    assert len(stream) == pytest.approx(math.ceil(0.02 * 3600 / 20) * 20 * window / 1.5, rel=0.01)
