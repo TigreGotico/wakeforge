@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.0a1](https://github.com/TigreGotico/wakeforge/tree/0.18.0a1) (2026-10-03)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.17.1a1...0.18.0a1)
+
+**Merged pull requests:**
+
+- feat: read Parquet dataset repos in datagen [\#97](https://github.com/TigreGotico/wakeforge/pull/97) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.17.1a1](https://github.com/TigreGotico/wakeforge/tree/0.17.1a1) (2026-10-03)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.17.0a1...0.17.1a1)
