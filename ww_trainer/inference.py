@@ -467,6 +467,16 @@ class OnnxStreamingWakeWord:
         return float(1.0 / (1.0 + np.exp(-logit_val)))
 
 
+def to_mono_16k(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Downmix ``[T]`` or ``[T, C]`` audio to mono and resample it to 16 kHz."""
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sample_rate != 16000:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+    return audio.astype(np.float32)
+
+
 def cli_main() -> None:
     """CLI entry point for ``ww_trainer-infer``.
 
@@ -475,11 +485,14 @@ def cli_main() -> None:
     """
     import argparse
     import logging
+    import os
     import sys
 
     import numpy as np
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    ort.set_default_logger_severity(3)
 
     parser = argparse.ArgumentParser(
         prog="ww_trainer-infer",
@@ -489,31 +502,44 @@ def cli_main() -> None:
                         help="Path to featurizer ONNX file (omit for a head trained on a "
                              "pretrained featurizer: its metadata names it).")
     parser.add_argument("--model", required=True, help="Path to head ONNX file.")
-    parser.add_argument("--audio", required=True, help="Path to WAV file (16 kHz mono float32).")
+    parser.add_argument("--audio", required=True,
+                        help="Path to WAV file (any sample rate or channel count; "
+                             "converted to 16 kHz mono).")
     parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold (default 0.5).")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
 
-    try:
-        import soundfile as sf
-    except ImportError:
-        try:
-            import torchaudio
-            wav, sr = torchaudio.load(args.audio)
-            if sr != 16000:
-                import torchaudio.functional as F_ta
-                wav = F_ta.resample(wav, sr, 16000)
-            audio = wav.squeeze().numpy().astype(np.float32)
-        except ImportError:
-            print("Install soundfile or torchaudio to load audio files.", file=sys.stderr)
-            sys.exit(1)
-    else:
-        audio, sr = sf.read(args.audio, dtype="float32", always_2d=False)
-        if sr != 16000:
-            print(f"Warning: sample rate is {sr} Hz, expected 16000.", file=sys.stderr)
+    def fail(message: str) -> None:
+        print(f"Error: {message}", file=sys.stderr)
+        sys.exit(2)
 
-    model = OnnxWakeWordInferencer(args.featurizer, args.model, device=args.device)
-    score = model.infer(audio)
+    for flag, path in (("--audio", args.audio), ("--model", args.model),
+                       ("--featurizer", args.featurizer)):
+        if path is not None and not os.path.isfile(path):
+            fail(f"{flag} file not found: {path}")
+
+    import soundfile as sf
+    try:
+        audio, sr = sf.read(args.audio, dtype="float32", always_2d=False)
+    except sf.LibsndfileError as exc:
+        fail(f"--audio {args.audio} is not a readable audio file (expected a WAV): {exc}")
+    audio = to_mono_16k(audio, sr)
+
+    try:
+        model = OnnxWakeWordInferencer(args.featurizer, args.model, device=args.device)
+    except ValueError:
+        raise
+    except Exception as exc:
+        named = [p for p in (args.featurizer, args.model) if p and p in str(exc)]
+        fail(f"could not load ONNX model {' / '.join(named or [args.model])}: "
+             f"not a valid ONNX file ({str(exc).splitlines()[0]})")
+    try:
+        score = model.infer(audio)
+    except Exception as exc:
+        if "Invalid rank" in str(exc):
+            fail(f"--featurizer {args.featurizer} and --model {args.model} look swapped: "
+                 "the featurizer takes a waveform and the head takes features.")
+        fail(f"could not score {args.audio} with --model {args.model}: {exc}")
     detected = score >= args.threshold
     print(f"score={score:.4f}  threshold={args.threshold}  detected={detected}")
     sys.exit(0 if detected else 1)

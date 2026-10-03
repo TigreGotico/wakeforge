@@ -388,6 +388,8 @@ def cli_main() -> None:
         seed: int,
     ) -> None:
         """Generate a synthetic dataset and train a wake-word model in one command."""
+        if not wake_word.strip():
+            raise click.BadParameter("must not be empty or whitespace", param_hint="--wake-word")
         result = train_from_wakeword(
             wake_word=wake_word,
             output_dir=output_dir,

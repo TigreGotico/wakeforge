@@ -1491,6 +1491,8 @@ def cli_main() -> None:
     )
 
     args = parser.parse_args()
+    if not args.wake_word.strip():
+        parser.error("--wake-word must not be empty or whitespace")
 
     cfg = DatagenConfig(
         wake_word=args.wake_word,

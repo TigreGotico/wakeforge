@@ -6,8 +6,9 @@ configuration, and invokes ``WakeWordTrainer``.
 import json
 import os
 import random
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import click
 import torch
@@ -27,6 +28,9 @@ def _load_rows(csv_path: str, flag: str, allow_missing: bool) -> List[Tuple[str,
     counted and reported; losing more than 5% of the rows (or all of them) is an
     error unless ``allow_missing`` is set.
     """
+    if not os.path.isfile(csv_path):
+        raise click.ClickException(
+            f"{flag} file not found: {csv_path} (expected a CSV with 'path,label' rows)")
     csv_dir = Path(csv_path).parent
     entries: List[Tuple[str, str]] = []
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -61,6 +65,55 @@ def _load_rows(csv_path: str, flag: str, allow_missing: bool) -> List[Tuple[str,
     return rows
 
 
+def _earlier_checkpoints(out: Path) -> List[Path]:
+    """Every checkpoint under *out*, multi-stage ``stage_N`` folders included."""
+    found: List[Path] = []
+    for root, dirs, files in os.walk(out):
+        dirs[:] = [d for d in dirs if not d.startswith(".old-")]
+        found += [Path(root) / f for f in files if f.endswith(".pt")]
+    return sorted(found)
+
+
+def _check_output_dir(out_dir: str, metrics_log: str, resume, overwrite: bool,
+                      inputs: List[Optional[str]]) -> None:
+    """Refuse a fresh run into a directory a previous run left its output in.
+
+    ``--overwrite`` archives everything in the directory except the entries that
+    contain one of the *inputs* (metadata CSVs, audio folders, models).
+    """
+    out = Path(out_dir)
+    if resume or not out.is_dir():
+        return
+    log = out / metrics_log if metrics_log else None
+    checkpoints = _earlier_checkpoints(out)
+    has_log = log is not None and log.is_file() and log.stat().st_size > 0
+    if overwrite:
+        keep = [Path(i).resolve() for i in inputs if i]
+        previous = [p for p in out.iterdir()
+                    if not p.name.startswith(".old-")
+                    and not any(k == p.resolve() or p.resolve() in k.parents for k in keep)]
+        if previous:
+            archive = out / f".old-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+            archive.mkdir()
+            for path in previous:
+                path.rename(archive / path.name)
+        return
+    epochs = sorted((p for p in out.glob("ep*.pt") if p.stem[2:].isdigit()),
+                    key=lambda p: int(p.stem[2:]))
+    if epochs:
+        raise click.ClickException(
+            f"{out_dir} already holds epoch checkpoints (latest: {epochs[-1]}). "
+            f"Pass --resume {epochs[-1]} to continue, or --overwrite to start over.")
+    if checkpoints:
+        raise click.ClickException(
+            f"{out_dir} already holds checkpoints from an earlier run (e.g. {checkpoints[0]}). "
+            "Pass --overwrite to start over, or use a new --output-dir.")
+    if has_log:
+        raise click.ClickException(
+            f"{log} already holds metrics from an earlier run. "
+            "Pass --overwrite to start over, or use a new --output-dir.")
+
+
 @click.command(help="""
 Train a wake-word detection model using the WakeWordTrainer.
 
@@ -92,6 +145,9 @@ hard-negative mining, and evaluation — with optional MLflow tracking and ONNX 
 @click.option("--batch-size", default=16, type=int, help="Mini-batch size.")
 @click.option("--lr", default=5e-4, type=float, help="Initial learning rate.")
 @click.option("--resume", default=None,  help="Resume training from an existing checkpoint (.pt).")
+@click.option("--overwrite", is_flag=True, default=False,
+              help="Train from scratch into an --output-dir that already holds epoch checkpoints, "
+                   "moving its previous output into a .old-<timestamp> folder.")
 @click.option("--seed", default=42, type=int,
               help="Random seed for the train/test split and training (default: 42).")
 @click.option("--output-dir", default=None, help="Directory to store checkpoints, metrics, and visualizations.")
@@ -287,6 +343,7 @@ def train(**opts: dict) -> None:
         return
 
     tier = opts.pop("tier", None)
+    overwrite = opts.pop("overwrite", False)
 
     metadata = opts.pop("metadata")
     test_metadata = opts.pop("test_metadata")
@@ -368,6 +425,7 @@ def train(**opts: dict) -> None:
             cfg["margin"] = opts.get("triplet_margin", 1.0)
         losses_cfg.append(cfg)
 
+
     # Seed the global RNG *before* the shuffle so the train/test split is
     # reproducible for a given --seed (the trainer seeds itself later, which is
     # too late to make the split deterministic).
@@ -387,6 +445,13 @@ def train(**opts: dict) -> None:
     else:
         split_idx = int(len(entries) * opts["split"])
         train_data, test_data = entries[:split_idx], entries[split_idx:]
+
+    input_paths = [metadata, test_metadata, ambient_dir, onnx_model, feature_cache_dir,
+                   *(path for path, _ in train_data + test_data),
+                   *(opts.get(k) for k in ("calib_speech", "bg_noise_folder", "mic_noise_folder",
+                                           "music_folder", "bg_speech_folder", "rir_folder",
+                                           "vc_folder", "vad_onnx_path"))]
+    _check_output_dir(out_dir, opts["metrics_log"], opts["resume"], overwrite, input_paths)
 
     click.secho(f"Training {arch} on {len(train_data)} samples", fg="blue", bold=True)
 
@@ -430,73 +495,77 @@ def train(**opts: dict) -> None:
         "feature_cache_workers": feature_cache_workers,
     }
 
-    if training_stages:
-        from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
-        stages = parse_stage_spec(training_stages)
-        run_multi_stage_training(
-            trainer, stages, train_data, test_data, out_dir,
-            batch_size=opts["batch_size"],
-            neg_threshold=opts["neg_threshold"],
-            mine_fraction=opts["mine_sample"],
-            mining_type=opts["mining_type"],
-            patience=opts["patience"],
-            save_best=opts["save_best"],
-            metrics_log=opts["metrics_log"],
-            neg_weight_schedule=neg_weight_schedule,
-            max_neg_weight=max_neg_weight,
-            aug_prob=aug_prob,
-            aug_warmup_epochs=aug_warmup_epochs,
-            **feature_kwargs,
-            **calib_kwargs,
-        )
-    else:
-        trainer.train(
-            train_data=train_data,
-            test_data=test_data,
-            epochs=opts["epochs"],
-            batch_size=opts["batch_size"],
-            lr=opts["lr"],
-            neg_threshold=opts["neg_threshold"],
-            mine_fraction=opts["mine_sample"],
-            mining_type=opts["mining_type"],
-            patience=opts["patience"],
-            save_best=opts["save_best"],
-            metrics_log=opts["metrics_log"],
-            tsne_every=opts["tsne_every"],
-            pca_every=opts["pca_every"],
-            umap_every=opts["umap_every"],
-            output_dir=out_dir,
-            base_hard=opts["base_hard"],
-            max_hard=opts["max_hard"],
-            base_easy=opts["base_easy"],
-            min_easy=opts["min_easy"],
-            base_random=opts["base_random"],
-            total_ratio=opts["total_ratio"],
-            blend_ratio=opts["blend_ratio"],
-            use_amp=use_amp,
-            accumulate_grad_batches=accumulate_grad_batches,
-            resume=resume,
-            neg_weight_schedule=neg_weight_schedule,
-            max_neg_weight=max_neg_weight,
-            target_fpr=target_fpr,
-            target_fp_per_hour=target_fp_per_hour,
-            ambient_dir=ambient_dir,
-            spec_augment=spec_augment,
-            spec_augment_kwargs={
-                "n_time_masks": spec_n_time_masks,
-                "max_time_width": spec_max_time_width,
-                "n_freq_masks": spec_n_freq_masks,
-                "max_freq_width": spec_max_freq_width,
-            } if spec_augment else None,
-            replacement_ratio=replacement_ratio,
-            balanced_replacement=balanced_replacement,
-            fitness_checkpoint=fitness_checkpoint,
-            fitness_param_budget=fitness_param_budget,
-            aug_prob=aug_prob,
-            aug_warmup_epochs=aug_warmup_epochs,
-            **feature_kwargs,
-            **calib_kwargs,
-        )
+    from ww_trainer.loop import NoEpochsLeft
+    try:
+        if training_stages:
+            from ww_trainer.multi_stage import run_multi_stage_training, parse_stage_spec
+            stages = parse_stage_spec(training_stages)
+            run_multi_stage_training(
+                trainer, stages, train_data, test_data, out_dir,
+                batch_size=opts["batch_size"],
+                neg_threshold=opts["neg_threshold"],
+                mine_fraction=opts["mine_sample"],
+                mining_type=opts["mining_type"],
+                patience=opts["patience"],
+                save_best=opts["save_best"],
+                metrics_log=opts["metrics_log"],
+                neg_weight_schedule=neg_weight_schedule,
+                max_neg_weight=max_neg_weight,
+                aug_prob=aug_prob,
+                aug_warmup_epochs=aug_warmup_epochs,
+                **feature_kwargs,
+                **calib_kwargs,
+            )
+        else:
+            trainer.train(
+                train_data=train_data,
+                test_data=test_data,
+                epochs=opts["epochs"],
+                batch_size=opts["batch_size"],
+                lr=opts["lr"],
+                neg_threshold=opts["neg_threshold"],
+                mine_fraction=opts["mine_sample"],
+                mining_type=opts["mining_type"],
+                patience=opts["patience"],
+                save_best=opts["save_best"],
+                metrics_log=opts["metrics_log"],
+                tsne_every=opts["tsne_every"],
+                pca_every=opts["pca_every"],
+                umap_every=opts["umap_every"],
+                output_dir=out_dir,
+                base_hard=opts["base_hard"],
+                max_hard=opts["max_hard"],
+                base_easy=opts["base_easy"],
+                min_easy=opts["min_easy"],
+                base_random=opts["base_random"],
+                total_ratio=opts["total_ratio"],
+                blend_ratio=opts["blend_ratio"],
+                use_amp=use_amp,
+                accumulate_grad_batches=accumulate_grad_batches,
+                resume=resume,
+                neg_weight_schedule=neg_weight_schedule,
+                max_neg_weight=max_neg_weight,
+                target_fpr=target_fpr,
+                target_fp_per_hour=target_fp_per_hour,
+                ambient_dir=ambient_dir,
+                spec_augment=spec_augment,
+                spec_augment_kwargs={
+                    "n_time_masks": spec_n_time_masks,
+                    "max_time_width": spec_max_time_width,
+                    "n_freq_masks": spec_n_freq_masks,
+                    "max_freq_width": spec_max_freq_width,
+                } if spec_augment else None,
+                replacement_ratio=replacement_ratio,
+                balanced_replacement=balanced_replacement,
+                fitness_checkpoint=fitness_checkpoint,
+                fitness_param_budget=fitness_param_budget,
+                aug_prob=aug_prob,
+                aug_warmup_epochs=aug_warmup_epochs,
+                **feature_kwargs,
+                **calib_kwargs,
+            )
+    except NoEpochsLeft as exc:
+        raise click.ClickException(str(exc))
 
     # Post-training: C header export
     if export_c_path:
