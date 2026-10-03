@@ -131,6 +131,37 @@ def test_conflicting_featurizers_are_refused(tmp_path):
         export_plugin([a, b], tmp_path / "plugin.onnx", **KW)
 
 
+def _featurizer_of(path):
+    sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    return sess.get_modelmeta().custom_metadata_map["pretrained_featurizer"]
+
+
+def test_int8_featurizer_is_kept(tmp_path):
+    h = _head(tmp_path / "h.onnx", 0, featurizer="wakehubert-int8")
+    out = export_plugin([h], tmp_path / "plugin.onnx", **KW)
+    assert _featurizer_of(out) == "wakehubert-int8"
+
+
+def test_int8_ensemble_is_kept(tmp_path):
+    a = _head(tmp_path / "a.onnx", 0, featurizer="wakehubert-int8")
+    b = _head(tmp_path / "b.onnx", 1, featurizer="wakehubert-int8")
+    out = export_plugin([a, b], tmp_path / "plugin.onnx", **KW)
+    assert _featurizer_of(out) == "wakehubert-int8"
+
+
+def test_float32_and_int8_heads_are_refused_together(tmp_path):
+    a = _head(tmp_path / "a.onnx", 0, featurizer="wakehubert")
+    b = _head(tmp_path / "b.onnx", 1, featurizer="wakehubert-int8")
+    with pytest.raises(ValueError, match="disagree.*wakehubert.*wakehubert-int8"):
+        export_plugin([a, b], tmp_path / "plugin.onnx", **KW)
+
+
+def test_unknown_int8_featurizer_is_refused(tmp_path):
+    h = _head(tmp_path / "h.onnx", 0, featurizer="mfcc-int8")
+    with pytest.raises(ValueError, match="mfcc-int8"):
+        export_plugin([h], tmp_path / "plugin.onnx", **KW)
+
+
 def test_missing_featurizer_is_refused(tmp_path):
     h = _head(tmp_path / "h.onnx", 0, featurizer=None)
     with pytest.raises(ValueError, match="wakehubert"):

@@ -18,6 +18,7 @@ INPUT_NAME = "features"
 OUTPUT_NAME = "logit_calibrated"
 FEATURE_DIM = 128
 TOLERANCE = 1e-4
+PLUGIN_FEATURIZERS = ("wakehubert", "wakehubert-int8")
 
 
 def _head_io(model, path):
@@ -140,10 +141,16 @@ def export_plugin(head_paths, output, wake_word=None, license="Apache-2.0", trai
     heads = [onnx.load(str(p)) for p in head_paths]
     for h, p in zip(heads, head_paths):
         _head_io(h, p)
+    featurizers = {}
     for h, p in zip(heads, head_paths):
         found = {m.key: m.value for m in h.metadata_props}.get("pretrained_featurizer")
-        if found != "wakehubert":
-            raise ValueError(f"{p}: pretrained_featurizer is {found!r}; the plugin takes wakehubert")
+        if found not in PLUGIN_FEATURIZERS:
+            raise ValueError(f"{p}: pretrained_featurizer is {found!r}; "
+                             f"the plugin takes {' or '.join(PLUGIN_FEATURIZERS)}")
+        featurizers[str(p)] = found
+    if len(set(featurizers.values())) > 1:
+        raise ValueError(f"heads disagree on pretrained_featurizer: {featurizers}")
+    (featurizer,) = set(featurizers.values())
     declared = {{m.key: m.value for m in h.metadata_props}.get("window_frames") for h in heads} - {None}
     if len(declared) > 1:
         raise ValueError(f"heads disagree on window_frames: {sorted(declared)}")
@@ -160,7 +167,7 @@ def export_plugin(head_paths, output, wake_word=None, license="Apache-2.0", trai
         raise ValueError("wake_word is not in the heads' metadata; pass it explicitly")
     metadata.update({
         "wake_word": wake_word,
-        "pretrained_featurizer": "wakehubert",
+        "pretrained_featurizer": featurizer,
         "window_frames": str(window_frames),
         "license": license,
         "training_data": training_data,
