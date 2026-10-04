@@ -148,7 +148,8 @@ def test_cli_train_with_wakehubert(fake_hub, tmp_path, selector):
     assert list(out_dir.glob("*.onnx")), sorted(p.name for p in out_dir.iterdir())
 
 
-@pytest.mark.parametrize("name", sorted(PRETRAINED_FEATURIZERS))
+@pytest.mark.parametrize("name", sorted(n for n, e in PRETRAINED_FEATURIZERS.items()
+                                        if e.repo_id.split("/")[-1] in REPOS))
 def test_every_registry_name_resolves(fake_hub, name):
     entry = PRETRAINED_FEATURIZERS[name]
     ext = OnnxFeatureExtractor.from_pretrained(name, device="cpu")

@@ -13,7 +13,8 @@ cache and wraps it in :class:`~ww_trainer.feats.OnnxFeatureExtractor`::
     feat(wav_tensor).shape                           # [1, samples // 320, 128]
 
 Names are the repository names (``wakehubert-mel-tcn-wide``, ...), each with
-an ``-int8`` variant. From the CLI, ``--featurizer-type <name>`` (or
+an ``-int8`` variant. ``wakephonehubert-int8`` is the one exception: its repository
+holds a single int8 ``features`` graph and no float32 file. From the CLI, ``--featurizer-type <name>`` (or
 ``--featurizer <name>``) does the same; ``--tier wakehubert`` selects the
 default one.
 """
@@ -100,6 +101,14 @@ for _repo, (_, _, _fp32, _int8) in _REPOS.items():
     PRETRAINED_FEATURIZERS[f"{_repo}-int8"] = _entry(_repo, "int8", _int8)
 PRETRAINED_FEATURIZERS["wakehubert"] = PRETRAINED_FEATURIZERS["wakehubert-tiny"]
 PRETRAINED_FEATURIZERS["wakehubert-int8"] = PRETRAINED_FEATURIZERS["wakehubert-tiny-int8"]
+
+# WakePhoneHuBERT publishes only the joined 521-wide ``features`` output (WakeHuBERT
+# 0-128, voice activity 128-129, IPA posteriors 129-521) as an int8 graph. Its
+# receptive field is 131 frames of 320 samples.
+PRETRAINED_FEATURIZERS["wakephonehubert-int8"] = PretrainedFeaturizer(
+    "TigreGotico/wakephonehubert", "features_int8", _APACHE,
+    "WakeHuBERT-tiny trunk with active-speaker VAD and IPA heads, 521 features",
+    41920, "343b2497cb0ef0310d163eb53e3f0f817260dbf7")
 
 
 def is_non_commercial(licence: str) -> bool:

@@ -1,0 +1,105 @@
+{
+  "huggingface": [
+    {
+      "id": "TigreGotico/wakephonehubert",
+      "type": "model",
+      "access": "read",
+      "revision": "343b2497cb0ef0310d163eb53e3f0f817260dbf7",
+      "license": "apache-2.0",
+      "files": ["config.json", "wakephonehubert_features_int8.onnx"],
+      "use": "WakePhoneHuBERT featurizer, the wakephonehubert-int8 entry of the pretrained featurizer registry, downloaded on first use into the Hugging Face cache"
+    },
+    {
+      "id": "TigreGotico/wakehubert-tiny",
+      "type": "model",
+      "access": "read",
+      "revision": "3caa605725a932440442692f644b7217f54a29c3",
+      "license": "apache-2.0",
+      "files": ["config.json", "student.py", "model.safetensors", "wakehubert_int8.onnx"],
+      "use": "frozen WakeHuBERT-tiny trunk under the WakePhoneHuBERT heads: head training, ONNX export and size benchmarks"
+    },
+    {
+      "id": "facebook/wav2vec2-xlsr-53-espeak-cv-ft",
+      "type": "model",
+      "access": "read",
+      "revision": "3e836924cfd3b858a0bbdbc1f7ef412105d00446",
+      "license": "apache-2.0",
+      "files": ["config.json", "model.safetensors", "vocab.json", "tokenizer_config.json"],
+      "use": "phoneme teacher for the IPA head labels, its tokenizer vocabulary, and the phoneme-recognition benchmark baseline; the pool and aligner scripts read it unpinned (main)"
+    },
+    {
+      "id": "facebook/hubert-base-ls960",
+      "type": "model",
+      "access": "read",
+      "revision": "main",
+      "license": "apache-2.0",
+      "files": ["config.json", "pytorch_model.bin"],
+      "use": "HuBERT-base baseline in the downstream and size benchmarks"
+    },
+    {
+      "id": "onnx-community/silero-vad",
+      "type": "model",
+      "access": "read",
+      "revision": "e71cae966052b992a7eca6b17738916ce0eca4ec",
+      "license": "mit",
+      "files": ["onnx/model.onnx"],
+      "use": "Silero VAD v5 teacher for the voice-activity head labels and the voice-activity baseline"
+    },
+    {
+      "id": "MLCommons/ml_spoken_words",
+      "type": "dataset",
+      "access": "read",
+      "revision": "main",
+      "license": "cc-by-4.0",
+      "files": ["data/opus/<language>/<split>/audio/<n>.tar", "data/opus/<language>/<split>.csv"],
+      "use": "multilingual spoken-word clips for the training pool and the keyword-spotting benchmark"
+    },
+    {
+      "id": "agkphysics/AudioSet",
+      "type": "dataset",
+      "access": "read",
+      "revision": "main",
+      "license": "cc-by-4.0",
+      "files": ["data/unbal_train/*.parquet", "data/bal_train/*.parquet"],
+      "use": "non-speech and mixed sound clips for the training pool; labels select speech and non-speech segments"
+    },
+    {
+      "id": "ProgramComputer/voxceleb",
+      "type": "dataset",
+      "access": "read",
+      "revision": "main",
+      "license": "cc-by-4.0",
+      "files": ["vox1/vox1_meta.csv", "vox1/vox1_dev_wav.zip", "vox1/iden_split.txt"],
+      "use": "VoxCeleb1 speaker-identification benchmark"
+    },
+    {
+      "id": "TalTechNLP/voxlingua107_wds",
+      "type": "dataset",
+      "access": "read",
+      "revision": "main",
+      "license": "cc-by-4.0",
+      "files": ["train/<language>/<shard>.tar", "dev/dev.tar"],
+      "use": "spoken-language identification benchmark"
+    },
+    {
+      "id": "gilkeyio/librispeech-alignments",
+      "type": "dataset",
+      "access": "read",
+      "revision": "main",
+      "license": "cc-by-4.0",
+      "files": ["data/<split>-<n>-of-<m>.parquet"],
+      "use": "word and phoneme alignments of LibriSpeech for the aligner and phoneme-recognition benchmarks"
+    }
+  ],
+  "other": [
+    {
+      "id": "https://os.unil.cloud.switch.ch/fma/fma_full.zip",
+      "type": "dataset",
+      "access": "read",
+      "revision": "n/a",
+      "license": "per-track Creative Commons licences; the pool keeps only tracks whose licence in fma_metadata.zip is not NonCommercial or NoDerivatives",
+      "files": ["fma_full.zip", "fma_metadata.zip"],
+      "use": "music clips for the training pool"
+    }
+  ]
+}
