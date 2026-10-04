@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.0a1](https://github.com/TigreGotico/wakeforge/tree/0.19.0a1) (2026-10-04)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.18.1a1...0.19.0a1)
+
+**Merged pull requests:**
+
+- feat: WakePhoneHuBERT pipeline scripts and registry entry [\#99](https://github.com/TigreGotico/wakeforge/pull/99) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.18.1a1](https://github.com/TigreGotico/wakeforge/tree/0.18.1a1) (2026-10-03)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.18.0a1...0.18.1a1)
