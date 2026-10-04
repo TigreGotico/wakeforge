@@ -238,6 +238,7 @@ licence come from the config, so `--feature-dim` is not needed.
 | `wakexeus-mel-tcn-wide` | 2.01M | yes (4 s) | CC-BY-NC-SA-4.0 | XEUS student, wide causal TCN, 256-d. Non-commercial. |
 | `wakexeus-mel-gru` | 1.16M | no, recurrent | CC-BY-NC-SA-4.0 | XEUS student, causal GRU, 128-d. Non-commercial. |
 | `wakexeus-mel-bigru` | 0.96M | no, offline | CC-BY-NC-SA-4.0 | XEUS student, bidirectional GRU, 128-d. Non-commercial. |
+| `wakephonehubert-int8` | 1.63M | yes (2.6 s) | Apache-2.0 | `wakehubert-tiny` trunk with an active-speaker VAD head and an IPA phoneme head, 521-d (128 WakeHuBERT, 1 VAD, 392 IPA posteriors that run 100 ms behind the audio). int8 only. |
 
 Selecting a `wakexeus-*` extractor logs a warning, because its CC-BY-NC-SA-4.0
 licence forbids commercial use. Every extractor can be used for training and
