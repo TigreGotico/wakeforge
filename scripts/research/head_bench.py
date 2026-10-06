@@ -21,12 +21,18 @@ is given; the ONNX file then carries ``fixed_frames`` in its metadata.
 ``export --calibrate`` puts an affine map on the head's logit (a Mul and an Add before the output), so the exported head
 still outputs one logit and the plugin's sigmoid needs no change. The map is read
 on ``calib_stream.npy`` (``cache --calib-stream-hours`` or ``calib-stream``): hours of continuous dev-clean and dev-other
-speech, babble of both and AudioSet noise featurized as one stream, never audio the head trains on (a source that
-contains a training file or the augmentation talker pool is refused). The head is scored every 80 ms over its last
-window and detections are counted as the plugin counts them, with a 2 s quiet period after each. The logit giving
-``--target-fa-per-hour`` detections per hour maps to probability 0.5; a rate with fewer than 20 detections in the audio
-is extended from the measured tail. The scale is chosen so the median calibration positive maps to probability 0.9,
-which keeps positives off the sigmoid's saturated end.
+speech, babble of both and AudioSet noise, never audio the head trains on (a source that contains a training file or the
+augmentation talker pool is refused). The stream is featurized as the plugin featurizes live audio: every 80 ms the last
+1.5 s is featurized on its own, so the file holds one [frames, dim] window per 80 ms block, about 0.86 GB per hour at
+128 dimensions. Features of a whole 20 s segment are not used, because a featurizer with attention or normalisation
+over its input gives every frame different values in a 1.5 s window than in a long one. The head scores each window
+and detections are counted as the plugin counts them, with a 2 s quiet period after each. The logit giving
+``--target-fa-per-hour`` detections per hour maps to probability 0.5. The stream must hold at least 20 detections at
+that rate (20 h at 1 FA/h): a shorter one is refused, because extending the tail measured at higher rates down to the
+target fits an exponential the stream cannot check and has put the operating point at two to three times the target.
+``--allow-extrapolation`` permits it for experiments. The scale is chosen so the median calibration positive maps to
+probability 0.9, which keeps positives off the sigmoid's saturated end. ``--calib-positives`` picks those positives:
+the clean validation positives, the babble- and noise-mixed calibration positives, or both (the default).
 
 The operating point is then chosen on the same data: thresholds from 0.05 to 0.99 on the calibrated probability, each
 scoring recall on the calibration positives and the debounced false activations on the stream. ``--positives-per-hour``
@@ -603,9 +609,20 @@ def calibration_stream_audio(hours, sources, seed=1):
         yield makers[i % 3]().astype(np.float32)
 
 
+def plugin_windows(segments):
+    """The audio the plugin featurizes for each 80 ms block of a stream given as ``segments``: its buffer starts as
+    1.5 s of zeros, and every block appended to it yields the buffer's last 1.5 s."""
+    hop = round(BLOCK_SECONDS * SR)
+    buf = np.zeros(N, np.float32)
+    for seg in segments:
+        for s in range(0, len(seg) - hop + 1, hop):
+            buf = np.concatenate([buf, seg[s:s + hop]])[-N:]
+            yield buf
+
+
 def calib_stream(a):
-    """Featurize ``--calib-stream-hours`` of continuous negative audio into ``calib_stream.npy`` ([frames, dim],
-    float16, one stream), the audio a head's detections are counted on."""
+    """Featurize ``--calib-stream-hours`` of continuous negative audio into ``calib_stream.npy`` ([windows, frames,
+    dim], float16): one window per 80 ms block, each featurized on its own as the plugin does."""
     import onnxruntime as ort
     out = Path(a.cache_dir); out.mkdir(parents=True, exist_ok=True)
     refuse_overlap(a.calib_stream_speech, a.metadata, a.aug_talk)
@@ -613,23 +630,29 @@ def calib_stream(a):
     so = ort.SessionOptions(); so.intra_op_num_threads = 4
     sess = ort.InferenceSession(onnx_path, so, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     name = sess.get_inputs()[0].name
-    segments, batch = [], []
+    segments = math.ceil(a.calib_stream_hours * 3600 * SR / STREAM_SEGMENT)
+    total = segments * (STREAM_SEGMENT // round(BLOCK_SECONDS * SR))
+    stream, done, batch = None, 0, []
 
     def flush():
+        nonlocal stream, done
         wins = np.stack(batch)
         f = sess.run(None, {name: wins})[0]
         if f.shape[0] != len(wins):
             f = np.concatenate([sess.run(None, {name: w[None]})[0] for w in wins])
-        segments.extend(f.astype(np.float16)); batch.clear()
+        if stream is None:
+            stream = np.lib.format.open_memmap(out / "calib_stream.npy", "w+", np.float16, (total, *f.shape[1:]))
+        stream[done:done + len(f)] = f
+        done += len(f); batch.clear()
 
-    for w in calibration_stream_audio(a.calib_stream_hours, a.calib_stream_speech):
+    for w in plugin_windows(calibration_stream_audio(a.calib_stream_hours, a.calib_stream_speech)):
         batch.append(w)
-        if len(batch) == 4:
+        if len(batch) == 64:
             flush()
     if batch:
         flush()
-    stream = np.concatenate(segments)
-    np.save(out / "calib_stream.npy", stream)
+    assert done == total
+    stream.flush()
     print("calib_stream", stream.shape, flush=True)
 
 
@@ -655,13 +678,18 @@ def threshold_for_events(z, events):
     return hi
 
 
-def stream_threshold(z, hours, target_fa_per_hour):
+def stream_threshold(z, hours, target_fa_per_hour, allow_extrapolation=False):
     """Logit at which the plugin's detections on the stream come to ``target_fa_per_hour``. A target below
-    ``MIN_EVENTS`` detections in the audio is too thin a tail to read directly: the tail is taken as exponential
-    through the thresholds giving ``MIN_EVENTS`` and three times as many detections, and extended to the target."""
+    ``MIN_EVENTS`` detections in the audio is too thin a tail to read directly and is refused unless
+    ``allow_extrapolation``: the tail is then taken as exponential through the thresholds giving ``MIN_EVENTS`` and
+    three times as many detections, and extended to the target."""
     want = target_fa_per_hour * hours
     if want >= MIN_EVENTS:
         return threshold_for_events(z, round(want)), False
+    if not allow_extrapolation:
+        raise SystemExit(f"a calibration stream of {hours:.2f} h holds {want:.1f} detections at {target_fa_per_hour} per hour, "
+                         f"fewer than {MIN_EVENTS}: build one of at least {MIN_EVENTS / target_fa_per_hour:.0f} h, or pass "
+                         "--allow-extrapolation to extend the tail measured at higher rates")
     hi, lo = threshold_for_events(z, MIN_EVENTS), threshold_for_events(z, 3 * MIN_EVENTS)
     if hi <= lo:
         raise SystemExit(f"calibration stream of {hours:.2f} h has too few detections to read a tail from")
@@ -704,11 +732,12 @@ def calibration_verdict(f2_threshold):
     return f"warning: the F2-optimal threshold {f2_threshold:.2f} is outside {F2_RANGE[0]} to {F2_RANGE[1]}; the calibration is not good enough"
 
 
-def fit_calibration(pos_logits, stream_logits, hours, target_fa_per_hour, positives_per_hour=4.0, pos_prob=CALIB_POS_PROB):
+def fit_calibration(pos_logits, stream_logits, hours, target_fa_per_hour, positives_per_hour=4.0, pos_prob=CALIB_POS_PROB,
+                    allow_extrapolation=False):
     """(a, b, info) with a > 0 for ``z' = a * z + b``: the stream's threshold for ``target_fa_per_hour`` maps to 0,
     probability 0.5, and the median positive maps to ``pos_prob``. ``info`` carries what the metadata records,
     including the F2-optimal threshold and the AUC on the calibrated scores."""
-    z_thr, extrapolated = stream_threshold(stream_logits, hours, target_fa_per_hour)
+    z_thr, extrapolated = stream_threshold(stream_logits, hours, target_fa_per_hour, allow_extrapolation)
     gap = float(np.median(pos_logits)) - z_thr
     if gap <= 0:
         raise SystemExit(f"median calibration positive ({np.median(pos_logits):.3f}) does not exceed the logit "
@@ -721,11 +750,16 @@ def fit_calibration(pos_logits, stream_logits, hours, target_fa_per_hour, positi
     return a, shift, info
 
 
-def stream_logits(h, stream, window, block):
-    """The head's logit at every ``block`` frames of ``stream``, over the last ``window`` frames."""
-    x = torch.from_numpy(stream).unfold(0, window, block).permute(0, 2, 1)
+def stream_logits(h, stream, window):
+    """The head's logit on every window of ``stream`` ([windows, frames, dim]), one per 80 ms block."""
+    if stream.ndim != 3:
+        raise SystemExit("calib_stream.npy holds one continuous feature stream, but the plugin featurizes every 1.5 s "
+                         "window on its own; rebuild it with calib-stream")
+    if stream.shape[1] != window:
+        raise SystemExit(f"calib_stream.npy windows have {stream.shape[1]} frames, the head's cache {window}")
     with torch.no_grad():
-        return torch.cat([h(x[i:i + 1024].float()) for i in range(0, len(x), 1024)]).numpy().astype(np.float64)
+        return torch.cat([h(torch.from_numpy(np.asarray(stream[i:i + 1024], np.float32)))
+                          for i in range(0, len(stream), 1024)]).numpy().reshape(-1).astype(np.float64)
 
 
 class Affine(nn.Module):
@@ -737,17 +771,24 @@ class Affine(nn.Module):
         return self.scale * self.head(x) + self.shift
 
 
-def calibration(h, a):
-    c = Path(a.cache_dir)
-    x = torch.from_numpy(np.load(c / "calib.npy")[:])
-    y = np.load(c / "calib_labels.npy")
+def positive_logits(h, c, split):
+    x = torch.from_numpy(np.load(c / f"{split}.npy")[:])
+    y = np.load(c / f"{split}_labels.npy")
     with torch.no_grad():
         z = torch.cat([h(x[i:i + 1024].float()) for i in range(0, len(x), 1024)]).numpy()
-    stream = np.load(c / "calib_stream.npy")
-    window = x.shape[1]
-    fps = window / (N / SR)
-    zs = stream_logits(h, stream, window, round(BLOCK_SECONDS * fps))
-    return fit_calibration(z[y == 1], zs, len(zs) * BLOCK_SECONDS / 3600, a.target_fa_per_hour, a.positives_per_hour)
+    return z[y == 1], x.shape[1]
+
+
+def calibration(h, a):
+    c = Path(a.cache_dir)
+    noisy, window = positive_logits(h, c, "calib")
+    clean, _ = positive_logits(h, c, "val")
+    pos = {"clean": clean, "noisy": noisy, "both": np.r_[clean, noisy]}[a.calib_positives]
+    zs = stream_logits(h, np.load(c / "calib_stream.npy", mmap_mode="r"), window)
+    scale, shift, info = fit_calibration(pos, zs, len(zs) * BLOCK_SECONDS / 3600, a.target_fa_per_hour, a.positives_per_hour,
+                                         allow_extrapolation=a.allow_extrapolation)
+    info["calib_positives"] = a.calib_positives
+    return scale, shift, info
 
 
 def export(a):
@@ -800,6 +841,8 @@ def export(a):
         embed_onnx_metadata(str(path), meta)
     print(path, f"max abs diff {err:.2e}", "frames dynamic" if dynamic else f"fixed_frames {frames}")
     if a.calibrate:
+        print(f"target {a.target_fa_per_hour} FA/h: {info['calib_events']} detections in {info['calib_hours']:.2f} h of stream"
+              + (" (extrapolated)" if info["calib_extrapolated"] else ""))
         print(f"roc_auc {info['roc_auc']:.4f} f2 {info['f2']:.4f} at {info['f2_threshold']:.2f} (recall {info['f2_recall']:.3f}); "
               + calibration_verdict(info["f2_threshold"]))
 
@@ -814,11 +857,11 @@ def main():
     p.add_argument("--aug-talk", default="data/LibriSpeech/train-clean-100", help="speech whose talkers become head-time babble")
     p.add_argument("--calib-speech", default="data/LibriSpeech/dev-other", help="LibriSpeech split used for calibration speech and babble")
     p.add_argument("--feature-store", default=None, help="directory of featurizer outputs keyed by window content, reused across runs")
-    p.add_argument("--calib-stream-hours", type=float, default=10.0, help="hours of continuous negative audio featurized for export --calibrate (0: none)")
+    p.add_argument("--calib-stream-hours", type=float, default=20.0, help="hours of continuous negative audio featurized for export --calibrate, about 0.86 GB per hour; 1 FA/h needs 20 (0: none)")
     p.add_argument("--calib-stream-speech", action="append", default=[], help="LibriSpeech split for the calibration stream, repeatable (default dev-clean and dev-other)")
     p = sub.add_parser("calib-stream"); p.add_argument("featurizer", help="ONNX file, or a pretrained name"); p.add_argument("cache_dir")
     p.add_argument("--featurizer-revision", default=None)
-    p.add_argument("--calib-stream-hours", type=float, default=10.0)
+    p.add_argument("--calib-stream-hours", type=float, default=20.0)
     p.add_argument("--calib-stream-speech", action="append", default=[])
     p.add_argument("--metadata", default=None, help="training metadata whose files the calibration speech must not contain")
     p.add_argument("--aug-talk", default="data/LibriSpeech/train-clean-100")
@@ -838,6 +881,10 @@ def main():
     p.add_argument("--calibrate", action="store_true", help="put an affine logit map fitted on the cache's calibration positives and negative stream before the output")
     p.add_argument("--cache-dir", default=None, help="cache whose calib.npy and calib_stream.npy --calibrate reads")
     p.add_argument("--target-fa-per-hour", type=float, default=1.0, help="detections per hour on the calibration stream that map to probability 0.5, ")
+    p.add_argument("--calib-positives", choices=("clean", "noisy", "both"), default="both",
+                   help="calibration positives: the clean validation positives, the babble- and noise-mixed calibration positives, or both")
+    p.add_argument("--allow-extrapolation", action="store_true",
+                   help="calibrate on a stream with fewer than 20 detections at the target by extending the measured tail (experiments only)")
     p.add_argument("--positives-per-hour", type=float, default=4.0, help="real wake words per hour of audio, which weights recall against false activations in the F2 choice")
     a = ap.parse_args()
     if a.cmd in ("cache", "calib-stream") and not a.calib_stream_speech:
