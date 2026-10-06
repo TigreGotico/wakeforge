@@ -468,7 +468,7 @@ def _calibration_cache(c, stream_hours=1.0):
 
 
 def _negative_stream(seed, hours):
-    return np.random.default_rng(seed).standard_normal((int(hours * 3600 * 50), 8)).astype(np.float16)
+    return np.random.default_rng(seed).standard_normal((int(hours * 3600 / hb.BLOCK_SECONDS), 75, 8)).astype(np.float16)
 
 
 def _export(tmp_path, name, **kw):
@@ -497,7 +497,8 @@ def test_calibrated_export_unsaturates_and_holds_the_detection_rate_on_held_out_
     target = 120.0
     plain = _export(tmp_path, "plain")
     hb.export(argparse.Namespace(out_dir=str(tmp_path / "out-bce"), head="gru-h16", calibrate=True, cache_dir=str(c),
-                                 target_fa_per_hour=target, positives_per_hour=4.0, allow_fixed_frames=False))
+                                 target_fa_per_hour=target, positives_per_hour=4.0, allow_fixed_frames=False,
+                                 allow_extrapolation=False, calib_positives="both"))
     cal = str(tmp_path / "out-bce" / "gru-h16.onnx")
     x = np.load(c / "calib.npy").astype(np.float32)
     y = np.load(c / "calib_labels.npy")
@@ -507,7 +508,7 @@ def test_calibrated_export_unsaturates_and_holds_the_detection_rate_on_held_out_
     assert (sig(zc[y == 1]) >= 0.999999).mean() < 0.05
     assert np.array_equal(np.argsort(zp, kind="stable"), np.argsort(zc, kind="stable"))
     assert abs(np.median(sig(zc[y == 1])) - 0.9) < 0.02
-    held_out = torch.from_numpy(_negative_stream(3, 1.0)).unfold(0, 75, 4).permute(0, 2, 1).float().numpy()
+    held_out = _negative_stream(3, 1.0).astype(np.float32)
     detections = hb.debounced_events(_logits(cal, held_out), 0.0)
     assert target / 1.5 <= detections <= target * 1.5
     meta = {m.key: m.value for m in __import__("onnx").load(cal).metadata_props}
@@ -527,11 +528,21 @@ def test_debounce_counts_one_event_per_quiet_period():
     assert hb.debounced_events(z, 6.0) == 0
 
 
+def test_thin_tail_is_refused_without_the_flag():
+    rng = np.random.default_rng(5)
+    hours = 6.0
+    fit = rng.laplace(size=int(hours * 3600 / hb.BLOCK_SECONDS))
+    with pytest.raises(SystemExit, match="fewer than 20: build one of at least 20 h"):
+        hb.fit_calibration(np.full(50, 15.0), fit, hours, 1.0)
+    a, b, info = hb.fit_calibration(np.full(50, 15.0), fit, hours, 20 / hours)
+    assert not info["calib_extrapolated"] and info["calib_events"] == 20
+
+
 def test_thin_tail_is_extended_from_the_measured_one():
     rng = np.random.default_rng(5)
     hours, target = 6.0, 2.0
     fit = rng.laplace(size=int(hours * 3600 / hb.BLOCK_SECONDS))
-    a, b, info = hb.fit_calibration(np.full(50, 15.0), fit, hours, target)
+    a, b, info = hb.fit_calibration(np.full(50, 15.0), fit, hours, target, allow_extrapolation=True)
     assert info["calib_extrapolated"] and a > 0
     held_out = rng.laplace(size=int(60 * 3600 / hb.BLOCK_SECONDS))
     rate = hb.debounced_events(a * held_out + b, 0.0) / 60
@@ -589,13 +600,68 @@ def test_calibration_refuses_a_head_that_does_not_separate():
         hb.fit_calibration(np.zeros(20), np.random.default_rng(0).laplace(size=40000) + 1, 1.0, 100.0)
 
 
-def test_calib_stream_featurizes_continuous_negative_audio(ws):
+def test_plugin_windows_are_the_plugins_buffer_after_each_block():
+    rng = np.random.default_rng(4)
+    hop = round(hb.BLOCK_SECONDS * hb.SR)
+    segments = [rng.standard_normal(30 * hop).astype(np.float32) for _ in range(3)]
+    padded = np.r_[np.zeros(hb.N, np.float32), *segments]
+    wins = [w.copy() for w in hb.plugin_windows(segments)]
+    assert len(wins) == sum(len(x) for x in segments) // hop
+    for k in (0, 1, 18, 19, len(wins) - 1):
+        assert np.array_equal(wins[k], padded[(k + 1) * hop:(k + 1) * hop + hb.N])
+
+
+def test_calib_stream_holds_each_window_featurized_on_its_own(ws):
     out = ws.root / "stream"
-    hb.calib_stream(argparse.Namespace(featurizer=ws.feat, featurizer_revision=None, cache_dir=str(out), calib_stream_hours=0.02,
+    hours = 0.02
+    hb.calib_stream(argparse.Namespace(featurizer=ws.feat, featurizer_revision=None, cache_dir=str(out), calib_stream_hours=hours,
                                        calib_stream_speech=["data/LibriSpeech/dev-other"], metadata=ws.train,
                                        aug_talk="data/LibriSpeech/train-clean-100"))
     stream = np.load(out / "calib_stream.npy")
-    run_cache(ws, "c1")
-    window = np.load(ws.root / "c1" / "calib.npy", mmap_mode="r").shape[1]
-    assert stream.dtype == np.float16 and stream.ndim == 2
-    assert len(stream) == pytest.approx(math.ceil(0.02 * 3600 / 20) * 20 * window / 1.5, rel=0.01)
+    segments = list(hb.calibration_stream_audio(hours, ["data/LibriSpeech/dev-other"]))
+    audio = np.concatenate(segments)
+    assert stream.dtype == np.float16 and stream.ndim == 3
+    assert len(stream) == len(audio) // round(hb.BLOCK_SECONDS * hb.SR)
+    sess = onnxruntime.InferenceSession(ws.feat, providers=["CPUExecutionProvider"])
+    whole = sess.run(None, {"waveform": audio[None]})[0][0]
+    hop = round(hb.BLOCK_SECONDS * hb.SR)
+    padded = np.r_[np.zeros(hb.N, np.float32), audio]
+    for k in (0, 300, len(stream) - 1):
+        alone = sess.run(None, {"waveform": padded[None, (k + 1) * hop:(k + 1) * hop + hb.N]})[0][0]
+        assert np.allclose(stream[k].astype(np.float32), alone, atol=2e-3)
+    k = 300
+    end = (k + 1) * hop // 320
+    sliced = whole[end - stream.shape[1]:end]
+    assert not np.allclose(stream[k].astype(np.float32), sliced, atol=2e-3)
+
+
+def test_calibration_refuses_a_continuous_feature_stream(tmp_path):
+    c = tmp_path / "cache"
+    _calibration_cache(c, stream_hours=0.1)
+    np.save(c / "calib_stream.npy", np.zeros((int(0.1 * 3600 * 50), 8), np.float16))
+    hb.fit(_fit_ns(tmp_path, "gru-h16", "bce", epochs=1))
+    with pytest.raises(SystemExit, match="featurizes every 1.5 s window on its own"):
+        hb.export(argparse.Namespace(out_dir=str(tmp_path / "out-bce"), head="gru-h16", calibrate=True, cache_dir=str(c),
+                                     target_fa_per_hour=1.0, positives_per_hour=4.0, allow_fixed_frames=False,
+                                     allow_extrapolation=True, calib_positives="both"))
+
+
+
+@pytest.mark.parametrize("mode,expected", [("clean", [1.0] * 3), ("noisy", [2.0] * 4), ("both", [1.0] * 3 + [2.0] * 4)])
+def test_calibration_positives_come_from_the_chosen_split(tmp_path, monkeypatch, mode, expected):
+    c = tmp_path / "cache"; c.mkdir()
+    for split, value, n_pos in (("val", 1.0, 3), ("calib", 2.0, 4)):
+        labels = np.r_[np.ones(n_pos), np.zeros(5)].astype(np.int8)
+        np.save(c / f"{split}.npy", (labels * value)[:, None, None] * np.ones((1, 75, 8), np.float16))
+        np.save(c / f"{split}_labels.npy", labels)
+    np.save(c / "calib_stream.npy", np.zeros((50, 75, 8), np.float16))
+    seen = {}
+
+    def fit(pos, stream, hours, *args, **kw):
+        seen["pos"] = list(np.asarray(pos, np.float64))
+        return 1.0, 0.0, {}
+
+    monkeypatch.setattr(hb, "fit_calibration", fit)
+    hb.calibration(lambda x: x.mean((1, 2)), argparse.Namespace(cache_dir=str(c), calib_positives=mode, target_fa_per_hour=1.0,
+                                                                  positives_per_hour=4.0, allow_extrapolation=False))
+    assert seen["pos"] == expected
