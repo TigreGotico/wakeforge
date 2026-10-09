@@ -39,7 +39,7 @@ dev = [
     "optuna",          # sweep tests
     "voiceclonnx",     # VC delegation tests
     "torchvision",     # EfficientNet head tests
-    "datasets",        # Parquet dataset download tests
+    "datasets>=4",     # Parquet dataset download tests
 ]
 
 # Alias used by CI (build-tests.yml installs [test])
@@ -52,7 +52,7 @@ test = [
     "optuna",
     "voiceclonnx",
     "torchvision",
-    "datasets",
+    "datasets>=4",
 ]
 
 # ── Audio codec (optional torchaudio backend — requires FFmpeg at runtime) ─
