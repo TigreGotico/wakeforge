@@ -647,6 +647,17 @@ def test_calibration_refuses_a_continuous_feature_stream(tmp_path):
 
 
 
+def test_calibrated_export_without_a_stream_names_the_command_that_builds_it(tmp_path):
+    c = tmp_path / "cache"
+    _calibration_cache(c, stream_hours=0.1)
+    (c / "calib_stream.npy").unlink()
+    hb.fit(_fit_ns(tmp_path, "gru-h16", "bce", epochs=1))
+    with pytest.raises(SystemExit, match="calib-stream"):
+        hb.export(argparse.Namespace(out_dir=str(tmp_path / "out-bce"), head="gru-h16", calibrate=True, cache_dir=str(c),
+                                     target_fa_per_hour=1.0, positives_per_hour=4.0, allow_fixed_frames=False,
+                                     allow_extrapolation=True, calib_positives="both"))
+
+
 @pytest.mark.parametrize("mode,expected", [("clean", [1.0] * 3), ("noisy", [2.0] * 4), ("both", [1.0] * 3 + [2.0] * 4)])
 def test_calibration_positives_come_from_the_chosen_split(tmp_path, monkeypatch, mode, expected):
     c = tmp_path / "cache"; c.mkdir()

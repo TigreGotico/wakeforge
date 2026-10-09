@@ -786,6 +786,9 @@ def calibration(h, a):
     noisy, window = positive_logits(h, c, "calib")
     clean, _ = positive_logits(h, c, "val")
     pos = {"clean": clean, "noisy": noisy, "both": np.r_[clean, noisy]}[a.calib_positives]
+    if not (c / "calib_stream.npy").exists():
+        raise SystemExit(f"no calibration stream in {c}: run `head_bench.py calib-stream <featurizer> {c}` first, "
+                         "or `cache --calib-stream-hours 20`")
     zs = stream_logits(h, np.load(c / "calib_stream.npy", mmap_mode="r"), window)
     scale, shift, info = fit_calibration(pos, zs, len(zs) * BLOCK_SECONDS / 3600, a.target_fa_per_hour, a.positives_per_hour,
                                          allow_extrapolation=a.allow_extrapolation)
