@@ -19,6 +19,33 @@
       "use": "frozen WakeHuBERT-tiny trunk under the WakePhoneHuBERT heads: head training, ONNX export and size benchmarks"
     },
     {
+      "id": "TigreGotico/synthetic-wakeword-alexa",
+      "type": "dataset",
+      "access": "read",
+      "revision": "3426bd3f3f52dcfbe08bf82bded32a44d6a8912b",
+      "license": "cc-by-4.0",
+      "files": ["train/metadata.jsonl", "train/piper-libritts/<n>.flac"],
+      "use": "alexa positives of the streamed heads (scripts/research/microwakehubert/positive_sources.json): the Piper LibriTTS-R clips and their speaker record; the record of the original clips is read at 97020f1789c6a56ff5810b55c8d51f1e5ebd900a"
+    },
+    {
+      "id": "TigreGotico/synthetic-wakeword-hey_mycroft",
+      "type": "dataset",
+      "access": "read",
+      "revision": "026ecd10bb1d7b471b82b56ddf43083a24bf4765",
+      "license": "cc-by-4.0",
+      "files": ["train/metadata.jsonl", "train/<engine>/<clip>"],
+      "use": "hey_mycroft positives of the streamed heads, read from a local copy of this revision under --data-root"
+    },
+    {
+      "id": "OpenVoiceOS/wakehubert-wakewords",
+      "type": "model",
+      "access": "read",
+      "revision": "4919c6c2055a1280d2870919ff89794408c79f80",
+      "license": "apache-2.0",
+      "files": ["models/wakehubert_<word>.onnx"],
+      "use": "shipped wake-word heads, downloaded by hand and passed by path to score --shipped, which compares the streamed heads against them"
+    },
+    {
       "id": "facebook/wav2vec2-xlsr-53-espeak-cv-ft",
       "type": "model",
       "access": "read",

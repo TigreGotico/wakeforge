@@ -1,0 +1,36 @@
+{
+ "about": "Positive clips per word for stream_heads.py streams and calib: the sources the shipped heads of OpenVoiceOS/wakehubert-wakewords were trained on. Paths are relative to --data-root, or name a folder of a Hugging Face dataset snapshot. exclude drops the evaluation voices: the held-out edge-tts test voices and the Kokoro voices of the test sets.",
+ "exclude": "Maisie|Connor|Prabhat|Asilia|Molly|Wayne|en-US-Ava|af_heart|af_kore|am_echo|am_puck|bf_lily|bm_fable",
+ "words": {
+  "alexa": {
+   "positives": "TigreGotico/synthetic-wakeword-alexa original, edge-tts multi-voice and Piper with LibriTTS-R speakers, and OmniVoice clips",
+   "sources": [
+    {"dir": "training-runs/alexa-random-windows/src/shipped",
+     "metadata": {"hf": "TigreGotico/synthetic-wakeword-alexa", "revision": "97020f1789c6a56ff5810b55c8d51f1e5ebd900a", "path": "train/metadata.jsonl"}},
+    {"dir": "training-runs/alexa-random-windows/src/omni",
+     "metadata": "omnivoice-donor-synthesis/en/alexa/manifest.csv"},
+    {"dir": {"hf": "TigreGotico/synthetic-wakeword-alexa", "revision": "3426bd3f3f52dcfbe08bf82bded32a44d6a8912b", "path": "train/piper-libritts"},
+     "metadata": {"hf": "TigreGotico/synthetic-wakeword-alexa", "revision": "3426bd3f3f52dcfbe08bf82bded32a44d6a8912b", "path": "train/metadata.jsonl"}}
+   ]
+  },
+  "hey_mycroft": {
+   "positives": "TigreGotico/synthetic-wakeword-hey_mycroft at revision 026ecd10bb1d7b471b82b56ddf43083a24bf4765, a local copy (edge-tts, Piper with LibriTTS-R speakers, Amazon Polly, OVOS TTS plugins, OmniVoice, Chatterbox and OpenVoice conversions) and further edge-tts and Google Translate TTS clips",
+   "sources": [
+    {"dir": "training-runs/src/voices-noheld/hey_mycroft",
+     "metadata": "training-runs/src/voices-gen-meta/hey_mycroft/synthesis.csv"},
+    {"dir": "datasets-hf/synthetic-wakeword-hey_mycroft/train",
+     "metadata": "datasets-hf/synthetic-wakeword-hey_mycroft/train/metadata.jsonl"}
+   ]
+  },
+  "hey_jarvis": {
+   "positives": "an edge-tts voice grid, edge-tts and Google Translate TTS voices, and OmniVoice clips",
+   "sources": [
+    {"dir": "training-runs/src/edge-grid/hey_jarvis", "voice_pattern": "^([a-z]{2,3}-[A-Z]{2}-[A-Za-z]+Neural)_"},
+    {"dir": "training-runs/src/voices-noheld/hey_jarvis",
+     "metadata": "training-runs/src/voices-gen-meta/hey_jarvis/synthesis.csv"},
+    {"dir": "omnivoice-donor-synthesis/en/hey_jarvis",
+     "metadata": "omnivoice-donor-synthesis/en/hey_jarvis/manifest.csv", "listed_only": true}
+   ]
+  }
+ }
+}
