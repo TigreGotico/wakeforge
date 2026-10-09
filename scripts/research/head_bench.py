@@ -859,7 +859,7 @@ def main():
     p.add_argument("--aug-talk", default="data/LibriSpeech/train-clean-100", help="speech whose talkers become head-time babble")
     p.add_argument("--calib-speech", default="data/LibriSpeech/dev-other", help="LibriSpeech split used for calibration speech and babble")
     p.add_argument("--feature-store", default=None, help="directory of featurizer outputs keyed by window content, reused across runs")
-    p.add_argument("--calib-stream-hours", type=float, default=20.0, help="hours of continuous negative audio featurized for export --calibrate, about 0.86 GB per hour; 1 FA/h needs 20 (0: none)")
+    p.add_argument("--calib-stream-hours", type=float, default=0.0, help="hours of continuous negative audio featurized for export --calibrate, about 0.86 GB per hour; 1 FA/h needs 20 (default 0: none; the calib-stream subcommand builds it on its own)")
     p.add_argument("--calib-stream-speech", action="append", default=[], help="LibriSpeech split for the calibration stream, repeatable (default dev-clean and dev-other)")
     p = sub.add_parser("calib-stream"); p.add_argument("featurizer", help="ONNX file, or a pretrained name"); p.add_argument("cache_dir")
     p.add_argument("--featurizer-revision", default=None)

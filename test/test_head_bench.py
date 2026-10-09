@@ -665,3 +665,12 @@ def test_calibration_positives_come_from_the_chosen_split(tmp_path, monkeypatch,
     hb.calibration(lambda x: x.mean((1, 2)), argparse.Namespace(cache_dir=str(c), calib_positives=mode, target_fa_per_hour=1.0,
                                                                   positives_per_hour=4.0, allow_extrapolation=False))
     assert seen["pos"] == expected
+
+
+@pytest.mark.parametrize("cmd, hours", [("cache", 0.0), ("calib-stream", 20.0)])
+def test_only_calib_stream_builds_the_calibration_stream_by_default(monkeypatch, cmd, hours):
+    seen = {}
+    monkeypatch.setattr(hb, cmd.replace("-", "_"), lambda a: seen.setdefault("a", a))
+    monkeypatch.setattr("sys.argv", ["head_bench", cmd, "wakehubert-int8", "cache_dir"])
+    hb.main()
+    assert seen["a"].calib_stream_hours == hours
