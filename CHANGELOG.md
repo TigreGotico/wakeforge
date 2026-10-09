@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0a1](https://github.com/TigreGotico/wakeforge/tree/0.22.0a1) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.21.0a1...0.22.0a1)
+
+**Merged pull requests:**
+
+- feat: train and score wake-word heads on streamed WakeHuBERT features [\#106](https://github.com/TigreGotico/wakeforge/pull/106) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.21.0a1](https://github.com/TigreGotico/wakeforge/tree/0.21.0a1) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.20.0a2...0.21.0a1)
