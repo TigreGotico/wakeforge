@@ -604,7 +604,7 @@ def test_plugin_windows_are_the_plugins_buffer_after_each_block():
     rng = np.random.default_rng(4)
     hop = round(hb.BLOCK_SECONDS * hb.SR)
     segments = [rng.standard_normal(30 * hop).astype(np.float32) for _ in range(3)]
-    padded = np.r_[np.zeros(hb.N, np.float32), *segments]
+    padded = np.concatenate([np.zeros(hb.N, np.float32), *segments])
     wins = [w.copy() for w in hb.plugin_windows(segments)]
     assert len(wins) == sum(len(x) for x in segments) // hop
     for k in (0, 1, 18, 19, len(wins) - 1):
