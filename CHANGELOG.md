@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.0a2](https://github.com/TigreGotico/wakeforge/tree/0.20.0a2) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.20.0a1...0.20.0a2)
+
+**Merged pull requests:**
+
+- docs\(notebook\): the configuration table states the defaults the cell reads [\#81](https://github.com/TigreGotico/wakeforge/pull/81) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.20.0a1](https://github.com/TigreGotico/wakeforge/tree/0.20.0a1) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.1a2...0.20.0a1)
