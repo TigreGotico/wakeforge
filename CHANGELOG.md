@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0a1](https://github.com/TigreGotico/wakeforge/tree/0.23.0a1) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.22.0a1...0.23.0a1)
+
+**Merged pull requests:**
+
+- feat: stateful GRU head for streaming wake-word models [\#107](https://github.com/TigreGotico/wakeforge/pull/107) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.22.0a1](https://github.com/TigreGotico/wakeforge/tree/0.22.0a1) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.21.0a1...0.22.0a1)
