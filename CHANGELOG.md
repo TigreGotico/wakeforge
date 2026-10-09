@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0a1](https://github.com/TigreGotico/wakeforge/tree/0.21.0a1) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.20.0a2...0.21.0a1)
+
+**Merged pull requests:**
+
+- feat: calibrated head export for head\_bench [\#95](https://github.com/TigreGotico/wakeforge/pull/95) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.20.0a2](https://github.com/TigreGotico/wakeforge/tree/0.20.0a2) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.20.0a1...0.20.0a2)
