@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.0a1](https://github.com/TigreGotico/wakeforge/tree/0.20.0a1) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.1a2...0.20.0a1)
+
+**Merged pull requests:**
+
+- feat: streaming stateful WakeHuBERT-tiny trunk [\#103](https://github.com/TigreGotico/wakeforge/pull/103) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.19.1a2](https://github.com/TigreGotico/wakeforge/tree/0.19.1a2) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.1a1...0.19.1a2)
