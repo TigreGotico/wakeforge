@@ -595,3 +595,225 @@ def test_fit_ranks_epochs_by_recall_at_the_rate_before_recall_above_the_maximum(
     assert (a["calib_recall_at_rate"], a["calib_recall"]) == (1.0, 0.0)
     assert (b["calib_recall_at_rate"], b["calib_recall"]) == (0.5, 0.5)
     assert torch.load(head, map_location="cpu")["epoch"] == order.index("A") + 1
+
+
+# ------------------------------------------------------------------ stateful GRU head
+def _cell_logits(head, x):
+    """Block logits of ``x`` [T, 128] from a zero state, by a GRUCell loop over the head's own weights."""
+    cell = torch.nn.GRUCell(128, 128)
+    with torch.no_grad():
+        for name in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+            getattr(cell, name).copy_(getattr(head.gru, f"{name}_l0"))
+        h, z = torch.zeros(1, 128), []
+        for t in range(len(x)):
+            h = cell(x[t:t + 1], h)
+            if t % sh.FPB == sh.FPB - 1:
+                z.append(head.fc2(torch.relu(head.fc1(h))).item())
+    return np.array(z)
+
+
+def test_block_labels_read_the_frame_at_each_block_end():
+    lab = np.arange(11, dtype=np.int8)[None].repeat(2, 0)
+    assert sh.block_labels(lab).tolist() == [[3, 7]] * 2
+    assert sh.block_labels(lab[0]).tolist() == [3, 7]
+
+
+def test_gru_head_blocks_one_at_a_time_equal_the_whole_sequence():
+    torch.manual_seed(0)
+    head = sh.StreamGRUHead().eval()
+    x = torch.randn(2, 60, 128)
+    with torch.no_grad():
+        whole, h_whole = head(x)
+        h, parts = None, []
+        for b in range(15):
+            z, h = head(x[:, b * 4:b * 4 + 4], h)
+            parts.append(z)
+    assert whole.shape == (2, 15) and h_whole.shape == (1, 2, 128)
+    assert np.allclose(torch.cat(parts, 1).numpy(), whole.numpy(), atol=1e-5) and torch.allclose(h, h_whole, atol=1e-5)
+    for i in range(2):
+        assert np.allclose(whole[i].numpy(), _cell_logits(head, x[i]), atol=1e-5)
+
+
+def test_gru_loss_counts_only_scored_blocks():
+    torch.manual_seed(1)
+    head = sh.StreamGRUHead().eval()
+    x = torch.randn(3, 40, 128)
+    y = torch.tensor([[1, 0, -1, 0, 1, 0, -1, 1, 0, 0], [0, 0, 1, 1, -1, 0, 0, 1, -1, 0], [1, 1, 0, -1, 0, 0, 1, 0, 0, 1]])
+    burn, weight = 3, 7.0
+    got = float(sh.gru_loss(head, x, y, burn, weight).detach())
+    terms = []
+    for i in range(3):
+        z = _cell_logits(head, x[i])
+        for b in range(burn, 10):
+            if y[i, b] >= 0:
+                p = 1 / (1 + math.exp(-z[b]))
+                terms.append(-(weight * math.log(p) if y[i, b] == 1 else math.log(1 - p)))
+    assert len(terms) == 17  # 21 blocks past the burn-in, minus the four labelled -1 there
+    assert got == pytest.approx(sum(terms) / len(terms), rel=1e-4)
+
+
+def test_gru_crops_place_a_positive_in_the_scored_part():
+    rng = np.random.default_rng(0)
+    feats = rng.normal(size=(2, 400, 128)).astype(np.float16)
+    lab = np.zeros((2, 400), np.int8)
+    lab[1, 202:215] = 1
+    shards = [(feats, lab)]
+    pos_blocks = [(0, 1, b) for b in range(50, 54)]
+    x, y = sh.gru_crops(shards, [(0, 0), (0, 1)], pos_blocks, 20, 10, 30, rng, 1.0)
+    assert x.shape == (20, 40 * sh.FPB, 128) and y.shape == (20, 40)
+    assert (y[:, 10:] == 1).any(1).all()
+    start = np.array([next(s for s in range(60) if np.array_equal(feats[1, s * 4:s * 4 + 160], xi.numpy().astype(np.float16)))
+                      for xi in x])
+    assert np.array_equal(y.numpy()[0], sh.block_labels(lab[1])[start[0]:start[0] + 40])
+
+
+def _toy_gru_run(tmp_path):
+    """The toy run with calibration positives whose word starts 0.16 s into the row, where a zero state still shows."""
+    shards, calib, rows = _toy_run(tmp_path)
+    rng = np.random.default_rng(7)
+    rows = []
+    for _ in range(12):
+        f = rng.normal(0, 0.3, size=(300, 128)).astype(np.float16)
+        f[8:38, :8] += 2.0
+        rows.append((f, 2, 240 // sh.FPB))
+    np.save(calib / "toy-00.npy", np.array(rows, dtype=object), allow_pickle=True)
+    return shards, calib, rows, tmp_path / "toy.pt"
+
+
+def test_fit_and_export_a_calibrated_gru_head(tmp_path, monkeypatch):
+    shards, calib, rows, head = _toy_gru_run(tmp_path)
+    burns, loss = [], sh.gru_loss
+    monkeypatch.setattr(sh, "gru_loss", lambda h, x, y, burn, w: burns.append(burn) or loss(h, x, y, burn, w))
+    sh.main(["fit", "--head", "gru", "--shards", str(shards), "--word", "toy", "--calib", str(calib), "--out",
+             str(head), "--epochs", "4", "--crops", "400", "--batch", "16", "--lr", "3e-3", "--burn-in-blocks", "25", "--crop-blocks", "30",
+             "--threads", "1", "--select-rate", "60"])
+    assert burns and set(burns) == {25}
+    log = [json.loads(line) for line in head.with_suffix(".jsonl").read_text().splitlines()]
+    assert len(log) == 4 and all({"calib_recall_at_rate", "calib_threshold_at_rate", "calib_recall_at_p999"} <= set(r) for r in log)
+    ck = torch.load(head, map_location="cpu")
+    best = max(log, key=lambda r: (r["calib_recall_at_rate"], r["calib_recall"]))
+    assert ck["epoch"] == best["epoch"] and ck["trunk"] == RECORD and ck["arch"] == "stream_gru"
+    assert ck["positives"] > 0 and ck["negatives"] > ck["positives"]
+
+    out = tmp_path / "toy.onnx"
+    sh.main(["export", "--head", str(head), "--calib", str(calib), "--rate", "60", "--training-data", "toy",
+             "--out", str(out)])
+    m = onnx.load(str(out))
+    assert [i.name for i in m.graph.input] == ["features", "h"]
+    assert [o.name for o in m.graph.output] == ["logit_calibrated", "h_out"]
+    meta = {p.key: p.value for p in m.metadata_props}
+    assert SHIPPED_KEYS - {"window_frames"} <= set(meta) and "window_frames" not in meta
+    assert meta["arch"] == "stream_gru" and meta["frames_per_block"] == "4" and meta["state_shape"] == "1,1,128"
+    assert meta["featurizer_features"] == "streamed" and meta["calib_extrapolated"] == "False"
+    assert meta["featurizer_sha256"] == "cd" * 32 and meta["stream_trunk_sha256"] == "ab" * 32
+
+    # the calibration, recomputed here block by block: positives start from the state after the first 30 s of the
+    # calibration stream, the median positive maps to logit ln 9 and the stream's 60 FA/h point to 0
+    h = sh.StreamGRUHead()
+    h.load_state_dict(ck["state"])
+    h.eval()
+    a, b = float(meta["calib_a"]), float(meta["calib_b"])
+
+    def run(f, state=None):
+        z = []
+        with torch.no_grad():
+            for k in range(len(f) // 4):
+                s, state = h(torch.from_numpy(f[k * 4:k * 4 + 4].astype(np.float32))[None], state)
+                z.append(s.item())
+        return np.array(z), state
+
+    negs = np.load(calib / "negs-00.npz")["feats"]
+    warm = run(negs[:1500])[1]
+    pos = np.array([run(f, warm)[0][s:e + 1].max() for f, s, e in rows])
+    assert abs(np.median(pos) - np.median([run(f)[0][s:e + 1].max() for f, s, e in rows])) > 1e-3
+    assert a * np.median(pos) + b == pytest.approx(math.log(9), abs=1e-3)
+    z = a * run(negs)[0] + b
+    want = 60 * len(z) * sh.BLOCK / sh.SR / 3600
+    # the rate point lies on one block's logit, and block-by-block float error moves that block by about 1e-6
+    assert _debounced(z, 1e-4) <= want < _debounced(z, -1e-4)
+    assert int(meta["calib_events"]) == _debounced(z, 1e-4)
+
+    # the exported graph, one block at a time with the state carried, equals the torch head and its affine map
+    sess = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"])
+    assert sess.get_inputs()[0].shape == [1, 4, 128] and sess.get_inputs()[1].shape == [1, 1, 128]
+    x = np.random.default_rng(5).normal(0, 0.3, size=(60 * 4, 128)).astype(np.float32)
+    x[100:180, :8] += 2.0
+    state, got = np.zeros((1, 1, 128), np.float32), []
+    for k in range(60):
+        logit, state = sess.run(None, {"features": x[k * 4:k * 4 + 4][None], "h": state})
+        assert logit.shape == (1,) and state.shape == (1, 1, 128)
+        got.append(logit[0])
+    ref = a * run(x)[0] + b
+    assert np.allclose(got, ref, atol=1e-4) and ref.max() - ref.min() > 1.0
+
+
+def test_gru_fit_refuses_a_burn_in_under_two_seconds(tmp_path):
+    shards, calib, _, head = _toy_gru_run(tmp_path)
+    with pytest.raises(SystemExit, match="2 s"):
+        sh.main(["fit", "--head", "gru", "--shards", str(shards), "--word", "toy", "--calib", str(calib), "--out",
+                 str(head), "--burn-in-blocks", "24", "--crop-blocks", "30"])
+
+
+def test_gru_fit_refuses_a_word_with_no_shards_or_no_positives(tmp_path):
+    shards, calib, _, head = _toy_gru_run(tmp_path)
+    fit = ["fit", "--head", "gru", "--shards", str(shards), "--calib", str(calib), "--out", str(head),
+           "--epochs", "1", "--crops", "16", "--batch", "16", "--burn-in-blocks", "25", "--crop-blocks", "30",
+           "--threads", "1"]
+    with pytest.raises(SystemExit, match="no shard of 'other'"):
+        sh.main(fit + ["--word", "other"])
+    _toy_shards(shards, np.random.default_rng(3), "none")
+    for f in shards.glob("none-00-000.*.npy"):
+        f.rename(shards / f.name.replace("none", "quiet"))
+    with pytest.raises(SystemExit, match="no positive block of 'quiet'"):
+        sh.main(fit + ["--word", "quiet"])
+    assert not head.exists()
+
+
+class _Count(torch.nn.Module):
+    """A stand-in GRU head: the state counts the frames whose first feature is 1, the logit is that count."""
+
+    def forward(self, x, h):
+        h = h + x.sum(1, keepdim=True)
+        return h[:, 0, 0], h
+
+
+def _count_head(path):
+    with torch.no_grad():
+        torch.onnx.export(_Count(), (torch.zeros(1, 4, 128), torch.zeros(1, 1, 128)), str(path),
+                          input_names=["features", "h"], output_names=["logit_calibrated", "h_out"], opset_version=17,
+                          dynamo=False)
+    return path
+
+
+def _ones(n, lit=None):
+    f = np.zeros((n, 128), np.float16)
+    f[:lit if lit is not None else n, 0] = 1
+    return f
+
+
+def test_gru_score_carries_state_across_the_pieces_of_a_directory_and_resets_between_directories(tmp_path):
+    for name in ("a-0000", "a-0001", "b-0000"):
+        np.savez(tmp_path / f"{name}.npz", seconds=0.8, feats=_ones(40))
+    sess = ort.InferenceSession(str(_count_head(tmp_path / "c.onnx")), providers=["CPUExecutionProvider"])
+    z, hours = sh._neg_logits(sh._by_dir(tmp_path), sh._gru_piece(sess))
+    assert hours == pytest.approx(2.4 / 3600)
+    assert z[0].tolist() == [4.0 * (k + 1) for k in range(20)]
+    assert z[1].tolist() == [4.0 * (k + 1) for k in range(10)]
+
+
+def test_gru_positives_start_from_the_state_after_30_s_of_negatives(tmp_path):
+    # the negatives light the first feature for the 1500 warm-up frames, so a warmed state holds 1500 and a zero state 0;
+    # a positive adds 1 at its block 5. The 32 s of negatives peak at 1500, so the 1 FA/h threshold lies just above it.
+    neg = tmp_path / "negs"
+    neg.mkdir()
+    np.savez(neg / "d-0000.npz", seconds=32.0, feats=_ones(1600, 1500))
+    pos = _ones(40, 0)
+    pos[20, 0] = 1
+    np.save(tmp_path / "quiet-00.npy", np.array([{"file": f"{i}.wav", "first_block": 0, "feats": pos} for i in range(3)],
+                                                dtype=object), allow_pickle=True)
+    _count_head(tmp_path / "c.onnx")
+    sh.main(["score", "--negs", str(neg), "--pos", f"toy={tmp_path}/quiet-*.npy", "--gru", f"toy={tmp_path}/c.onnx",
+             "--out", str(tmp_path / "res.json")])
+    res = json.loads((tmp_path / "res.json").read_text())["toy:streamed_gru"]
+    assert res["threshold_at_rate"] == pytest.approx(1500.001, abs=1e-2)
+    assert res["recall_at_rate"] == {"toy": 1.0} and res["clips"] == {"toy": 3}

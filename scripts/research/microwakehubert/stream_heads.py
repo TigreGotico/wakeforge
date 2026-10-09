@@ -6,6 +6,15 @@ silence, and on streamed frames they lose recall and gain false activations. Thi
 over the last 75 frames scored every 80 ms block, on windows of streamed features of continuous synthetic streams,
 and scores it on the same footing as the isolated models.
 
+``--head gru`` trains the stateful alternative for streaming: ``StreamGRUHead`` reads every frame once, carries its
+hidden state across blocks for as long as the stream runs and gives a logit at the end of every 80 ms block. It is
+trained on random crops of the shard streams (truncated backpropagation through time): each crop starts with a burn-in
+whose loss is masked, so the state has settled when the scored blocks begin. A device runs the head from the moment it
+starts listening, so no score starts from a state the device could not have. The calibration negatives run as one
+continuous stream per file, from a zero state. Every positive (calibration row or evaluation row) starts from the state
+left by the first 30 s (``WARM_FRAMES`` frames) of the negative features: the first calibration negatives file for
+``fit`` and ``export``, the first piece of the first directory of ``--negs`` for ``score``.
+
 Subcommands (each audio-heavy one takes ``--part i --parts n`` so several cores share it):
 
     streams  training streams for a word (or negative-only streams with --word none), featurized: shards of
@@ -14,10 +23,12 @@ Subcommands (each audio-heavy one takes ``--part i --parts n`` so several cores 
     negs     evaluation negatives as continuous streams: streamed features, and the plugin's isolated-window logits
              of published heads
     pos      evaluation positives, each after a lead-in: streamed features, and isolated-window logits
-    fit      the window head on the shards of one word and the shared negative shards
-    export   calibrate a trained head on the calibration stream and write the plugin's head ONNX
+    fit      the window head (or with --head gru the stateful GRU head) on the shards of one word and the shared
+             negative shards
+    export   calibrate a trained head on the calibration stream and write its head ONNX (the plugin format for a
+             window head; the published plugin cannot run a GRU head)
     score    recall at a false-activation rate and at the calibrated default, for shipped heads on isolated windows
-             and on streamed frames, and for exported heads on streamed frames
+             and on streamed frames, and for exported window and GRU heads on streamed frames
 
 The positive clips of a word come from ``positive_sources.json`` beside this file: per word, the directories (relative
 to ``--data-root``, or a folder of a Hugging Face dataset snapshot) and the synthesis records that name each clip's
@@ -527,6 +538,22 @@ class WindowHead(nn.Module):
         return self.fc2(F.relu(self.fc1(out.mean(1)))).squeeze(-1)
 
 
+class StreamGRUHead(nn.Module):
+    """A GRU over the frames with a ReLU linear layer and one logit read at the end of every block of ``FPB`` frames.
+    ``forward(x, h)`` returns the block logits ``[batch, frames // FPB]`` and the hidden state ``[1, batch, hidden]``
+    after the last frame; ``h`` is carried by the caller and the head never resets it."""
+
+    def __init__(self, dim=128, hidden=128, linear=128):
+        super().__init__()
+        self.gru = nn.GRU(dim, hidden, batch_first=True)
+        self.fc1 = nn.Linear(hidden, linear)
+        self.fc2 = nn.Linear(linear, 1)
+
+    def forward(self, x, h=None):
+        out, h = self.gru(x, h)
+        return self.fc2(F.relu(self.fc1(out[:, FPB - 1::FPB]))).squeeze(-1), h
+
+
 class Affine(nn.Module):
     def __init__(self, head, scale, shift):
         super().__init__()
@@ -534,6 +561,18 @@ class Affine(nn.Module):
 
     def forward(self, x):
         return self.scale * self.head(x) + self.shift
+
+
+class AffineBlock(nn.Module):
+    """A GRU head on one block with the affine calibration: ``(features, h)`` to ``(logit_calibrated, h_out)``."""
+
+    def __init__(self, head, scale, shift):
+        super().__init__()
+        self.head, self.scale, self.shift = head, scale, shift
+
+    def forward(self, x, h):
+        z, h = self.head(x, h)
+        return self.scale * z.reshape(-1) + self.shift, h
 
 
 def shard_paths(shards, word):
@@ -595,14 +634,32 @@ def hardest(rows, scores, k):
     return rows[np.argsort(scores)[len(scores) - k:]]
 
 
-def cmd_fit(a):
-    """Train the window head on windows of streamed features: every positive window and five negatives per positive
-    each epoch, half of them the negatives the head scored highest last epoch; keep the epoch with the highest
-    calibration recall at ``--select-rate`` debounced detections per hour of the calibration stream."""
+def check_trunks(a):
+    """The trunk record of the shards, refusing a calibration made by another trunk."""
     trunk = read_trunk_record(a.shards)
     if read_trunk_record(a.calib) != trunk:
         raise SystemExit(f"{a.shards} and {a.calib} were featurized by different trunks: "
                          f"{trunk} against {read_trunk_record(a.calib)}")
+    return trunk
+
+
+def epoch_record(ep, t0, loss, cpos, cz, hours, rate):
+    """The log line of an epoch: recall of the calibration positives at the calibration stream's maxima, at its
+    ``rate`` threshold and at its 99.9th percentile."""
+    thr = threshold_for_rate([cz], hours, rate)
+    cal = float((cpos > cz.max()).mean())
+    return {"epoch": ep, "seconds": round(time.time() - t0, 1), "loss": float(loss), "calib_recall": cal,
+            "calib_threshold_at_rate": thr, "calib_recall_at_rate": float((cpos >= thr).mean()),
+            "calib_recall_at_p999": float((cpos > np.quantile(cz, 0.999)).mean())}
+
+
+def cmd_fit(a):
+    """Train the window head on windows of streamed features: every positive window and five negatives per positive
+    each epoch, half of them the negatives the head scored highest last epoch; keep the epoch with the highest
+    calibration recall at ``--select-rate`` debounced detections per hour of the calibration stream."""
+    trunk = check_trunks(a)
+    if a.head == "gru":
+        return fit_gru(a, trunk)
     torch.manual_seed(a.seed)
     torch.set_num_threads(a.threads)
     rng = np.random.default_rng(a.seed)
@@ -639,18 +696,139 @@ def cmd_fit(a):
             scores = np.concatenate([head_logits(head, gather(shards, pool[i:i + 4096])) for i in range(0, len(pool), 4096)])
             hard = hardest(pool, scores, n_neg // 2)
             cpos, cz, hours = calibration_scores(head, a.calib, a.word)
-            thr = threshold_for_rate([cz], hours, a.select_rate)
-            cal = float((cpos > cz.max()).mean())
-            rec = {"epoch": ep, "seconds": round(time.time() - t0, 1), "loss": loss.detach().item(), "calib_recall": cal,
-                   "calib_threshold_at_rate": thr, "calib_recall_at_rate": float((cpos >= thr).mean()),
-                   "calib_recall_at_p999": float((cpos > np.quantile(cz, 0.999)).mean())}
+            rec = epoch_record(ep, t0, loss.detach().item(), cpos, cz, hours, a.select_rate)
             log.write(json.dumps(rec) + "\n")
             log.flush()
             print(json.dumps(rec), flush=True)
-            if (rec["calib_recall_at_rate"], cal) > best:
-                best = (rec["calib_recall_at_rate"], cal)
+            if (rec["calib_recall_at_rate"], rec["calib_recall"]) > best:
+                best = (rec["calib_recall_at_rate"], rec["calib_recall"])
                 torch.save({"state": head.state_dict(), "word": a.word, "epoch": ep, "seed": a.seed, "trunk": trunk,
                             "select_rate": a.select_rate, "positives": int(len(pos)), "negatives": int(len(neg))}, out)
+
+
+# ------------------------------------------------------------------ stateful GRU head
+WARM_FRAMES = 30 * SR // HOP
+MIN_BURN_BLOCKS = 2 * SR // BLOCK
+
+
+def block_labels(lab):
+    """The label of the frame at the end of each block of ``lab`` ``[..., T]``: ``[..., T // FPB]``."""
+    return lab[..., FPB - 1:lab.shape[-1] // FPB * FPB:FPB]
+
+
+def gru_loss(head, x, y, burn, pos_weight):
+    """Mean binary cross-entropy of the head over crops ``x`` ``[batch, frames, D]`` with block labels ``y``
+    ``[batch, blocks]``, from a zero state. Blocks of the first ``burn`` blocks and blocks labelled -1 do not count;
+    positives weigh ``pos_weight``."""
+    z, _ = head(x)
+    keep = (y >= 0) & (torch.arange(y.shape[1]) >= burn)
+    bce = F.binary_cross_entropy_with_logits(z, y.clamp(min=0).float(), reduction="none",
+                                             pos_weight=torch.tensor(float(pos_weight)))
+    return (bce * keep).sum() / keep.sum().clamp(min=1)
+
+
+def gru_crops(shards, streams, pos_blocks, n, burn, scored, rng, pos_frac):
+    """``n`` crops of ``burn + scored`` blocks: features ``[n, blocks * FPB, D]`` and block labels ``[n, blocks]``.
+    A fraction ``pos_frac`` of the crops is placed so that a randomly drawn positive block (a row ``(shard, stream,
+    block)`` of ``pos_blocks``) falls in the scored part; the others start anywhere in a random stream (a row
+    ``(shard, stream)`` of ``streams``)."""
+    total = burn + scored
+    xs, ys = [], []
+    for _ in range(n):
+        if len(pos_blocks) and rng.random() < pos_frac:
+            k, i, b = pos_blocks[rng.integers(len(pos_blocks))]
+            start = b - burn - rng.integers(scored)
+        else:
+            k, i = streams[rng.integers(len(streams))]
+            start = rng.integers(shards[k][1].shape[1] // FPB - total + 1)
+        start = int(np.clip(start, 0, shards[k][1].shape[1] // FPB - total))
+        xs.append(np.asarray(shards[k][0][i, start * FPB:(start + total) * FPB], np.float32))
+        ys.append(block_labels(shards[k][1][i])[start:start + total])
+    return torch.from_numpy(np.stack(xs)), torch.from_numpy(np.stack(ys).astype(np.int64))
+
+
+def gru_logits(head, feats, h=None, chunk=6000):
+    """(block logits of a torch GRU head over ``feats``, the state after them): ``feats`` run in pieces of ``chunk``
+    frames with the state carried, from ``h`` (zeros when None). A trailing partial block is not scored."""
+    n = len(feats) // FPB * FPB
+    out = []
+    with torch.no_grad():
+        for i in range(0, n, chunk):
+            z, h = head(torch.from_numpy(np.asarray(feats[i:min(i + chunk, n)], np.float32))[None], h)
+            out.append(z[0].numpy())
+    return np.concatenate(out).astype(np.float64), h
+
+
+def warm_feats(feats):
+    """The ``WARM_FRAMES`` frames that warm a state up before a positive."""
+    if len(feats) < WARM_FRAMES:
+        raise SystemExit(f"{len(feats)} negative frames cannot warm a state up: {WARM_FRAMES} are needed")
+    return feats[:WARM_FRAMES]
+
+
+def gru_calibration_scores(head, calib, word):
+    """(calibration positives' best logit, calibration stream block logits, stream hours) of a GRU head. Each
+    ``negs-*.npz`` runs as one stream from a zero state. Each positive row runs from the state the head holds after the
+    first ``WARM_FRAMES`` frames (30 s) of the first ``negs-*.npz`` file, as a device does that has been listening."""
+    paths = sorted(glob.glob(f"{calib}/negs-*.npz"))
+    warm = gru_logits(head, warm_feats(np.load(paths[0])["feats"]))[1]
+    z = np.concatenate([gru_logits(head, np.load(p)["feats"])[0] for p in paths])
+    pos = np.array([gru_logits(head, f, warm)[0][s:e + 1].max() for f, s, e in load_rows(f"{calib}/{word}-*.npy")])
+    return pos, z, len(z) * BLOCK / SR / 3600
+
+
+def fit_gru(a, trunk):
+    """Train the GRU head by truncated backpropagation through time on random crops of the shard streams. A crop is
+    ``--burn-in-blocks`` blocks whose loss is masked, then ``--crop-blocks`` scored blocks; the block label is the
+    label of the frame at the block end and -1 blocks are masked. Positive blocks are a few of every hundred, so half
+    of the crops (``--pos-crops``) are placed around a positive block, and positives weigh ``--pos-weight`` in the loss.
+    The kept epoch has the highest calibration recall at ``--select-rate``, as for the window head."""
+    if a.burn_in_blocks < MIN_BURN_BLOCKS:
+        raise SystemExit(f"--burn-in-blocks {a.burn_in_blocks} is under the {MIN_BURN_BLOCKS} blocks (2 s) a state needs")
+    torch.manual_seed(a.seed)
+    torch.set_num_threads(a.threads)
+    rng = np.random.default_rng(a.seed)
+    word_paths = shard_paths(a.shards, a.word)
+    if not word_paths:
+        raise SystemExit(f"{a.shards} holds no shard of {a.word!r}")
+    shards = load_shards(word_paths + shard_paths(a.shards, "none"))
+    total = a.burn_in_blocks + a.crop_blocks
+    streams = [(k, i) for k, (_, lab) in enumerate(shards) if lab.shape[1] // FPB >= total for i in range(len(lab))]
+    if not streams:
+        raise SystemExit(f"no shard stream holds {total} blocks ({total * BLOCK / SR:.1f} s)")
+    pos_blocks = [(k, i, b) for k, i in streams
+                  for b in np.flatnonzero(block_labels(shards[k][1][i]) == 1) if b >= a.burn_in_blocks]
+    if not pos_blocks:
+        raise SystemExit(f"{a.shards} holds no positive block of {a.word!r} after {a.burn_in_blocks} burn-in blocks")
+    labels = [block_labels(shards[k][1][i]) for k, i in streams]
+    n_pos, n_neg = (int(sum((y == v).sum() for y in labels)) for v in (1, 0))
+    head = StreamGRUHead()
+    opt = torch.optim.Adam(head.parameters(), lr=a.lr)
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    best = (-1.0, 0)
+    with open(out.with_suffix(".jsonl"), "w") as log:
+        for ep in range(1, a.epochs + 1):
+            t0 = time.time()
+            head.train()
+            for done in range(0, a.crops, a.batch):
+                x, y = gru_crops(shards, streams, pos_blocks, min(a.batch, a.crops - done), a.burn_in_blocks, a.crop_blocks,
+                                 rng, a.pos_crops)
+                loss = gru_loss(head, x, y, a.burn_in_blocks, a.pos_weight)
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                nn.utils.clip_grad_norm_(head.parameters(), 1.0)
+                opt.step()
+            head.eval()
+            cpos, cz, hours = gru_calibration_scores(head, a.calib, a.word)
+            rec = epoch_record(ep, t0, loss.detach().item(), cpos, cz, hours, a.select_rate)
+            log.write(json.dumps(rec) + "\n")
+            log.flush()
+            print(json.dumps(rec), flush=True)
+            if (rec["calib_recall_at_rate"], rec["calib_recall"]) > best:
+                best = (rec["calib_recall_at_rate"], rec["calib_recall"])
+                torch.save({"state": head.state_dict(), "word": a.word, "epoch": ep, "seed": a.seed, "trunk": trunk,
+                            "select_rate": a.select_rate, "positives": n_pos, "negatives": n_neg, "arch": "stream_gru"}, out)
 
 
 def debounced_events(z, thr):
@@ -754,10 +932,36 @@ def _window_piece(sess):
     return run
 
 
+def gru_session_logits(sess, feats, h=None):
+    """(block logits of an exported GRU head over ``feats``, the state after them): one block per run, the state
+    carried from ``h`` (zeros when None). A trailing partial block is not scored."""
+    feed, state = (i.name for i in sess.get_inputs())
+    h = np.zeros((1, 1, 128), np.float32) if h is None else h
+    z = np.empty(len(feats) // FPB)
+    for b in range(len(z)):
+        out, h = sess.run(None, {feed: np.asarray(feats[b * FPB:(b + 1) * FPB], np.float32)[None], state: h})
+        z[b] = out[0]
+    return z, h
+
+
+def _gru_piece(sess):
+    """``piece_logits`` for ``_neg_logits`` with the state carried from piece to piece: the piece that has no tail
+    before it opens a directory and starts from a zero state."""
+    h = None
+
+    def run(d, tail):
+        nonlocal h
+        z, h = gru_session_logits(sess, d["feats"], h if tail is not None else None)
+        return z
+    return run
+
+
 def cmd_score(a):
     """Recall at ``--rate`` false activations per hour, and recall and false activations at the calibrated default,
     for shipped heads on isolated windows (``iso_<name>`` logits) and on the last 75 streamed frames. Negatives are
-    each directory's pieces in order, scored continuously, one piece in memory at a time."""
+    each directory's pieces in order, scored continuously, one piece in memory at a time. ``--gru`` heads carry their
+    state across the pieces of a directory and start each directory from zero; their positives start from the state
+    after the first ``WARM_FRAMES`` frames of the first piece of the first directory."""
     import onnx
     import onnxruntime as ort
     by = _by_dir(a.negs)
@@ -798,6 +1002,21 @@ def cmd_score(a):
         pmax = {k: np.array([window_logits(sess, r["feats"])[r["first_block"]:].max() for r in rows])
                 for k, rows in mine.items()}
         res[f"{name}:streamed_window"] = _report(z_st, hours, pmax, a.rate, default)
+    for spec in a.gru:
+        name, path = spec.split("=", 1)
+        word = name.split(":")[0]
+        meta = {p.key: p.value for p in onnx.load(path).metadata_props}
+        default = float(meta["default_threshold"]) if "default_threshold" in meta else None
+        mine = {k: v for k, v in pos.items() if k.startswith(word)}
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = so.inter_op_num_threads = 1
+        sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+        z_st, hours = _neg_logits(by, _gru_piece(sess))
+        res["negative_hours"] = round(hours, 2)
+        warm = gru_session_logits(sess, warm_feats(np.load(next(iter(by.values()))[0])["feats"]))[1]
+        pmax = {k: np.array([gru_session_logits(sess, r["feats"], warm)[0][r["first_block"]:].max() for r in rows])
+                for k, rows in mine.items()}
+        res[f"{name}:streamed_gru"] = _report(z_st, hours, pmax, a.rate, default)
     print(json.dumps(res, indent=1))
     if a.out:
         Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
@@ -846,8 +1065,12 @@ PLUGIN_CALIBRATION = "identity; the affine calibration (calib_a, calib_b) is fol
 
 
 def cmd_export(a):
-    """Calibrate a trained window head on the calibration stream and export it as the plugin's head ONNX: input
-    ``features`` [batch, frames, 128], output ``logit_calibrated``, the affine map inside. The stream's ``--rate``
+    """Calibrate a trained head on the calibration stream and export it as the plugin's head ONNX: input
+    ``features`` [batch, frames, 128], output ``logit_calibrated``, the affine map inside. A GRU head (checkpoint
+    ``arch`` ``stream_gru``) takes one block, ``features`` [1, 4, 128] and the state ``h`` [1, 1, 128], and returns
+    ``logit_calibrated`` [1] and the next state ``h_out`` [1, 1, 128]; its calibration positives start from a warmed-up
+    state (see ``gru_calibration_scores``). The published plugin does not read ``h`` and cannot run a GRU export. The
+    stream's ``--rate``
     FA/h logit maps to probability 0.5 and the median calibration positive to 0.9; the F2-optimal threshold becomes
     ``default_threshold``. The metadata names the pretrained featurizer the trunk was made from, and the keys the
     shipped calibrated heads carry."""
@@ -862,10 +1085,11 @@ def cmd_export(a):
     if not (trunk["featurizer_sha256"] and trunk["featurizer_revision"]):
         raise SystemExit(f"the trunk {trunk['trunk_sha256']} records no source featurizer sha256 and revision; "
                          "streamify it with `stream_trunk.py streamify --source-revision` so the plugin loads the same featurizer")
-    head = WindowHead()
+    gru = ck.get("arch") == "stream_gru"
+    head = StreamGRUHead() if gru else WindowHead()
     head.load_state_dict(ck["state"])
     head.eval()
-    pos, z, hours = calibration_scores(head, a.calib, ck["word"])
+    pos, z, hours = (gru_calibration_scores if gru else calibration_scores)(head, a.calib, ck["word"])
     z_thr, extrapolated = stream_threshold(z, hours, a.rate)
     gap = float(np.median(pos)) - z_thr
     if gap <= 0:
@@ -877,17 +1101,22 @@ def cmd_export(a):
             "calib_events": debounced_events(z, z_thr), "calib_extrapolated": extrapolated,
             "calib_positives": len(pos), "roc_auc": roc_auc(pos, scored), "positives_per_hour": a.positives_per_hour,
             **f2_operating_point(scale * pos + shift, scale * z + shift, hours, a.positives_per_hour)}
-    model = Affine(head, scale, shift).eval()
     with torch.no_grad():
-        torch.onnx.export(model, torch.zeros(1, WINDOW_FRAMES, 128), a.out, input_names=["features"],
-                          output_names=[OUTPUT_NAME], dynamic_axes={"features": {0: "batch", 1: "frames"},
-                                                                    OUTPUT_NAME: {0: "batch"}},
-                          opset_version=17, dynamo=False)
+        if gru:
+            torch.onnx.export(AffineBlock(head, scale, shift).eval(), (torch.zeros(1, FPB, 128), torch.zeros(1, 1, 128)),
+                              a.out, input_names=["features", "h"], output_names=[OUTPUT_NAME, "h_out"],
+                              opset_version=17, dynamo=False)
+        else:
+            torch.onnx.export(Affine(head, scale, shift).eval(), torch.zeros(1, WINDOW_FRAMES, 128), a.out,
+                              input_names=["features"], output_names=[OUTPUT_NAME],
+                              dynamic_axes={"features": {0: "batch", 1: "frames"}, OUTPUT_NAME: {0: "batch"}},
+                              opset_version=17, dynamo=False)
     m = onnx.load(a.out)
     meta = {"wake_word": ck["word"].replace("_", " "), "pretrained_featurizer": trunk["pretrained_featurizer"],
             "featurizer_sha256": trunk["featurizer_sha256"], "featurizer_revision": trunk["featurizer_revision"],
             "stream_trunk_sha256": trunk["trunk_sha256"], "featurizer_features": "streamed",
-            "window_frames": str(WINDOW_FRAMES), "feature_dim": "128", "arch": "gru", "trainer": TRAINER,
+            **({"frames_per_block": str(FPB), "state_shape": "1,1,128"} if gru else {"window_frames": str(WINDOW_FRAMES)}),
+            "feature_dim": "128", "arch": "stream_gru" if gru else "gru", "trainer": TRAINER,
             "wakeforge_version": __version__, "license": "Apache-2.0", "plugin_calibration": PLUGIN_CALIBRATION,
             "calibrated": "1", "default_threshold": repr(info["f2_threshold"]), "training_data": a.training_data,
             **{k: repr(v) for k, v in info.items()}}
@@ -940,6 +1169,8 @@ def main(argv=None):
     t = sub.add_parser("fit")
     t.add_argument("--shards", required=True)
     t.add_argument("--word", required=True)
+    t.add_argument("--head", choices=["window", "gru"], default="window",
+                   help="window: the head on isolated 1.5 s windows; gru: the stateful head for streaming")
     t.add_argument("--calib", required=True, help="output of calib: negs-*.npz and <word>-*.npy")
     t.add_argument("--out", required=True)
     t.add_argument("--epochs", type=int, default=12)
@@ -948,6 +1179,11 @@ def main(argv=None):
     t.add_argument("--neg-pool", type=int, default=200000, help="negative windows hard negatives are mined from")
     t.add_argument("--select-rate", type=float, default=1.0,
                    help="debounced detections per hour of calibration stream at which the kept epoch has the best recall")
+    t.add_argument("--burn-in-blocks", type=int, default=40, help="gru: blocks of each crop run before the loss counts")
+    t.add_argument("--crop-blocks", type=int, default=120, help="gru: scored blocks of each crop")
+    t.add_argument("--crops", type=int, default=2000, help="gru: crops per epoch")
+    t.add_argument("--pos-crops", type=float, default=0.5, help="gru: fraction of the crops placed around a positive block")
+    t.add_argument("--pos-weight", type=float, default=10.0, help="gru: weight of a positive block in the loss")
     t.add_argument("--threads", type=int, default=4)
     t.add_argument("--seed", type=int, default=42)
     u = sub.add_parser("score")
@@ -964,6 +1200,7 @@ def main(argv=None):
                    help="real wake words per hour of audio, which weights recall against false activations in the F2 choice")
     v.add_argument("--training-data", required=True, help="the training data statement written into the metadata")
     v.add_argument("--out", required=True)
+    u.add_argument("--gru", nargs="*", default=[], help="name=head.onnx, an exported GRU head scored on streamed frames only")
     u.add_argument("--window", nargs="*", default=[], help="name=head.onnx, a window head scored on streamed frames only")
     a = ap.parse_args(argv)
     {"streams": cmd_streams, "calib": cmd_calib, "negs": cmd_negs, "pos": cmd_pos, "fit": cmd_fit, "export": cmd_export,
