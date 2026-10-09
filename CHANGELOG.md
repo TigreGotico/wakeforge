@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.1a1](https://github.com/TigreGotico/wakeforge/tree/0.19.1a1) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.0a1...0.19.1a1)
+
+**Merged pull requests:**
+
+- fix: floor datasets at 4 in the dev and test extras [\#101](https://github.com/TigreGotico/wakeforge/pull/101) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.19.0a1](https://github.com/TigreGotico/wakeforge/tree/0.19.0a1) (2026-10-04)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.18.1a1...0.19.0a1)
