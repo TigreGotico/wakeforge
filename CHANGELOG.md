@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.1a2](https://github.com/TigreGotico/wakeforge/tree/0.19.1a2) (2026-10-09)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.1a1...0.19.1a2)
+
+**Merged pull requests:**
+
+- test: hold the GRU statistics fit on the CPU [\#102](https://github.com/TigreGotico/wakeforge/pull/102) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.19.1a1](https://github.com/TigreGotico/wakeforge/tree/0.19.1a1) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.19.0a1...0.19.1a1)
