@@ -1,0 +1,11 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+main/model_data.cc
+main/model_data.h
+main/model_io.h
+main/logmel_consts.h
+main/test_audio.cc
+main/test_audio.h
