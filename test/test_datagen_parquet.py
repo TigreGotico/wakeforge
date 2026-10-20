@@ -33,20 +33,34 @@ class _ClassLabel:
 
 
 class _FakeStream:
-    def __init__(self, rows, pulled, features=None) -> None:
+    """A streamed split of ``shards`` Parquet files. ``opened`` records each shard
+    a shuffle buffer reads from, as the real stream fetches them."""
+
+    def __init__(self, rows, pulled, features=None, shards=1, opened=None, picked=None) -> None:
         self.rows = rows
         self.pulled = pulled
         self.features = features or {"audio": _Audio()}
+        self.num_shards = shards
+        self.opened = [] if opened is None else opened
+        self.picked = [] if picked is None else picked
 
     def cast_column(self, col, feature):
         assert col == "audio" and feature.decode is False
         return self
 
+    def shard(self, num_shards, index):
+        assert num_shards == self.num_shards
+        self.picked.append(index)
+        return _FakeStream(self.rows[index::num_shards], self.pulled, self.features, 1,
+                           self.opened, self.picked)
+
     def shuffle(self, seed, buffer_size):
         import random
         rows = list(self.rows)
         random.Random(seed).shuffle(rows)
-        return _FakeStream(rows, self.pulled, self.features)
+        self.opened.append(self.num_shards)
+        return _FakeStream(rows, self.pulled, self.features, self.num_shards, self.opened,
+                           self.picked)
 
     def __iter__(self):
         for row in self.rows:
@@ -59,7 +73,8 @@ def hub(monkeypatch):
     """A fake Hub: ``files`` is the repo listing, ``configs`` maps a config name to its rows."""
     import huggingface_hub
 
-    state = types.SimpleNamespace(files=[], configs={}, loads=[], pulled=[], folder_calls=[], label_names=None)
+    state = types.SimpleNamespace(files=[], configs={}, loads=[], pulled=[], folder_calls=[], label_names=None,
+                                  shards=1, opened=[], picked=[])
     mod = types.ModuleType("datasets")
     mod.Audio = _Audio
     mod.ClassLabel = _ClassLabel
@@ -70,7 +85,8 @@ def hub(monkeypatch):
         features = {"audio": _Audio()}
         if state.label_names:
             features["label"] = _ClassLabel(state.label_names)
-        return _FakeStream(state.configs[name], state.pulled, features)
+        return _FakeStream(state.configs[name], state.pulled, features, state.shards, state.opened,
+                            state.picked)
 
     mod.load_dataset = load_dataset
     monkeypatch.setitem(sys.modules, "datasets", mod)
@@ -97,6 +113,37 @@ def test_parquet_repo_gives_16k_wavs_and_stops_at_the_cap(hub, tmp_path):
     assert hub.loads == [("org/pq", "default", "train", True)]
     audio, sr = sf.read(files[0], dtype="float32")
     assert sr == 16000 and abs(len(audio) - 16000) <= 2
+
+
+def test_a_capped_read_shuffles_one_shard_at_a_time(hub, tmp_path):
+    # A shuffle buffer over the whole stream reads many shards at once: for
+    # AudioSet (38 shards) it held more than 6 GB to write 200 clips.
+    hub.files = [f"data/train-{i:05d}-of-00038.parquet" for i in range(38)]
+    hub.configs = {"default": _rows(38 * 5)}
+    hub.shards = 38
+
+    files = datagen.download_hf_audio_dataset("org/pq", tmp_path / "out", max_samples=8, sr=16000)
+
+    assert len(files) == 8
+    assert hub.opened == [1, 1]
+
+
+def _first_shard_read(hub, tmp_path, seed):
+    hub.picked.clear()
+    datagen.download_hf_audio_dataset("org/pq", tmp_path / f"seed{seed}", max_samples=1, sr=16000,
+                                      seed=seed)
+    return hub.picked[0]
+
+
+def test_the_shard_read_order_depends_on_the_seed(hub, tmp_path):
+    hub.files = [f"data/train-{i:05d}-of-00038.parquet" for i in range(38)]
+    hub.configs = {"default": _rows(38 * 5)}
+    hub.shards = 38
+
+    first = {seed: _first_shard_read(hub, tmp_path, seed) for seed in range(1, 9)}
+
+    assert len(set(first.values())) > 1
+    assert _first_shard_read(hub, tmp_path / "again", 3) == first[3]
 
 
 def test_uncapped_parquet_repo_reads_every_row(hub, tmp_path):
