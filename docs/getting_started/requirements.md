@@ -6,7 +6,7 @@ What `ww_trainer-quickstart` will actually cost you before you run it.
 
 | Preset | Flags | Disk (HF cache + outputs) | Network, first run | Peak RAM | Time, CPU | Time, GPU |
 |---|---|---|---|---|---|---|
-| **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~1.5 GB | ~70 min, measured with a novel phrase on 8 cores (download- and synthesis-bound) | download- and synthesis-bound, as on CPU |
+| **Smoke** | `--no-augmentation-data --n-positive 200 --epochs 10 --tier micro` | ~1.5 GB | ~1.3 GB | ~4.5 GB | ~70 min, measured with a novel phrase on 8 cores (download- and synthesis-bound) | download- and synthesis-bound, as on CPU |
 | **Known phrase** | `--wake-word "hey mycroft"` (any phrase in [§ Pre-built positives](#pre-built-positives-skip-the-synth-step)) | ~3 GB | ~2.5 GB | ~2 GB | ~10 min | ~3 min |
 | **Default** | (no flags, novel phrase) | ~6–8 GB | ~5 GB | ~3 GB | ~30–60 min | ~10–15 min |
 | **Default + VC** | `--vc-refs <dir>` | + engine ONNX | + engine ONNX (voiceclonnx, downloaded on first use) | ~5 GB | + ~15 min | + ~5 min |
