@@ -198,6 +198,8 @@ class OnnxStream:
 
         so = ort.SessionOptions()
         so.intra_op_num_threads = so.inter_op_num_threads = threads
+        # exact int8 kernels on AVX2 CPUs too, so training features equal a VNNI or ARM CPU's (ww_trainer.ort_options)
+        so.add_session_config_entry("session.x64quantprecision", "1")
         self.sess = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
         ins = self.sess.get_inputs()
         self.block = ins[0].shape[1] if isinstance(ins[0].shape[1], int) else BLOCK
