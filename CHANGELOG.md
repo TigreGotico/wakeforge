@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.1a1](https://github.com/TigreGotico/wakeforge/tree/0.23.1a1) (2026-11-27)
+
+[Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.23.0a1...0.23.1a1)
+
+**Merged pull requests:**
+
+- fix: exact int8 kernels on AVX2 CPUs, with the test reference on the same kernel [\#110](https://github.com/TigreGotico/wakeforge/pull/110) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.23.0a1](https://github.com/TigreGotico/wakeforge/tree/0.23.0a1) (2026-10-09)
 
 [Full Changelog](https://github.com/TigreGotico/wakeforge/compare/0.22.0a1...0.23.0a1)
