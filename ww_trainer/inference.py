@@ -8,6 +8,8 @@ from typing import Optional
 import numpy as np
 import onnxruntime as ort
 
+from ww_trainer.ort_options import exact_int8
+
 
 def head_metadata(head_path: str) -> dict:
     """Custom metadata of an exported head ONNX (``wake_word``, ``pretrained_featurizer``, ...)."""
@@ -170,7 +172,7 @@ class OnnxWakeWordInferencer:
                      if device == "cuda" else ["CPUExecutionProvider"])
         if extractor_path is None:
             extractor_path = pretrained_featurizer_path(head_path)
-        self.extractor = ort.InferenceSession(extractor_path, providers=providers)
+        self.extractor = ort.InferenceSession(extractor_path, exact_int8(), providers=providers)
         self.head = ort.InferenceSession(head_path, providers=providers)
         self.vad = ort.InferenceSession(vad_path, providers=providers) if vad_path else None
         self.text_ext = (
@@ -377,7 +379,7 @@ class OnnxStreamingWakeWord:
                  window: int = 100, hidden_dim: int = 128,
                  hop_samples: int = 160, context_samples: int = 640) -> None:
         providers = ["CPUExecutionProvider"]
-        self.ext = ort.InferenceSession(featurizer_path, providers=providers)
+        self.ext = ort.InferenceSession(featurizer_path, exact_int8(), providers=providers)
         self.head = ort.InferenceSession(streaming_head_path, providers=providers)
         self._ext_in = self.ext.get_inputs()[0].name
         self._ext_out = self.ext.get_outputs()[0].name

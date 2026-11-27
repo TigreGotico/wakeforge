@@ -238,6 +238,8 @@ def _prefill_worker(args) -> int:
     so = ort.SessionOptions()
     so.intra_op_num_threads = so.inter_op_num_threads = 1
     so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    from ww_trainer.ort_options import exact_int8
+    exact_int8(so)
     extractor.sess = ort.InferenceSession(extractor.model_path, so, providers=["CPUExecutionProvider"])
     store = FeatureStore(extractor, cache_dir, keep_in_memory=False)  # disk only; the training process keeps what fits
     dataset = AudioDataset(samples, device="cpu", **dataset_kwargs)

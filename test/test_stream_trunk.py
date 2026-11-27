@@ -14,6 +14,8 @@ import onnx
 import pytest
 import torch
 
+from ww_trainer.ort_options import exact_int8
+
 _P = Path(__file__).resolve().parents[1] / "scripts" / "research" / "microwakehubert" / "stream_trunk.py"
 
 
@@ -213,6 +215,7 @@ def _quantized_agreement(mod, tmp_path):
     wav = _signal(seed=5)[0].numpy()
     so = ort.SessionOptions()
     so.intra_op_num_threads = 1
+    exact_int8(so)
     whole = ort.InferenceSession(str(tmp_path / "whole_int8.onnx"), so,
                                  providers=["CPUExecutionProvider"]).run(None, {"waveform": wav[None]})[0][0]
     got = mod.OnnxStream(tmp_path / "stream_int8.onnx").run(wav)

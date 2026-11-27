@@ -413,6 +413,7 @@ def _sessions(published, head_paths):
     import onnxruntime as ort
     so = ort.SessionOptions()
     so.intra_op_num_threads = so.inter_op_num_threads = 1
+    so.add_session_config_entry("session.x64quantprecision", "1")   # exact int8 on AVX2 CPUs
     f = ort.InferenceSession(published, so, providers=["CPUExecutionProvider"])
     return f, {Path(p).stem: ort.InferenceSession(p, so, providers=["CPUExecutionProvider"]) for p in head_paths}
 
@@ -981,6 +982,7 @@ def cmd_score(a):
         res[f"{name}:isolated"] = _report(z_iso, hours, pmax, a.rate, default)
         so = ort.SessionOptions()
         so.intra_op_num_threads = so.inter_op_num_threads = 1
+        so.add_session_config_entry("session.x64quantprecision", "1")   # exact int8 on AVX2 CPUs
         sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
         z_st, _ = _neg_logits(by, _window_piece(sess))
         pmax = {k: np.array([window_logits(sess, r["feats"])[r["first_block"]:].max() for r in rows])
@@ -996,6 +998,7 @@ def cmd_score(a):
         mine = {k: v for k, v in pos.items() if k.startswith(word)}
         so = ort.SessionOptions()
         so.intra_op_num_threads = so.inter_op_num_threads = 1
+        so.add_session_config_entry("session.x64quantprecision", "1")   # exact int8 on AVX2 CPUs
         sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
         z_st, hours = _neg_logits(by, _window_piece(sess))
         res["negative_hours"] = round(hours, 2)
@@ -1010,6 +1013,7 @@ def cmd_score(a):
         mine = {k: v for k, v in pos.items() if k.startswith(word)}
         so = ort.SessionOptions()
         so.intra_op_num_threads = so.inter_op_num_threads = 1
+        so.add_session_config_entry("session.x64quantprecision", "1")   # exact int8 on AVX2 CPUs
         sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
         z_st, hours = _neg_logits(by, _gru_piece(sess))
         res["negative_hours"] = round(hours, 2)
