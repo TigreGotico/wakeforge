@@ -213,7 +213,8 @@ class OnnxFeatureExtractor(BaseExtractor):
             providers = ["CPUExecutionProvider"]
 
         # 2. Initialize ONNX runtime session with selected providers
-        self.sess = ort.InferenceSession(model_path, providers=providers)
+        from ww_trainer.ort_options import exact_int8
+        self.sess = ort.InferenceSession(model_path, exact_int8(), providers=providers)
         self.input_info = self.sess.get_inputs()[0]
         self.output_info = self.sess.get_outputs()[0]
 
