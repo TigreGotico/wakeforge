@@ -595,8 +595,9 @@ def _download_parquet_dataset(
     """Stream the ``train`` split of each of *configs* and save its clips as WAVs.
 
     A cap is shared out between the configs, rounded up, and the run stops at the
-    cap. A ``labels.csv`` beside the WAVs records the ``label`` column where the
-    repo has one. A failed load raises.
+    cap. A capped read takes whole shards in an order set by the seed, so a repo
+    sorted by class or speaker gives a narrow draw. A ``labels.csv`` beside the
+    WAVs records the ``label`` column where the repo has one. A failed load raises.
     """
     import zlib
     from datasets import Audio, ClassLabel, load_dataset
@@ -615,8 +616,16 @@ def _download_parquet_dataset(
                 ds = ds.cast_column("audio", Audio(decode=False))
             names = features["label"] if isinstance(features.get("label"), ClassLabel) else None
             if remaining is not None:
-                ds = ds.shuffle(seed=zlib.crc32(f"{seed}:{dataset_id}:{config}".encode()),
-                                buffer_size=min(1000, 4 * remaining))
+                # One shard at a time, in a seeded order: a shuffle buffer over the
+                # whole stream reads many shards at once (over 6 GB for AudioSet).
+                shard_seed = zlib.crc32(f"{seed}:{dataset_id}:{config}".encode())
+                order = list(range(ds.num_shards))
+                random.Random(shard_seed).shuffle(order)
+                buffer_size = min(1000, 4 * remaining)
+                stream = ds
+                ds = itertools.chain.from_iterable(
+                    stream.shard(stream.num_shards, i).shuffle(seed=shard_seed, buffer_size=buffer_size)
+                    for i in order)
         except Exception as exc:
             raise RuntimeError(f"Load of {dataset_id} config {config} failed: {exc}") from exc
         rows = ds
